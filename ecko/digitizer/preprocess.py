@@ -77,6 +77,7 @@ def _find_palette(rgb_pixels: np.ndarray, n_colors: int | None) -> np.ndarray:
     k = n_colors or 12
     k = max(1, min(k, len(np.unique(lab, axis=0))))
     criteria = (cv2.TERM_CRITERIA_EPS + cv2.TERM_CRITERIA_MAX_ITER, 40, 0.5)
+    cv2.setRNGSeed(1234)  # deterministic: saved edits refer to region ids
     _, labels, centers = cv2.kmeans(lab, k, None, criteria, 4, cv2.KMEANS_PP_CENTERS)
     labels = labels.ravel()
     counts = np.bincount(labels, minlength=k).astype(np.float64)

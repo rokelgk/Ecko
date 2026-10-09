@@ -38,14 +38,30 @@ G2 reviews, vendor review pages and the Ink/Stitch issue tracker.
 | **Can't change thread colors without re-digitizing.** | Change any thread color in the preview. The change is written into the file. |
 | **Slow turnaround.** | Seconds, not days. |
 
-## Gaps we have not closed yet
+## Closed since the first version
 
-- **Thread brand charts** (Madeira, Isacord, Robison-Anton numbers). We name colors generically today. Adding accurate charts needs licensed or verified color data.
-- **Lettering engine** with built-in embroidery fonts, so typed text gets clean satin columns.
-- **A manual editing canvas** for reshaping objects, changing stitch angles and reordering.
-- **An AI stitch-planning model** trained on professionally digitized files, to choose angles, sequence and density the way a human digitizer would.
-- **Proprietary formats** that open-source writers can't produce, such as Bernina ART and Husqvarna HUS. Those machines read EXP and VP3, which we support.
-- **Photo-stitch / sketch styles** for photographs, which currently get posterized into flat colors.
+- **Thread charts:** Brother, Janome and Husqvarna Viking catalog numbers
+  are built in, and any brand's chart can be imported from CSV or `.gpl`.
+  Thread names and numbers are written into the machine file.
+- **Lettering** with six bundled embroidery fonts, minimum-size warnings,
+  and drag-to-place.
+- **Editing:** stitch type, angle, density and visibility for each shape,
+  plus color sequence and merging colors.
+- **Saved designs** with shareable links.
+- **Cleaner satin where strokes meet:** stitches are capped to each
+  stroke's width, and the joint gets a small underlying fill.
+
+## Still open
+
+- **Accounts and payments.** These need product decisions: sign-in method,
+  pricing, hosting.
+- **An AI stitch-planning model.** This needs a licensed training set of
+  artwork paired with professionally digitized files.
+- **Proprietary formats** (Bernina ART, Husqvarna HUS). The machines read
+  EXP and VP3, which we support.
+- **Photo-stitch / sketch styles** for photographs.
+- **Real sew-out validation** on physical machines. This is the next step
+  and is being done by the user.
 
 ## Sources
 

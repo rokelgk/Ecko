@@ -11,16 +11,15 @@ from ..machines import FORMATS
 from .threads import from_hex
 
 
-def to_pattern(design, colors: list[str] | None = None, rotate: bool = False, name: str = "Ecko") -> pe.EmbPattern:
+def to_pattern(design, rotate: bool = False, name: str = "Ecko") -> pe.EmbPattern:
     pattern = pe.EmbPattern()
     pattern.metadata("name", name[:16])
     for bi, block in enumerate(design.blocks):
-        rgb = block.rgb
-        if colors and bi < len(colors) and colors[bi]:
-            rgb = from_hex(colors[bi])
         thread = pe.EmbThread()
-        thread.set_color(*rgb)
-        thread.description = block.name
+        thread.set_color(*from_hex(block.thread.hex))
+        thread.description = block.thread.name
+        thread.catalog_number = block.thread.code or None
+        thread.brand = block.thread.brand or None
         pattern.add_thread(thread)
         if bi > 0:
             pattern.add_command(pe.TRIM)
@@ -38,12 +37,11 @@ def to_pattern(design, colors: list[str] | None = None, rotate: bool = False, na
     return pattern
 
 
-def export_bytes(design, fmt: str, colors: list[str] | None = None, rotate: bool = False,
-                 name: str = "Ecko") -> bytes:
+def export_bytes(design, fmt: str, rotate: bool = False, name: str = "Ecko") -> bytes:
     fmt = fmt.lower()
     if fmt not in FORMATS:
         raise ValueError(f"Unsupported format: {fmt}")
-    pattern = to_pattern(design, colors, rotate, name)
+    pattern = to_pattern(design, rotate, name)
     fd, path = tempfile.mkstemp(suffix="." + fmt)
     os.close(fd)
     try:

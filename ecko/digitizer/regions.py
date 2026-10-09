@@ -17,7 +17,6 @@ from shapely.geometry import Polygon
 from shapely.validation import make_valid
 from skimage.morphology import skeletonize
 
-from .preprocess import ColorMap
 
 RUN_MAX_MM = 1.0  # thinner than this is a line, not an area
 
@@ -25,36 +24,56 @@ RUN_MAX_MM = 1.0  # thinner than this is a line, not an area
 @dataclass
 class Region:
     color: int
-    polygon: object  # shapely (Multi)Polygon in mm, image orientation (y down)
+    polygon: object  # shapely (Multi)Polygon in mm, design orientation (y down)
     mask: np.ndarray  # cropped bool mask
     offset: tuple[int, int]  # (x, y) of mask origin in working pixels
     px_per_mm: float
+    origin_mm: tuple[float, float]  # where working pixel (0, 0) sits, in mm
     width_mm: float  # typical column width (median along skeleton)
     width90_mm: float  # 90th percentile width
     area_mm2: float
-    kind: str = "fill"
-    branches: list = field(default_factory=list)  # centre lines in mm (satin/run)
+    id: int = -1
+    source: str = "image"  # "image" or "text"
+    layer: int | None = None  # text layer index
+    _branches: list | None = field(default=None, repr=False)
+
+    def default_kind(self, satin_max_mm: float) -> str:
+        if self.width_mm < RUN_MAX_MM and self.width90_mm < RUN_MAX_MM * 1.5:
+            return "run"
+        if self.width90_mm <= satin_max_mm:
+            return "satin"
+        return "fill"
+
+    @property
+    def branches(self) -> list:
+        """Centre lines in mm, computed on first use (only satin/run need them)."""
+        if self._branches is None:
+            dist = cv2.distanceTransform(self.mask.astype(np.uint8), cv2.DIST_L2, 5)
+            self._branches = _branches_mm(self.mask, dist, *self.offset, self.px_per_mm, self.origin_mm)
+        return self._branches
 
 
-def _contours_to_polygon(mask: np.ndarray, ox: int, oy: int, ppm: float):
+def _contours_to_polygon(mask: np.ndarray, ox: int, oy: int, ppm: float, origin=(0.0, 0.0)):
     contours, hier = cv2.findContours(mask.astype(np.uint8), cv2.RETR_CCOMP, cv2.CHAIN_APPROX_NONE)
     if hier is None:
         return None
     hier = hier[0]
+    gx, gy = origin
+
+    def mm(c):
+        return [((p[0][0] + ox + 0.5) / ppm + gx, (p[0][1] + oy + 0.5) / ppm + gy) for p in c]
+
     polys = []
     for i, c in enumerate(contours):
         if hier[i][3] != -1 or len(c) < 3:
             continue
-        shell = [((p[0][0] + ox + 0.5) / ppm, (p[0][1] + oy + 0.5) / ppm) for p in c]
         holes = []
         child = hier[i][2]
         while child != -1:
-            hc = contours[child]
-            if len(hc) >= 3:
-                holes.append([((p[0][0] + ox + 0.5) / ppm, (p[0][1] + oy + 0.5) / ppm) for p in hc])
+            if len(contours[child]) >= 3:
+                holes.append(mm(contours[child]))
             child = hier[child][0]
-        poly = Polygon(shell, holes)
-        polys.append(poly)
+        polys.append(Polygon(mm(c), holes))
     if not polys:
         return None
     geom = polys[0]
@@ -64,7 +83,6 @@ def _contours_to_polygon(mask: np.ndarray, ox: int, oy: int, ppm: float):
     # inside the true edge; push it back out, then smooth pixel stair-steps.
     geom = make_valid(geom).buffer(0.5 / ppm, join_style=2).simplify(0.6 / ppm)
     return geom if not geom.is_empty else None
-
 
 def skeleton_paths(skel: np.ndarray) -> list[list[tuple[int, int]]]:
     """Trace a 1-px skeleton into polylines (lists of (row, col))."""
@@ -115,7 +133,7 @@ def skeleton_paths(skel: np.ndarray) -> list[list[tuple[int, int]]]:
     return [p for p in paths if len(p) >= 2]
 
 
-def _branches_mm(mask: np.ndarray, dist: np.ndarray, ox: int, oy: int, ppm: float) -> list:
+def _branches_mm(mask: np.ndarray, dist: np.ndarray, ox: int, oy: int, ppm: float, origin=(0.0, 0.0)) -> list:
     skel = skeletonize(mask)
     paths = skeleton_paths(skel)
     if len(paths) > 1:
@@ -135,16 +153,18 @@ def _branches_mm(mask: np.ndarray, dist: np.ndarray, ox: int, oy: int, ppm: floa
         paths = kept or paths
     out = []
     for p in paths:
-        pts = [((c + ox + 0.5) / ppm, (r + oy + 0.5) / ppm, dist[r, c] / ppm) for r, c in p]
+        pts = [((c + ox + 0.5) / ppm + origin[0], (r + oy + 0.5) / ppm + origin[1], dist[r, c] / ppm)
+               for r, c in p]
         out.append(pts)
     return out
 
 
-def extract_regions(cmap: ColorMap, satin_max_mm: float) -> list[Region]:
-    ppm = cmap.px_per_mm
+def extract_regions(labels: np.ndarray, ppm: float, origin_mm=(0.0, 0.0), source: str = "image",
+                    layer: int | None = None) -> list[Region]:
+    """One Region per connected area of each label (labels < 0 are empty)."""
     regions: list[Region] = []
-    for color in range(len(cmap.palette)):
-        mask_all = (cmap.labels == color).astype(np.uint8)
+    for color in sorted(int(c) for c in np.unique(labels) if c >= 0):
+        mask_all = (labels == color).astype(np.uint8)
         n, comp, stats, _ = cv2.connectedComponentsWithStats(mask_all, connectivity=8)
         for c in range(1, n):
             x, y, w, h, area = stats[c]
@@ -152,24 +172,16 @@ def extract_regions(cmap: ColorMap, satin_max_mm: float) -> list[Region]:
             x0, y0 = max(0, x - pad), max(0, y - pad)
             x1, y1 = min(mask_all.shape[1], x + w + pad), min(mask_all.shape[0], y + h + pad)
             mask = comp[y0:y1, x0:x1] == c
-            poly = _contours_to_polygon(mask, x0, y0, ppm)
+            poly = _contours_to_polygon(mask, x0, y0, ppm, origin_mm)
             if poly is None or poly.area < 0.05:
                 continue
             dist = cv2.distanceTransform(mask.astype(np.uint8), cv2.DIST_L2, 5)
             skel = skeletonize(mask)
             widths = 2.0 * dist[skel] / ppm if skel.any() else np.array([2.0 * dist.max() / ppm])
-            width = float(np.median(widths))
-            width90 = float(np.percentile(widths, 90))
-            reg = Region(color, poly, mask, (x0, y0), ppm, width, width90, area / ppm / ppm)
-            if width < RUN_MAX_MM and width90 < RUN_MAX_MM * 1.5:
-                reg.kind = "run"
-            elif width90 <= satin_max_mm:
-                reg.kind = "satin"
-            else:
-                reg.kind = "fill"
-            if reg.kind != "fill":
-                reg.branches = _branches_mm(mask, dist, x0, y0, ppm)
-                if not reg.branches:
-                    reg.kind = "fill"
-            regions.append(reg)
+            regions.append(Region(
+                color=color, polygon=poly, mask=mask, offset=(x0, y0), px_per_mm=ppm,
+                origin_mm=tuple(origin_mm), width_mm=float(np.median(widths)),
+                width90_mm=float(np.percentile(widths, 90)), area_mm2=area / ppm / ppm,
+                source=source, layer=layer,
+            ))
     return regions

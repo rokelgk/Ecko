@@ -13,6 +13,7 @@ import math
 import numpy as np
 
 from .regions import Region
+from .text import TextLayer, get_font
 
 MM_PER_IN = 25.4
 DENSE_PENETRATIONS_PER_MM2 = 14  # above this, needle and thread start to suffer
@@ -30,7 +31,7 @@ def _hotspots(design) -> tuple[int, list[tuple[float, float]]]:
     return len(hot), [(float(x) + 0.5, float(y) + 0.5) for x, y in worst]
 
 
-def build_report(design, regions: list[Region]) -> dict:
+def build_report(design, region_kinds: list[tuple[Region, str]], layers: list[TextLayer] = ()) -> dict:
     stitches = design.stitch_points()
     trims = sum(len(b.runs) - 1 for b in design.blocks) + max(0, len(design.blocks) - 1)
     color_changes = len(design.blocks) - 1
@@ -51,15 +52,22 @@ def build_report(design, regions: list[Region]) -> dict:
                              "message": f"The design is {w:.0f} x {h:.0f} mm and doesn't fit your "
                                         f"{design.hoop.name} hoop as it is, but it fits rotated 90°."})
         else:
-            scale = min(hw / w, hh / h)
+            scale = min(hw / w, hh / h) * 0.97
             warnings.append({"level": "error", "code": "hoop_too_small",
                              "message": f"The design is {w:.0f} x {h:.0f} mm, larger than your "
-                                        f"{design.hoop.name} hoop. Scale it to {w * scale:.0f} mm wide "
-                                        f"or pick a bigger hoop.",
-                             "suggested_width_mm": round(w * scale * 0.97, 1)})
+                                        f"{design.hoop.name} hoop. Shrink it to about {w * scale:.0f} mm "
+                                        f"wide or pick a bigger hoop.",
+                             "scale": round(scale, 4)})
 
-    thin = [r for r in regions if r.kind == "satin" and r.width_mm < 1.2]
-    lines = [r for r in regions if r.kind == "run"]
+    thin = [r for r, k in region_kinds if k == "satin" and r.width_mm < 1.2 and r.source == "image"]
+    lines = [r for r, k in region_kinds if k == "run"]
+    for i, layer in enumerate(layers):
+        font = get_font(layer.font)
+        if layer.height_mm < font.min_height_mm:
+            warnings.append({"level": "warn", "code": "small_text", "layer": i,
+                             "message": f"\"{layer.text[:20]}\" is {layer.height_mm:g} mm tall. "
+                                        f"{font.name} sews cleanly from {font.min_height_mm:g} mm; "
+                                        f"make it bigger or pick a bolder font."})
     if thin:
         warnings.append({"level": "warn", "code": "thin_columns",
                          "message": f"{len(thin)} part(s) are narrower than 1.2 mm. Small lettering "
@@ -95,7 +103,7 @@ def build_report(design, regions: list[Region]) -> dict:
         "height_in": round(h / MM_PER_IN, 2),
         "sew_minutes": max(1, math.ceil(seconds / 60)),
         "fits_hoop": fits,
-        "objects": {k: sum(1 for r in regions if r.kind == k) for k in ("fill", "satin", "run")},
+        "objects": {k: sum(1 for _, kk in region_kinds if kk == k) for k in ("fill", "satin", "run")},
     }
     errors = sum(1 for x in warnings if x["level"] == "error")
     warns = sum(1 for x in warnings if x["level"] == "warn")

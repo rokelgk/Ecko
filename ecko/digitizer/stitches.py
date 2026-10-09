@@ -13,6 +13,7 @@ import math
 import numpy as np
 from shapely import affinity
 from shapely.geometry import LineString, MultiPolygon, Point, Polygon
+from shapely.ops import unary_union
 
 Pt = tuple[float, float]
 Run = list[Pt]
@@ -369,24 +370,55 @@ def _rails(line: LineString, poly, step: float, half: float, max_len: float):
     return rails
 
 
+def _gap_pieces(poly, rail_sets):
+    """Parts of the shape no satin stitch crosses (usually stroke junctions)."""
+    quads = []
+    for rails in rail_sets:
+        for (a0, b0), (a1, b1) in zip(rails, rails[1:]):
+            q = Polygon([a0, b0, b1, a1])
+            if q.is_valid and q.area > 0:
+                quads.append(q)
+    if not quads:
+        return []
+    covered = unary_union(quads).buffer(0.15)
+    gaps = poly.buffer(-0.1).difference(covered)
+    return [g for g in _polys(gaps) if g.area > 0.6 and not g.buffer(-0.25).is_empty]
+
+
 def satin(poly, branches, width: float, spacing: float, max_len: float, start: Pt | None) -> list[Run]:
     free = _free_ends(branches)
     half = max(2.0, width * 1.2 + 1.0)
-    runs: list[Run] = []
+    planned = []
     for b in _order_branches(branches, start):
         xy = _smooth(_extend(b, free), 5)
         line = LineString(xy).simplify(0.1)
         if line.length < 0.3:
             continue
-        rails = _rails(line, poly, spacing, half, max_len)
-        if not rails:
-            continue
+        # Cap stitch length by this stroke's own width: where strokes meet
+        # (k, R, E...) the cross-cut through the joint is much longer and
+        # would pile up messy stitches. The joint gets its own small fill.
+        radii = sorted(p[2] for p in b if len(p) > 2)
+        limit = max_len
+        if radii:
+            limit = min(max_len, 2 * radii[len(radii) // 2] * 1.35 + 0.8)
+        rails = _rails(line, poly, spacing, half, limit)
+        if rails:
+            planned.append((line, limit, rails))
+
+    runs: list[Run] = []
+    # Junction fills go down first so the satin columns cover their edges.
+    for gap in _gap_pieces(poly, [r for _, _, r in planned]):
+        s = runs[-1][-1] if runs else start
+        runs.extend(fill(gap.buffer(0.2), best_fill_angle(gap), spacing, 2.5, s))
+    runs = _join(runs, poly)
+
+    for line, limit, rails in planned:
         pts: list[Pt] = []
         if width >= 1.5:
             pts.extend(resample(list(line.coords), 2.0))  # centre-walk underlay
             if width >= 3.5:
                 inner = []
-                for a, bb in _rails(line, poly.buffer(-0.45), 2.0, half, max_len)[::-1]:
+                for a, bb in _rails(line, poly.buffer(-0.45), 2.0, half, limit)[::-1]:
                     inner.extend([a, bb])
                 pts.extend(inner)  # zig-zag underlay back; top satin goes forward again
             else:

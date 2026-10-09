@@ -127,3 +127,75 @@ canvas { width: 100%; height: 100%; display: block; cursor: grab; }
 .download .row { margin-top: 10px; flex-wrap: wrap; align-items: center; }
 .download .primary { flex: 1 1 auto; }
 .download select { flex: 1 1 180px; margin: 0; }
+
+/* ---- v2: editing, lettering, threads, saved designs ---- */
+.top { position: relative; }
+.topActions { margin-left: auto; display: flex; gap: 8px; }
+.ghost {
+  background: var(--panel); color: var(--ink); border: 1px solid var(--line); border-radius: 8px;
+  padding: 7px 12px; font-weight: 600;
+}
+.ghost:hover { border-color: var(--accent); }
+.recent {
+  position: absolute; right: 24px; top: 100%; z-index: 20; width: min(420px, calc(100vw - 32px));
+  background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius);
+  box-shadow: 0 12px 32px rgba(0,0,0,.18); padding: 14px 16px; max-height: 70vh; overflow: auto;
+}
+.recent h3 { margin: 0 0 8px; font-size: 15px; }
+.recent ul { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 6px; }
+.recent li { display: flex; gap: 6px; align-items: center; }
+.recentItem {
+  flex: 1; text-align: left; background: var(--bg); border: 1px solid var(--line); border-radius: 8px;
+  padding: 8px 10px; color: var(--ink); display: flex; flex-direction: column; gap: 2px;
+}
+.recentItem span { color: var(--muted); font-size: 12px; }
+.mini {
+  width: 28px; height: 28px; border-radius: 6px; border: 1px solid var(--line); background: var(--panel);
+  color: var(--ink); padding: 0; flex: none;
+}
+.mini:disabled { opacity: .35; cursor: default; }
+.muted { opacity: .55; }
+textarea, input[type=text], input[type=search] {
+  display: block; width: 100%; margin-top: 4px; padding: 8px 10px; font: inherit; color: var(--ink);
+  background: var(--bg); border: 1px solid var(--line); border-radius: 8px; resize: vertical;
+}
+.layers { display: flex; flex-direction: column; gap: 10px; margin-bottom: 10px; }
+.layer { border: 1px solid var(--line); border-radius: 10px; padding: 10px; background: var(--bg); }
+.layer textarea { background: var(--panel); margin: 0 0 8px; }
+.layer select, .layer input[type=number] { background: var(--panel); }
+.layer .row { gap: 8px; }
+.layer .row .link { flex: 0 0 auto; }
+.canvasHint {
+  position: absolute; left: 50%; bottom: 8px; transform: translateX(-50%); margin: 0;
+  background: rgba(0,0,0,.55); color: #fff; font-size: 12px; padding: 4px 10px; border-radius: 99px;
+  pointer-events: none; white-space: nowrap; max-width: calc(100% - 16px); overflow: hidden; text-overflow: ellipsis;
+}
+.editor { grid-column: 1 / -1; border-color: var(--accent); }
+.editorHead { display: flex; justify-content: space-between; align-items: baseline; gap: 10px; }
+.seg { display: inline-flex; border: 1px solid var(--line); border-radius: 10px; overflow: hidden; margin: 4px 0; }
+.seg button { border: 0; background: var(--panel); color: var(--ink); padding: 8px 14px; border-right: 1px solid var(--line); }
+.seg button:last-child { border-right: 0; }
+.seg button.on { background: var(--accent); color: var(--accent-ink); font-weight: 700; }
+.seg button:disabled { opacity: .4; cursor: not-allowed; }
+.editor .row { margin-top: 6px; flex-wrap: wrap; }
+.swatchBtn {
+  width: 30px; height: 26px; border: 1px solid var(--line); border-radius: 6px; padding: 0; flex: none;
+  box-shadow: inset 0 0 0 1px rgba(255,255,255,.35);
+}
+.threads .tname { min-width: 0; flex: 1; display: flex; flex-direction: column; line-height: 1.25; }
+.threads .tname b { font-weight: 600; }
+.threads .tname small { color: var(--muted); font-size: 12px; }
+.threads li { gap: 8px; }
+.download { grid-column: 1 / -1; }
+.download label { margin-bottom: 6px; }
+.popover {
+  position: absolute; z-index: 30; width: min(340px, calc(100vw - 16px)); background: var(--panel);
+  border: 1px solid var(--line); border-radius: var(--radius); box-shadow: 0 12px 32px rgba(0,0,0,.22);
+  padding: 12px; display: flex; flex-direction: column; gap: 8px;
+}
+.popover select { margin: 0; }
+.popover .row { align-items: center; }
+.popover .row .link { flex: 0 0 auto; }
+.swatches { display: grid; grid-template-columns: repeat(auto-fill, minmax(28px, 1fr)); gap: 5px; max-height: 220px; overflow: auto; padding: 2px; }
+.sw { aspect-ratio: 1; border-radius: 6px; border: 1px solid rgba(0,0,0,.2); padding: 0; }
+.sw:hover, .sw:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }

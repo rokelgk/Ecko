@@ -14,6 +14,14 @@
     <span>Ecko</span>
   </div>
   <p class="tagline">Picture in, machine-ready embroidery file out.</p>
+  <div class="topActions">
+    <button type="button" class="ghost" id="newDesign">New design</button>
+    <button type="button" class="ghost" id="myDesigns" aria-expanded="false">My designs</button>
+  </div>
+  <div class="recent" id="recent" hidden>
+    <h3>My designs <span class="hint">(saved in this browser)</span></h3>
+    <ul id="recentList"></ul>
+  </div>
 </header>
 
 <main class="layout">
@@ -25,7 +33,8 @@
         <img id="thumb" alt="" hidden>
         <span id="dropText"><strong>Drop a logo or picture</strong><br>or click to choose (PNG, JPG, WebP)</span>
       </label>
-      <p class="hint">Works best with clean logos, text and flat-color art. Photos get simplified.</p>
+      <p class="hint">Works best with clean logos and flat-color art. No picture? Just add lettering below.</p>
+      <button type="button" class="link" id="clearPicture" hidden>Remove picture</button>
     </section>
 
     <section class="step">
@@ -37,6 +46,8 @@
         <label>Width (mm) <input type="number" id="hoopW" min="20" max="600" value="100"></label>
         <label>Height (mm) <input type="number" id="hoopH" min="20" max="600" value="100"></label>
       </div>
+      <label>Thread brand <select id="chart"></select></label>
+      <input type="file" id="chartFile" accept=".csv,.gpl,.txt,text/csv,text/plain" hidden>
       <p class="hint" id="formatHint"></p>
     </section>
 
@@ -46,8 +57,8 @@
       <p class="hint" id="fabricTip"></p>
     </section>
 
-    <section class="step">
-      <h2><span class="num">4</span> Size</h2>
+    <section class="step" id="sizeStep">
+      <h2><span class="num">4</span> Picture size</h2>
       <div class="row">
         <label>Width <input type="number" id="width" min="0.2" step="0.1" value="4"></label>
         <label>Units
@@ -55,6 +66,12 @@
         </label>
       </div>
       <button type="button" class="link" id="fitHoop">Fit to my hoop</button>
+    </section>
+
+    <section class="step">
+      <h2><span class="num">5</span> Lettering <span class="hint">(optional)</span></h2>
+      <div id="layers" class="layers"></div>
+      <button type="button" class="ghost" id="addText">+ Add text</button>
     </section>
 
     <details class="step adv">
@@ -81,6 +98,7 @@
     </details>
 
     <button type="button" id="go" class="primary" disabled>Digitize</button>
+    <p class="hint" id="autoHint" hidden>Changes update the design automatically.</p>
     <p class="error" id="error" role="alert" hidden></p>
   </aside>
 
@@ -106,7 +124,8 @@
         <p>Your stitch preview shows up here.</p>
         <p class="hint">Pick your machine once and we'll remember it.</p>
       </div>
-      <div class="busy" id="busy" hidden><div class="spinner"></div><p>Digitizing…</p></div>
+      <div class="busy" id="busy" hidden><div class="spinner"></div><p id="busyText">Digitizing…</p></div>
+      <p class="canvasHint" id="canvasHint" hidden>Click a shape to edit it · drag lettering to move it · scroll to zoom</p>
     </div>
     <div class="sim" id="sim" hidden>
       <button type="button" id="play" aria-label="Play sew-out">▶</button>
@@ -115,6 +134,30 @@
     </div>
 
     <div class="results" id="results" hidden>
+      <div class="card editor" id="editor" hidden>
+        <div class="editorHead">
+          <h3 id="editorTitle">Selected shape</h3>
+          <button type="button" class="link" id="deselect">Done</button>
+        </div>
+        <div class="seg" id="kindSeg" role="group" aria-label="Stitch type">
+          <button type="button" data-kind="fill">Fill</button>
+          <button type="button" data-kind="satin">Satin</button>
+          <button type="button" data-kind="run">Running</button>
+        </div>
+        <p class="hint" id="kindHint"></p>
+        <div id="angleRow">
+          <label>Stitch angle <span id="angleVal"></span>
+            <input type="range" id="angle" min="0" max="180" step="5" value="45"></label>
+          <label class="check"><input type="checkbox" id="angleAuto" checked> Automatic angle</label>
+        </div>
+        <label>Density for this shape <span id="objDensityVal"></span>
+          <input type="range" id="objDensity" min="0.6" max="1.5" step="0.05" value="1">
+          <span class="scale"><span>Lighter</span><span>Denser</span></span></label>
+        <div class="row">
+          <button type="button" class="ghost" id="hideObj">Don't stitch this shape</button>
+          <button type="button" class="ghost" id="resetObj">Reset</button>
+        </div>
+      </div>
       <div class="card score">
         <div class="ring" id="scoreRing"><span id="score"></span></div>
         <div>
@@ -127,19 +170,47 @@
         <ul class="warnings" id="warnings"></ul>
       </div>
       <div class="card">
-        <h3>Thread colors <span class="hint">(in sewing order. Click a swatch to change it.)</span></h3>
+        <h3>Thread colors <span class="hint">(in sewing order)</span></h3>
         <ol class="threads" id="threads"></ol>
+        <p class="hint">Click a swatch to pick a thread. Give two colors the same thread to merge them.</p>
       </div>
-      <div class="card download" style="grid-column: 1 / -1">
+      <div class="card download">
+        <label>Design name <input type="text" id="designName" maxlength="80"></label>
         <label class="check"><input type="checkbox" id="rotate"> Rotate 90° in the file</label>
         <div class="row">
           <button type="button" class="primary" id="download"></button>
           <select id="altFormat" aria-label="Other formats"></select>
         </div>
+        <button type="button" class="link" id="copyLink">Copy link to this design</button>
       </div>
     </div>
   </section>
 </main>
+
+<div class="popover" id="picker" hidden role="dialog" aria-label="Choose thread">
+  <div class="row">
+    <select id="pickerChart" aria-label="Thread brand"></select>
+    <button type="button" class="link" id="pickerClose">Close</button>
+  </div>
+  <input type="search" id="pickerSearch" placeholder="Search name or number">
+  <div class="swatches" id="pickerGrid"></div>
+  <label class="check">Custom color <input type="color" id="pickerCustom"></label>
+</div>
+
+<template id="layerTpl">
+  <div class="layer">
+    <textarea rows="2" maxlength="200" aria-label="Text" placeholder="Your text"></textarea>
+    <div class="row">
+      <label>Font <select class="font"></select></label>
+      <label>Height <input type="number" class="height" min="0.1" step="0.05"></label>
+    </div>
+    <div class="row">
+      <label class="check">Color <input type="color" class="color" value="#000000"></label>
+      <button type="button" class="link center">Re-center</button>
+      <button type="button" class="link remove">Remove</button>
+    </div>
+  </div>
+</template>
 <script src="app.js"></script>
 </body>
 </html>
