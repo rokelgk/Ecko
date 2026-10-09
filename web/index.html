@@ -1,0 +1,145 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Ecko Embroidery Digitizer</title>
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns=%27http://www.w3.org/2000/svg%27 viewBox=%270 0 32 32%27%3E%3Ccircle cx=%2716%27 cy=%2716%27 r=%2714%27 fill=%27%23c2410c%27/%3E%3C/svg%3E">
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+<header class="top">
+  <div class="brand">
+    <svg viewBox="0 0 32 32" width="28" height="28" aria-hidden="true"><circle cx="16" cy="16" r="14" fill="none" stroke="currentColor" stroke-width="2.5"/><path d="M6 16 L10 11 L14 21 L18 11 L22 21 L26 16" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linejoin="round"/></svg>
+    <span>Ecko</span>
+  </div>
+  <p class="tagline">Picture in, machine-ready embroidery file out.</p>
+</header>
+
+<main class="layout">
+  <aside class="panel" aria-label="Settings">
+    <section class="step">
+      <h2><span class="num">1</span> Your picture</h2>
+      <label class="drop" id="drop">
+        <input type="file" id="file" accept="image/png,image/jpeg,image/webp,image/gif,image/bmp" hidden>
+        <img id="thumb" alt="" hidden>
+        <span id="dropText"><strong>Drop a logo or picture</strong><br>or click to choose (PNG, JPG, WebP)</span>
+      </label>
+      <p class="hint">Works best with clean logos, text and flat-color art. Photos get simplified.</p>
+    </section>
+
+    <section class="step">
+      <h2><span class="num">2</span> Your machine</h2>
+      <label>Brand <select id="brand"></select></label>
+      <label>Model <select id="model"></select></label>
+      <label>Hoop <select id="hoop"></select></label>
+      <div id="customHoop" class="row" hidden>
+        <label>Width (mm) <input type="number" id="hoopW" min="20" max="600" value="100"></label>
+        <label>Height (mm) <input type="number" id="hoopH" min="20" max="600" value="100"></label>
+      </div>
+      <p class="hint" id="formatHint"></p>
+    </section>
+
+    <section class="step">
+      <h2><span class="num">3</span> What are you stitching on?</h2>
+      <label>Fabric <select id="fabric"></select></label>
+      <p class="hint" id="fabricTip"></p>
+    </section>
+
+    <section class="step">
+      <h2><span class="num">4</span> Size</h2>
+      <div class="row">
+        <label>Width <input type="number" id="width" min="0.2" step="0.1" value="4"></label>
+        <label>Units
+          <select id="units"><option value="in">inches</option><option value="mm">mm</option></select>
+        </label>
+      </div>
+      <button type="button" class="link" id="fitHoop">Fit to my hoop</button>
+    </section>
+
+    <details class="step adv">
+      <summary>Fine-tune (optional)</summary>
+      <label>Thread colors
+        <select id="colors">
+          <option value="">Automatic</option>
+        </select>
+      </label>
+      <label>Detail <input type="range" id="detail" min="0" max="1" step="0.05" value="0.5">
+        <span class="scale"><span>Simpler</span><span>More detail</span></span></label>
+      <label>Density <input type="range" id="density" min="0.7" max="1.3" step="0.05" value="1">
+        <span class="scale"><span>Lighter</span><span>Denser</span></span></label>
+      <label>Underlay
+        <select id="underlay">
+          <option value="">Automatic for fabric</option>
+          <option value="none">None</option>
+          <option value="light">Light</option>
+          <option value="medium">Medium</option>
+          <option value="heavy">Heavy</option>
+        </select>
+      </label>
+      <label class="check"><input type="checkbox" id="removeBg" checked> Remove background</label>
+    </details>
+
+    <button type="button" id="go" class="primary" disabled>Digitize</button>
+    <p class="error" id="error" role="alert" hidden></p>
+  </aside>
+
+  <section class="stage" aria-label="Preview">
+    <div class="toolbar">
+      <div class="tabs" role="tablist">
+        <button role="tab" data-view="real" class="on">Stitched look</button>
+        <button role="tab" data-view="paths">Stitch paths</button>
+        <button role="tab" data-view="original">Original</button>
+      </div>
+      <div class="garment" title="Garment color">
+        <span>Garment</span>
+        <button data-bg="#f4f1ea" style="background:#f4f1ea" class="on" aria-label="White"></button>
+        <button data-bg="#1d1f24" style="background:#1d1f24" aria-label="Black"></button>
+        <button data-bg="#26324d" style="background:#26324d" aria-label="Navy"></button>
+        <button data-bg="#9a9a9a" style="background:#9a9a9a" aria-label="Heather grey"></button>
+        <button data-bg="#a3262a" style="background:#a3262a" aria-label="Red"></button>
+      </div>
+    </div>
+    <div class="canvasWrap" id="canvasWrap">
+      <canvas id="canvas"></canvas>
+      <div class="empty" id="empty">
+        <p>Your stitch preview shows up here.</p>
+        <p class="hint">Pick your machine once and we'll remember it.</p>
+      </div>
+      <div class="busy" id="busy" hidden><div class="spinner"></div><p>Digitizing…</p></div>
+    </div>
+    <div class="sim" id="sim" hidden>
+      <button type="button" id="play" aria-label="Play sew-out">▶</button>
+      <input type="range" id="progress" min="0" max="1000" value="1000" aria-label="Sew-out progress">
+      <span id="progressLabel"></span>
+    </div>
+
+    <div class="results" id="results" hidden>
+      <div class="card score">
+        <div class="ring" id="scoreRing"><span id="score"></span></div>
+        <div>
+          <h3 id="scoreTitle"></h3>
+          <ul class="stats" id="stats"></ul>
+        </div>
+      </div>
+      <div class="card" id="warnCard">
+        <h3>Before you sew</h3>
+        <ul class="warnings" id="warnings"></ul>
+      </div>
+      <div class="card">
+        <h3>Thread colors <span class="hint">(in sewing order. Click a swatch to change it.)</span></h3>
+        <ol class="threads" id="threads"></ol>
+      </div>
+      <div class="card download" style="grid-column: 1 / -1">
+        <label class="check"><input type="checkbox" id="rotate"> Rotate 90° in the file</label>
+        <div class="row">
+          <button type="button" class="primary" id="download"></button>
+          <select id="altFormat" aria-label="Other formats"></select>
+        </div>
+      </div>
+    </div>
+  </section>
+</main>
+<script src="app.js"></script>
+</body>
+</html>
