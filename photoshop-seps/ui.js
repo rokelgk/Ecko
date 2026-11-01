@@ -1125,9 +1125,51 @@
   // ---------- layout + wiring ----------
   function esc(s) { return String(s).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c])); }
 
+  // ---------- layout for any screen size ----------
+  const ui = load('ui') || {};
+  function saveUi() { host.storage.set('ecko-seps-ui', JSON.stringify(ui)); }
   function layout() {
-    $('app').classList.toggle('narrow', window.innerWidth < 760);
+    const app = $('app');
+    const w = window.innerWidth, h = window.innerHeight;
+    app.classList.toggle('narrow', w < 760);
+    app.classList.toggle('short', h < 620);
+    app.classList.toggle('tiny', w < 360 || (w >= 760 && w < 900));
+    app.classList.toggle('pv-hidden', !!ui.previewHidden);
+    // Keep saved sizes inside the current window.
+    if (ui.optW) app.style.setProperty('--opt-w', `${Math.max(260, Math.min(ui.optW, w * 0.75, w - 240))}px`);
+    else app.style.removeProperty('--opt-w');
+    if (ui.pvH) app.style.setProperty('--pv-h', `${Math.max(120, Math.min(ui.pvH, h - 180))}px`);
+    else app.style.setProperty('--pv-h', `${Math.round(h < 620 ? h * 0.38 : h * 0.45)}px`);
+    document.body.classList.toggle('ui-compact', ui.size === 'compact' || (!ui.size && h < 700));
+    document.body.classList.toggle('ui-large', ui.size === 'large');
+    $('togglePreview').textContent = ui.previewHidden ? 'Show preview' : 'Hide preview';
   }
+
+  function setupSplitter() {
+    const sp = $('splitter');
+    let dragging = false;
+    const move = (x, y) => {
+      if (!dragging) return;
+      if ($('app').classList.contains('narrow')) ui.pvH = Math.round(y);
+      else ui.optW = Math.round(window.innerWidth - x);
+      layout();
+    };
+    const end = () => { if (dragging) { dragging = false; sp.classList.remove('drag'); saveUi(); } };
+    const start = (e) => { dragging = true; sp.classList.add('drag'); if (e.preventDefault) e.preventDefault(); };
+    sp.addEventListener('pointerdown', start);
+    sp.addEventListener('mousedown', start);
+    window.addEventListener('pointermove', (e) => move(e.clientX, e.clientY));
+    window.addEventListener('mousemove', (e) => move(e.clientX, e.clientY));
+    window.addEventListener('pointerup', end);
+    window.addEventListener('mouseup', end);
+    sp.addEventListener('dblclick', () => { delete ui.optW; delete ui.pvH; saveUi(); layout(); });
+  }
+
+  $('uiSmaller').addEventListener('click', () => { ui.size = ui.size === 'large' ? 'normal' : 'compact'; saveUi(); layout(); });
+  $('uiBigger').addEventListener('click', () => { ui.size = ui.size === 'compact' || !ui.size ? 'normal' : 'large'; saveUi(); layout(); });
+  $('togglePreview').addEventListener('click', () => { ui.previewHidden = !ui.previewHidden; saveUi(); layout(); });
+  if ($('toTop')) $('toTop').addEventListener('click', () => { $('optionsPane').scrollTop = 0; });
+  setupSplitter();
 
   // ---------- texture & distress ----------
   function renderTexture() {

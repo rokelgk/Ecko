@@ -32,7 +32,7 @@ fs.writeFileSync(path.join(dist, 'ecko-seps-try.html'), html);
 // Hosted-page version: hosted pages can't save files, so the output card
 // explains what the plug-in does instead of offering downloads.
 const a = html.indexOf('      <section class="card" id="outputCard">');
-const b = html.indexOf('      <footer');
+const b = html.indexOf('      <button id="toTop"');
 const hosted = html.slice(0, a) + `      <section class="card" id="outputCard">
         <h2><span class="step">11</span>Output</h2>
         <div class="muted small">This is the try-it preview. In Photoshop the plug-in also builds the separation document (one named spot channel per ink) and exports TIFF films with registration marks and a job sheet.</div>

@@ -34,6 +34,13 @@ Pick the job type, the shirt color and the number of screens, then press
   and fine-grain knockouts, or your own texture image; amount, size,
   softness, strength, invert, new pattern, and apply to all screens, the
   underbase only or the top colors only.
+- **Works on small screens:** every pane scrolls with an always-visible
+  scrollbar, so nothing is cut off on a MacBook Air, older 13" laptops,
+  phones or a short Photoshop panel. Drag the divider to resize the
+  preview/options (double-click resets), hide the preview to give options
+  all the room, and switch to a compact or large interface (A− / A+).
+  `node tools/check-layout.js` checks every control is reachable at 8
+  screen sizes from 1440×780 down to 320×480.
 - **Background & shirt:** one-tap background removal (auto-detected or
   picked on the art, with tolerance, edge-only and soft-edge controls; edges
   are cleaned so no halo is left) and shirt-color knockout so the shirt

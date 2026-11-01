@@ -13,7 +13,12 @@
     <div id="previewPane" class="pane-preview">
       <div class="pv-head">
         <div class="brand">Ecko <b>Seps</b></div>
-        <span id="matchBadge" class="badge hidden"></span>
+        <div class="pv-tools">
+          <span id="matchBadge" class="badge hidden"></span>
+          <button id="uiSmaller" class="btn" title="Smaller interface (fits small screens)">A−</button>
+          <button id="uiBigger" class="btn" title="Larger interface">A+</button>
+          <button id="togglePreview" class="btn" title="Hide the preview to give the options all the room">Hide preview</button>
+        </div>
       </div>
       <div id="viewTabs" class="tabs"></div>
       <div id="stage" class="stage">
@@ -29,6 +34,8 @@
       <div id="delta" class="delta hidden"><span id="deltaText"></span><button id="undo" class="btn small">Undo</button></div>
       <div id="status" class="status muted small"></div>
     </div>
+
+    <div id="splitter" class="splitter" title="Drag to resize. Double-click to reset."></div>
 
     <!-- Right / bottom: every option -->
     <div id="optionsPane" class="pane-options">
@@ -149,6 +156,7 @@
         </div>
       </section>
 
+      <button id="toTop" class="btn small to-top" title="Back to the top">↑ Top</button>
       <footer class="muted small">Ecko Seps · separations run on your computer, nothing is uploaded.</footer>
     </div>
   </div>
