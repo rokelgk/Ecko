@@ -15,6 +15,8 @@ from pathlib import Path
 import numpy as np
 from PIL import Image, ImageDraw, ImageFont
 
+from .. import arctext
+
 
 FONT_DIR = Path(__file__).resolve().parent.parent / "fonts"
 PX_PER_MM = 10.0
@@ -51,6 +53,7 @@ class TextLayer:
     color: str = "#000000"
     x_mm: float | None = None  # centre, in design millimetres; None = auto place
     y_mm: float | None = None
+    arc: float = 0.0  # degrees of circle: > 0 arches up (caps, badges), < 0 smiles down
 
     def validate(self) -> None:
         if not self.text.strip():
@@ -61,6 +64,12 @@ class TextLayer:
             raise ValueError(f"Unknown font: {self.font}")
         if not (MIN_HEIGHT_MM <= float(self.height_mm) <= MAX_HEIGHT_MM):
             raise ValueError(f"Letter height must be {MIN_HEIGHT_MM:g}-{MAX_HEIGHT_MM:g} mm.")
+        try:
+            arc = float(self.arc)
+        except (TypeError, ValueError) as exc:
+            raise ValueError("Curve must be a number.") from exc
+        if not (-340 <= arc <= 340):
+            raise ValueError("Curve must be between -340 and 340 degrees.")
         c = self.color.lstrip("#")
         if len(c) != 6 or any(ch not in "0123456789abcdefABCDEF" for ch in c):
             raise ValueError("Text color must be a hex value like #000000.")
@@ -78,6 +87,11 @@ def render_mask(layer: TextLayer) -> np.ndarray:
     """Bool mask of the text at PX_PER_MM, tightly cropped (plus padding)."""
     font = get_font(layer.font)
     path = str(FONT_DIR / font.file)
+    if abs(float(layer.arc or 0)) >= 1:
+        # Curved lettering is a single line set along a circle.
+        ft = arctext.font_for_cap_height(path, layer.height_mm * PX_PER_MM)
+        cov, _ = arctext.render(layer.text, ft, float(layer.arc))
+        return cov >= 128
     # Scale so a capital H is height_mm tall.
     probe = ImageFont.truetype(path, 200)
     l, t, r, b = probe.getbbox("H")

@@ -105,3 +105,10 @@ def test_index_served():
     r = client.get("/")
     assert r.status_code == 200
     assert "Ecko" in r.text
+
+
+def test_curved_lettering_design():
+    r = client.post("/api/designs", data={"options": json.dumps(
+        {"text": [{"text": "ECKO CLUB", "font": "varsity", "height_mm": 12, "arc": 140}]})})
+    assert r.status_code == 200, r.text
+    assert r.json()["report"]["stats"]["stitches"] > 500

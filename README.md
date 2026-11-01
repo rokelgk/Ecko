@@ -19,7 +19,7 @@ download a file your machine can sew.
   stitch-path view with jumps and trims, and a sew-out simulation.
 - **Lettering.** Type names, team text or numbers in six bundled
   embroidery-friendly fonts (block, sans, slab serif, script, varsity,
-  rounded). Use them on their own or with a picture, and drag to place.
+  rounded). Curve a line into an arch or a smile for caps and badges. Use them on their own or with a picture, and drag to place.
   Text below a font's safe size gets a warning and a one-click fix.
 - **Editing.** Click any shape to switch it between fill, satin and running
   stitch, set its stitch angle and density, or stop it being stitched. Move
@@ -49,6 +49,17 @@ download a print-ready file.
   hold, and LPI range, each with a one-click fix.
 - **1:1 loupe:** click the preview to see the exact print pixels.
 - **Screen print:** a ZIP of 1-bit films with registration marks.
+- **Fit to shirt:** pick the shirt colour and the print adapts to it.
+  - **Recolor** (logos and text): ink that would vanish on the shirt switches to cream or black.
+  - **Match the picture** (photos): ink coverage is solved for the shirt colour, so highlights
+    print in light ink and shadows let the shirt show through.
+  - Spot inks that match the shirt are dropped, since the shirt supplies that colour.
+  - On dark shirts, screen-print films get a choked white underbase.
+  - **Automatic** chooses Recolor or Match the picture for you.
+- **Curved text:** arched or smile text in six fonts, with or without a picture.
+- **On-shirt mockup:** see the print to scale on a T-shirt of the chosen colour.
+- **Batch:** many designs × up to 12 shirt colours in one ZIP. Every colour gets its own
+  adapted print, plus an optional JPEG mockup for product listings.
 - **Photoshop panel** (experimental): see [photoshop-plugin/](photoshop-plugin/README.md).
 
 See [docs/tone-research.md](docs/tone-research.md) for how it compares with Photoshop
@@ -118,6 +129,8 @@ picture ─► colors (k-means in Lab, anti-alias clean-up, background removal)
 | `ecko/tone/engine.py` | Halftone engine: screens, colour separation, tone and press control, print check |
 | `ecko/tone/noise.py` | Procedural patterns in global print coordinates (textures, blue noise) |
 | `ecko/tone/api.py`, `export.py`, `presets.py` | Tone API, PNG/ZIP export, starting looks |
+| `ecko/tone/mockup.py` | Flat T-shirt mockups, drawn to scale |
+| `ecko/arctext.py` | Text set along an arc (shared by embroidery and Tone) |
 | `ecko/app.py` | FastAPI backend |
 | `web/` | Front end (plain HTML/CSS/JS, no build step) |
 
@@ -137,7 +150,11 @@ picture ─► colors (k-means in Lab, anti-alias clean-up, background removal)
 | POST | `/api/tone/images` | Multipart `file`; returns an image id (kept in memory, so re-upload on 410) |
 | POST | `/api/tone/preview` | JSON `{image_id, options, max_px?, region?}`: preview (or 1:1 crop) plus print check |
 | POST | `/api/tone/export` | JSON `{image_id, options, format: png\|zip, name}`: full-size print file |
+| POST | `/api/tone/mockup` | JSON `{image_id, options, size?}`: JPEG of the print on a shirt |
+| POST | `/api/tone/batch` | JSON `{items: [{image_id, name}], garments: [{hex, name}], options, mockups}`: ZIP |
 | POST | `/api/tone/raw?width=&height=&options=` | Raw RGBA body in, RGBA out (for the Photoshop panel) |
+
+`image_id` may be `null` when `options.text` has text: text-only designs work too.
 
 `options` fields: `brand`, `model`, `hoop`, `hoop_width_mm`,
 `hoop_height_mm`, `fabric`, `width_mm`, `colors`, `detail`, `density`,
@@ -157,5 +174,4 @@ unlisted link: anyone who has it can open it.
    sign-in provider, pricing, and where to host.
 2. An AI stitch planner trained on professionally digitized files. This
    needs a licensed set of artwork paired with pro files.
-3. Curved and arched text for caps and badges.
-4. Photo-stitch styles for photographs.
+3. Photo-stitch styles for photographs.

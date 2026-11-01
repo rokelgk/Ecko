@@ -27,6 +27,8 @@ Halftone, WeGraphics Halftone, Envato duotone/Xerox templates, DEPTHTONE) work t
 | Soft, anti-aliased edges: semi-transparent pixels that DTF RIPs print as a white haze or drop | Transparency is strictly on/off in every export |
 | No press control | Minimum and maximum dot, dot-gain compensation, rough edges, misregistration |
 | No feedback | Print check: tone levels, smallest dot in mm compared with the process, LPI range, heavy-film warning, ink matching the garment, with one-click fixes |
+| Made for one shirt colour | Fit to shirt recolours ink or re-solves tones for any shirt, drops spot inks the shirt supplies, and adds an underbase on dark shirts |
+| One design at a time | Batch: many designs × many shirt colours, with mockups |
 | Zoomed-out preview | A 1:1 loupe shows the exact print pixels, the same as the export |
 | Screen printers do separations by hand | ZIP of 1-bit films with registration marks and a README of inks and angles |
 

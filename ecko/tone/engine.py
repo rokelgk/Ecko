@@ -23,6 +23,8 @@ from functools import lru_cache
 import cv2
 import numpy as np
 
+from .. import arctext
+from ..digitizer import text as lettering
 from ..digitizer.preprocess import ImageError, _find_palette, _lab_to_rgb, _resize_max, _to_lab, load_image
 from . import noise
 
@@ -75,6 +77,17 @@ PROCESS_INKS = [
     ("Yellow", (255, 242, 0), -45.0),
     ("Black", (35, 31, 32), 0.0),
 ]
+
+SHIRT_FITS = {
+    "auto": "Automatic",
+    "recolor": "Recolor ink (logos, text, line art)",
+    "tones": "Match the picture (photos)",
+    "off": "Off (print exactly as set)",
+}
+CREAM = (244, 241, 234)
+INK_BLACK = (29, 29, 31)
+FONTS = {f.id: f for f in lettering.FONTS}
+MAX_TEXT_LAYERS = 6
 
 MAX_OUTPUT_PX = 120_000_000
 MAX_SOURCE_SIDE = 5000
@@ -132,11 +145,17 @@ class ToneOptions:
     garment: str = "#ffffff"
     knockout: bool = False
     registration_marks: bool = True
+    shirt_fit: str = "auto"
+    underbase: str = "auto"
+    choke_mm: float = 0.1
+    text: list = field(default_factory=list)
 
     # Settings that change the prepared source (the slow step).
     def prepare_key(self) -> tuple:
+        text = tuple(tuple(sorted(t.items())) for t in self.text)
         return (self.remove_background, round(float(self.bg_tolerance), 2), round(float(self.sharpen), 3),
-                self.mode == "spot" and int(self.spot_colors))
+                self.mode == "spot" and int(self.spot_colors), text,
+                text and _text_work_width(self))
 
 
 _RANGES = {
@@ -145,7 +164,7 @@ _RANGES = {
     "brightness": (-1, 1), "contrast": (-1, 1), "gamma": (0.2, 5),
     "black_point": (0, 0.95), "white_point": (0.05, 1), "sharpen": (0, 3),
     "min_dot": (0, 0.5), "max_dot": (0.5, 1), "dot_gain": (0, 0.4), "roughness": (0, 1),
-    "misregister_mm": (0, 5), "bg_tolerance": (1, 80), "seed": (0, 2**31 - 1),
+    "misregister_mm": (0, 5), "bg_tolerance": (1, 80), "seed": (0, 2**31 - 1), "choke_mm": (0, 1),
 }
 
 
@@ -167,7 +186,8 @@ def parse_options(data: dict | None) -> ToneOptions:
         setattr(o, name, int(v) if name in ("dpi", "spot_colors", "seed") else v)
     if o.white_point <= o.black_point + 0.02:
         raise ValueError("The white point must be above the black point.")
-    for name, table in (("mode", MODES), ("style", STYLES), ("target", TARGETS)):
+    for name, table in (("mode", MODES), ("style", STYLES), ("target", TARGETS), ("shirt_fit", SHIRT_FITS),
+                        ("underbase", {"auto": 1, "on": 1, "off": 1})):
         if getattr(o, name) not in table:
             raise ValueError(f"Unknown {name}: {getattr(o, name)!r}")
     for name in ("invert", "remove_background", "knockout", "registration_marks"):
@@ -192,7 +212,49 @@ def parse_options(data: dict | None) -> ToneOptions:
         clean.append({"type": t["type"], "strength": strength, "scale": scale,
                       "image_id": t.get("image_id")})
     o.textures = clean
+    o.text = _parse_text(o.text)
     return o
+
+
+_TEXT_RANGES = {"size": (0.02, 1.0), "arc": (-340, 340), "x": (-2, 2), "y": (-2, 2), "spacing": (-0.2, 1.0)}
+_TEXT_DEFAULTS = {"font": "varsity", "size": 0.12, "arc": 0.0, "x": 0.0, "y": -0.7, "spacing": 0.05,
+                  "color": "#000000"}
+
+
+def _parse_text(layers) -> list:
+    if not isinstance(layers, list) or len(layers) > MAX_TEXT_LAYERS:
+        raise ValueError(f"Up to {MAX_TEXT_LAYERS} lines of text are supported.")
+    out = []
+    for t in layers:
+        if not isinstance(t, dict):
+            raise ValueError("Each text line must be an object.")
+        unknown = set(t) - set(_TEXT_DEFAULTS) - {"text"}
+        if unknown:
+            raise ValueError(f"Unknown text settings: {', '.join(sorted(unknown))}")
+        t = {**_TEXT_DEFAULTS, **t}
+        words = str(t.get("text", "")).replace("\n", " ").strip()
+        if not words:
+            continue  # an empty line in the editor is not an error
+        if len(words) > 80:
+            raise ValueError("Each line of text is limited to 80 characters.")
+        if t["font"] not in FONTS:
+            raise ValueError(f"Unknown font: {t['font']!r}")
+        clean = {"text": words, "font": t["font"], "color": to_hex(_hex(t["color"]))}
+        for k, (lo, hi) in _TEXT_RANGES.items():
+            try:
+                v = float(t[k])
+            except (TypeError, ValueError) as exc:
+                raise ValueError(f"Text {k} must be a number.") from exc
+            if not math.isfinite(v) or not lo <= v <= hi:
+                raise ValueError(f"Text {k} must be between {lo} and {hi}.")
+            clean[k] = round(v, 4)
+        out.append(clean)
+    return out
+
+
+def _text_work_width(o: ToneOptions) -> int:
+    """Pixel width the design (art + text) is assembled at before screening."""
+    return int(min(4000, max(800, round(o.width_in * o.dpi, -2))))
 
 
 # ----------------------------------------------------------------- prepare
@@ -206,6 +268,7 @@ class Prepared:
     palette: list | None = None  # spot colours, light -> dark
     palette_lab: np.ndarray | None = None
     crop: tuple = (0, 0, 0, 0)    # artwork box (x, y, w, h) in the uploaded picture's pixels
+    photo_like: bool = False      # many smooth tones (photo) rather than flat colours (logo)
     _levels: dict = field(default_factory=dict)
 
     def out_size(self, o: ToneOptions) -> tuple[int, int]:
@@ -244,32 +307,122 @@ def _remove_flat_background(rgb: np.ndarray, tol: float) -> np.ndarray:
     return np.clip((keep - 0.25) / 0.5, 0, 1).astype(np.float32)
 
 
-def prepare(image: bytes | np.ndarray, o: ToneOptions) -> Prepared:
-    rgba = load_image(image) if isinstance(image, (bytes, bytearray)) else image
-    orig_w = rgba.shape[1]
-    rgba = _resize_max(rgba, MAX_SOURCE_SIDE)
-    back = orig_w / rgba.shape[1]
-    rgb = rgba[..., :3].astype(np.float32) / 255.0
-    alpha = rgba[..., 3].astype(np.float32) / 255.0
-    has_alpha = (alpha < 0.5).mean() > 0.01
-    if o.remove_background and not has_alpha:
-        alpha = alpha * _remove_flat_background(rgba[..., :3], o.bg_tolerance)
+def _photo_like(rgb: np.ndarray, alpha: np.ndarray) -> bool:
+    small_rgb = _resize_max(rgb, 400)
+    small_a = _resize_max(alpha, 400)
+    pix = small_rgb[small_a > 0.5]
+    if len(pix) < 50:
+        return False
+    lum = _luma(pix)
+    mid = float(((lum > 0.12) & (lum < 0.88)).mean())
+    colours = len(np.unique((pix * 15.99).astype(np.uint8), axis=0))
+    return mid > 0.3 and colours > 180
 
-    if o.sharpen > 0:
-        sigma = max(0.8, max(rgb.shape[:2]) / 1500)
-        blur = cv2.GaussianBlur(rgb, (0, 0), sigma)
-        rgb = np.clip(rgb + o.sharpen * (rgb - blur), 0, 1)
 
-    ys, xs = np.nonzero(alpha > 0.02)
-    if len(xs) == 0:
-        raise ImageError("Nothing is left to print once the background is removed. "
-                         "Turn off background removal or lower its tolerance.")
-    y0, y1, x0, x1 = ys.min(), ys.max() + 1, xs.min(), xs.max() + 1
-    rgb, alpha = rgb[y0:y1, x0:x1], alpha[y0:y1, x0:x1]
+def _resize_pm(rgb: np.ndarray, alpha: np.ndarray, w: int, h: int):
+    """Resize straight-alpha art without dark fringes (premultiply first)."""
+    interp = cv2.INTER_AREA if w < rgb.shape[1] else cv2.INTER_CUBIC
+    pm = cv2.resize(np.dstack([rgb * alpha[..., None], alpha]), (w, h), interpolation=interp)
+    a = np.clip(pm[..., 3], 0, 1)
+    return np.clip(pm[..., :3] / np.maximum(a, 1e-4)[..., None], 0, 1), a
+
+
+def _layout_text(o: ToneOptions, s: float):
+    """Render every text line at ``s`` px per design unit. Returns [(coverage, left, top, rgb)]."""
+    items = []
+    for t in o.text:
+        font = arctext.font_for_cap_height(str(lettering.FONT_DIR / FONTS[t["font"]].file), t["size"] * s)
+        m, (ax, ay) = arctext.render(t["text"], font, t["arc"], t["spacing"])
+        items.append((m, t["x"] * s - ax, t["y"] * s - ay, np.array(_hex(t["color"]), np.float32) / 255))
+    return items
+
+
+def _compose_text(rgb, alpha, o: ToneOptions):
+    """Place text lines around the art. Positions and sizes are in units of the art's width
+    (or of an imaginary 1-unit square when there is no picture), centred on the art."""
+    aw, ah = (rgb.shape[1], rgb.shape[0]) if rgb is not None else (1, 1)
+    art_h = ah / aw if rgb is not None else 0.0
+
+    def bounds(items, s):
+        boxes = [(l, t, l + m.shape[1], t + m.shape[0]) for m, l, t, _ in items]
+        if rgb is not None:
+            boxes.append((-s / 2, -art_h * s / 2, s / 2, art_h * s / 2))
+        return (min(b[0] for b in boxes), min(b[1] for b in boxes),
+                max(b[2] for b in boxes), max(b[3] for b in boxes))
+
+    probe = 1000.0
+    x0, y0, x1, y1 = bounds(_layout_text(o, probe), probe)
+    w_units, h_units = (x1 - x0) / probe, (y1 - y0) / probe
+    s = _text_work_width(o) / max(w_units, 1e-3)
+    s = min(s, MAX_SOURCE_SIDE / max(h_units, 1e-3), MAX_SOURCE_SIDE / max(w_units, 1e-3))
+    items = _layout_text(o, s)
+    x0, y0, x1, y1 = bounds(items, s)
+    W, H = int(math.ceil(x1 - x0)) + 2, int(math.ceil(y1 - y0)) + 2
+    out_rgb = np.zeros((H, W, 3), np.float32)
+    out_a = np.zeros((H, W), np.float32)
+    if rgb is not None:
+        w, h = max(1, round(s)), max(1, round(art_h * s))
+        r2, a2 = _resize_pm(rgb, alpha, w, h)
+        left, top = int(round(-s / 2 - x0)), int(round(-art_h * s / 2 - y0))
+        out_rgb[top:top + h, left:left + w] = r2[:H - top, :W - left]
+        out_a[top:top + h, left:left + w] = a2[:H - top, :W - left]
+    for m, l, t, col in items:
+        left, top = int(round(l - x0)), int(round(t - y0))
+        ta = m.astype(np.float32)[:H - top, :W - left] / 255
+        hh, ww = ta.shape
+        region = out_rgb[top:top + hh, left:left + ww]
+        region[:] = region * (1 - ta[..., None]) + col * ta[..., None]
+        out_a[top:top + hh, left:left + ww] = ta + out_a[top:top + hh, left:left + ww] * (1 - ta)
+    return out_rgb, out_a
+
+
+def prepare(image: bytes | np.ndarray | None, o: ToneOptions) -> Prepared:
+    back, crop_xy = 1.0, (0, 0)
+    rgb = alpha = None
+    if image is not None:
+        rgba = load_image(image) if isinstance(image, (bytes, bytearray)) else image
+        orig_w = rgba.shape[1]
+        rgba = _resize_max(rgba, MAX_SOURCE_SIDE)
+        back = orig_w / rgba.shape[1]
+        rgb = rgba[..., :3].astype(np.float32) / 255.0
+        alpha = rgba[..., 3].astype(np.float32) / 255.0
+        has_alpha = (alpha < 0.5).mean() > 0.01
+        if o.remove_background and not has_alpha:
+            alpha = alpha * _remove_flat_background(rgba[..., :3], o.bg_tolerance)
+
+        if o.sharpen > 0:
+            sigma = max(0.8, max(rgb.shape[:2]) / 1500)
+            blur = cv2.GaussianBlur(rgb, (0, 0), sigma)
+            rgb = np.clip(rgb + o.sharpen * (rgb - blur), 0, 1)
+
+        ys, xs = np.nonzero(alpha > 0.02)
+        if len(xs) == 0 and not o.text:
+            raise ImageError("Nothing is left to print once the background is removed. "
+                             "Turn off background removal or lower its tolerance.")
+        if len(xs):
+            y0, y1, x0, x1 = ys.min(), ys.max() + 1, xs.min(), xs.max() + 1
+            rgb, alpha = rgb[y0:y1, x0:x1], alpha[y0:y1, x0:x1]
+            crop_xy = (x0, y0)
+        else:
+            rgb = alpha = None
+    elif not o.text:
+        raise ImageError("Add a picture or some text.")
+
+    photo = rgb is not None and _photo_like(rgb, alpha)
+    crop_wh = (rgb.shape[1], rgb.shape[0]) if rgb is not None else (0, 0)
+    if o.text:
+        rgb, alpha = _compose_text(rgb, alpha, o)
+        ys, xs = np.nonzero(alpha > 0.02)
+        if len(xs) == 0:
+            raise ImageError("Nothing to print.")
+        y0, y1, x0, x1 = ys.min(), ys.max() + 1, xs.min(), xs.max() + 1
+        rgb, alpha = rgb[y0:y1, x0:x1], alpha[y0:y1, x0:x1]
 
     pm = np.dstack([rgb * alpha[..., None], alpha]).astype(np.float32)
-    prep = Prepared(rgba=np.ascontiguousarray(pm), src_w=x1 - x0, src_h=y1 - y0,
-                    crop=(round(x0 * back), round(y0 * back), round((x1 - x0) * back), round((y1 - y0) * back)))
+    prep = Prepared(rgba=np.ascontiguousarray(pm), src_w=rgb.shape[1], src_h=rgb.shape[0],
+                    crop=(round(crop_xy[0] * back), round(crop_xy[1] * back),
+                          round(crop_wh[0] * back), round(crop_wh[1] * back)),
+                    photo_like=photo)
 
     if o.mode == "spot":
         sel = alpha > 0.5
@@ -347,27 +500,97 @@ class Plate:
     rgb: tuple
     angle: float
     shift: tuple = (0.0, 0.0)
+    src: int = 0              # which coverage channel feeds this plate
+    underbase: bool = False   # white base for dark shirts: films only, not the DTF/DTG PNG
 
 
-def plate_specs(prep: Prepared, o: ToneOptions) -> tuple[list[Plate], str]:
-    """The inks to print and how they combine ("multiply" overprint or "opaque")."""
-    if o.mode == "mono":
-        return [Plate("Ink", _hex(o.inks[0]), o.angle)], "opaque"
-    if o.mode == "duotone":
-        return [Plate("Shadow ink", _hex(o.inks[0]), o.angle),
-                Plate("Second ink", _hex(o.inks[1]), o.angle + 30)], "multiply"
+def _lum(rgb) -> float:
+    return (0.299 * rgb[0] + 0.587 * rgb[1] + 0.114 * rgb[2]) / 255.0
+
+
+def _lab1(rgb) -> np.ndarray:
+    return cv2.cvtColor(np.array([[rgb]], np.float32) / 255, cv2.COLOR_RGB2LAB)[0, 0]
+
+
+def contrast_ink(garment) -> tuple:
+    """Cream on dark shirts, near-black on light ones: whichever stands out more."""
+    lg = _lum(garment)
+    return CREAM if abs(_lum(CREAM) - lg) >= abs(_lum(INK_BLACK) - lg) else INK_BLACK
+
+
+@dataclass
+class Fit:
+    """How the design is adapted to the shirt colour."""
+    mode: str                                   # "recolor", "tones" or "off"
+    inks: list = field(default_factory=list)    # mono / duotone inks after any swap
+    spot: list = field(default_factory=list)    # per palette colour: ink rgb, or None = the shirt supplies it
+    underbase: bool = False
+    notes: list = field(default_factory=list)
+
+
+def resolve_fit(prep: Prepared, o: ToneOptions) -> Fit:
+    g = _hex(o.garment)
+    lg = _lum(g)
+    mode = o.shirt_fit
+    if mode == "auto":
+        mode = "tones" if prep.photo_like else "recolor"
+    fit = Fit(mode=mode, inks=[_hex(c) for c in o.inks])
+    name = lambda c: "cream" if c == CREAM else "black"  # noqa: E731
+    if mode != "off" and o.mode in ("mono", "duotone") and abs(_lum(fit.inks[0]) - lg) < 0.3:
+        new = contrast_ink(g)
+        fit.notes.append(f"Ink {to_hex(fit.inks[0])} would disappear on this shirt, so it prints in {name(new)}.")
+        fit.inks[0] = new
+    if o.mode == "spot":
+        pal = prep.palette or []
+        base = [_hex(c) for c in o.inks] if len(o.inks) == len(pal) else list(pal)
+        glab = _lab1(g)
+        for i, c in enumerate(base):
+            close = mode != "off" and float(np.linalg.norm(_lab1(c) - glab)) < 14
+            if close and mode == "tones":
+                fit.spot.append(None)
+                fit.notes.append(f"Spot {i + 1} ({to_hex(c)}) matches the shirt, so the shirt shows through instead.")
+            elif close:
+                new = contrast_ink(g)
+                fit.spot.append(new)
+                fit.notes.append(f"Spot {i + 1} ({to_hex(c)}) matches the shirt, so it prints in {name(new)}.")
+            else:
+                fit.spot.append(c)
     if o.mode == "cmyk":
-        return [Plate(n, c, o.angle + a) for n, c, a in PROCESS_INKS], "multiply"
-    pal = prep.palette or []
-    override = [_hex(c) for c in o.inks] if len(o.inks) == len(pal) else None
-    return [Plate(f"Spot {i + 1}", override[i] if override else c, o.angle + 30 * i)
-            for i, c in enumerate(pal)], "opaque"
+        printed = [c for _, c, _ in PROCESS_INKS]
+    elif o.mode == "spot":
+        printed = [c for c in fit.spot if c is not None]
+    else:
+        printed = fit.inks[:2 if o.mode == "duotone" else 1]
+    fit.underbase = o.underbase == "on" or (
+        o.underbase == "auto" and o.target == "screen" and lg < 0.6 and any(_lum(c) < 0.85 for c in printed))
+    if fit.underbase and o.underbase == "auto":
+        fit.notes.append("Dark shirt: a choked white underbase film is added so the colours stay bright.")
+    return fit
+
+
+def plate_specs(prep: Prepared, o: ToneOptions, fit: Fit | None = None) -> tuple[list[Plate], str]:
+    """The inks to print and how they combine ("multiply" overprint or "opaque")."""
+    fit = fit or resolve_fit(prep, o)
+    if o.mode == "mono":
+        plates, blend = [Plate("Ink", fit.inks[0], o.angle)], "opaque"
+    elif o.mode == "duotone":
+        plates, blend = [Plate("Shadow ink", fit.inks[0], o.angle, src=0),
+                         Plate("Second ink", fit.inks[1], o.angle + 30, src=1)], "multiply"
+    elif o.mode == "cmyk":
+        plates, blend = [Plate(n, c, o.angle + a, src=i) for i, (n, c, a) in enumerate(PROCESS_INKS)], "multiply"
+    else:
+        plates = [Plate(f"Spot {i + 1}", c, o.angle + 30 * i, src=i) for i, c in enumerate(fit.spot) if c is not None]
+        blend = "opaque"
+    if fit.underbase:
+        plates.insert(0, Plate("White underbase", (255, 255, 255), o.angle + 7.5, src=-1, underbase=True))
+    return plates, blend
 
 
 def _misregistration(plates: list[Plate], o: ToneOptions) -> None:
     px = o.misregister_mm * o.dpi / 25.4
-    for i, p in enumerate(plates):
-        if i == 0 or px <= 0:
+    for p in plates:
+        i = p.src
+        if i <= 0 or px <= 0 or p.underbase:
             p.shift = (0.0, 0.0)
             continue
         h = noise.hash2(np.array([i]), np.array([o.seed]), 911)
@@ -377,11 +600,17 @@ def _misregistration(plates: list[Plate], o: ToneOptions) -> None:
         p.shift = (mag * math.cos(ang), mag * math.sin(ang))
 
 
-def _coverages(rgb, a, prep: Prepared, o: ToneOptions) -> list[np.ndarray]:
-    """Ink amount 0..1 for every plate, before screening."""
+def _coverages(rgb, a, prep: Prepared, o: ToneOptions, fit: Fit) -> list[np.ndarray]:
+    """Ink amount 0..1 for every coverage channel, before screening."""
     if o.mode in ("mono", "duotone"):
         light = _tone(_luma(rgb), o)
-        c = light if o.invert else 1 - light
+        if fit.mode == "tones" and o.mode == "mono":
+            # What you see on a shirt is coverage * ink + (1 - coverage) * shirt.
+            # Solve for the coverage that shows the picture's lightness on this shirt.
+            li, lg = _lum(fit.inks[0]), _lum(_hex(o.garment))
+            c = np.clip((light - lg) / (li - lg), 0, 1)
+        else:
+            c = light if o.invert else 1 - light
         if o.style == "xerox":
             c = np.clip((c - 0.5) * 1.3 + 0.5, 0, 1)  # the Xerox threshold adds the rest
         if o.mode == "mono":
@@ -394,11 +623,27 @@ def _coverages(rgb, a, prep: Prepared, o: ToneOptions) -> list[np.ndarray]:
         inv = np.maximum(1 - k, 1e-4)[..., None]
         cmy = np.clip((cmy - k[..., None]) / inv, 0, 1)
         return [cmy[..., 0] * a, cmy[..., 1] * a, cmy[..., 2] * a, k * a]
+    centers = prep.palette_lab
+    if fit.mode == "tones":  # the shirt is a free extra "ink"
+        centers = np.vstack([centers, _lab1(_hex(o.garment))[None, :]])
     lab = cv2.cvtColor(rgb.astype(np.float32), cv2.COLOR_RGB2LAB)
-    d2 = ((lab[..., None, :] - prep.palette_lab[None, None, :, :]) ** 2).sum(-1)
+    d2 = ((lab[..., None, :] - centers[None, None, :, :]) ** 2).sum(-1)
     w = np.exp(-(d2 - d2.min(-1, keepdims=True)) / (2 * o.spot_softness ** 2))
     w /= w.sum(-1, keepdims=True)
-    return [w[..., i] * a for i in range(w.shape[-1])]
+    return [w[..., i] * a for i in range(len(prep.palette_lab))]
+
+
+def _underbase(covs: list[np.ndarray], plates: list[Plate], o: ToneOptions) -> np.ndarray:
+    """White base under every ink, shrunk ("choked") so it never peeks out past the colour."""
+    m = None
+    for p in plates:
+        if not p.underbase:
+            m = covs[p.src] if m is None else np.maximum(m, covs[p.src])
+    if m is None:
+        return np.zeros(1, np.float32)
+    cell = o.dpi / o.lpi if o.style in AM_STYLES else 2 * o.grain_mm * o.dpi / 25.4
+    k = (o.choke_mm * o.dpi / 25.4) / (cell * 0.5642)  # radius shrink as a fraction of the cell
+    return np.clip(np.sqrt(m) - k, 0, 1) ** 2
 
 
 # ----------------------------------------------------------------- screens
@@ -517,8 +762,10 @@ def texture_masks(xs, ys, o: ToneOptions, texture_images: dict | None = None):
 
 
 def render_plates(prep: Prepared, o: ToneOptions, x0: float, y0: float, gw: int, gh: int,
-                  step: float, plates: list[Plate], texture_images: dict | None = None) -> list[np.ndarray]:
+                  step: float, plates: list[Plate], texture_images: dict | None = None,
+                  fit: Fit | None = None) -> list[np.ndarray]:
     """On/off bitmaps (gh x gw) for each plate over one region of the print."""
+    fit = fit or resolve_fit(prep, o)
     out_w, _ = prep.out_size(o)
     xs = x0 + (np.arange(gw) + 0.5) * step
     ys = y0 + (np.arange(gh) + 0.5) * step
@@ -527,9 +774,11 @@ def render_plates(prep: Prepared, o: ToneOptions, x0: float, y0: float, gw: int,
     for i, p in enumerate(plates):
         if p.shift not in samples:
             rgb, a = _sample(prep, x0, y0, gw, gh, step, out_w, *p.shift)
-            samples[p.shift] = [_shape_dots(c, o) for c in _coverages(rgb, a, prep, o)]
-        cov = samples[p.shift][i]
-        T = threshold(xs - p.shift[0], ys - p.shift[1], o, p.angle, o.seed * 31 + i)
+            samples[p.shift] = [_shape_dots(c, o) for c in _coverages(rgb, a, prep, o, fit)]
+        covs = samples[p.shift]
+        cov = _underbase(covs, plates, o) if p.underbase else covs[p.src]
+        # seed by ink, not list position, so adding an underbase never changes the other plates
+        T = threshold(xs - p.shift[0], ys - p.shift[1], o, p.angle, o.seed * 31 + (p.src if p.src >= 0 else 97))
         result.append(cov > T)
     if o.textures:
         remove, add = texture_masks(xs, ys, o, texture_images)
@@ -540,8 +789,9 @@ def render_plates(prep: Prepared, o: ToneOptions, x0: float, y0: float, gw: int,
         for i in range(len(result)):
             result[i] &= ~remove
         if alpha_any is not None:
-            top = len(result) - 1 if o.mode != "cmyk" else 3  # darkest / black plate
-            result[top] |= add & alpha_any & ~remove
+            inks = [i for i, p in enumerate(plates) if not p.underbase]
+            if inks:  # toner specks go on the darkest / black plate (printed last)
+                result[inks[-1]] |= add & alpha_any & ~remove
     return result
 
 
@@ -553,11 +803,15 @@ def composite(bitmaps: list[np.ndarray], plates: list[Plate], blend: str, o: Ton
     if blend == "multiply":
         rgb = np.ones((h, w, 3), np.float32)
         for b, p in zip(bitmaps, plates):
+            if p.underbase:
+                continue
             rgb[b] *= np.array(p.rgb, np.float32) / 255.0
             alpha |= b
     else:
         rgb = np.zeros((h, w, 3), np.float32)
         for b, p in zip(bitmaps, plates):
+            if p.underbase:
+                continue
             rgb[b] = np.array(p.rgb, np.float32) / 255.0
             alpha |= b
     if o.knockout:
@@ -576,20 +830,21 @@ def render_preview(prep: Prepared, o: ToneOptions, max_px: int = 900,
     Returns (rgba uint8, plates, bitmaps-at-grid-resolution).
     """
     out_w, out_h = prep.out_size(o)
-    plates, blend = plate_specs(prep, o)
+    fit = resolve_fit(prep, o)
+    plates, blend = plate_specs(prep, o, fit)
     _misregistration(plates, o)
     if region:
         x0, y0, w, h = (int(round(v)) for v in region)
         w = max(1, min(w, LOUPE_MAX))
         h = max(1, min(h, LOUPE_MAX))
-        bm = render_plates(prep, o, x0, y0, w, h, 1.0, plates, texture_images)
+        bm = render_plates(prep, o, x0, y0, w, h, 1.0, plates, texture_images, fit)
         return composite(bm, plates, blend, o), plates, bm
     scale = min(1.0, max_px / max(out_w, out_h))
     ss = 1.5 if scale < 1 else 1
     step = 1.0 / (scale * ss)
     gw = max(1, round(out_w / step))
     gh = max(1, round(out_h / step))
-    bm = render_plates(prep, o, 0, 0, gw, gh, step, plates, texture_images)
+    bm = render_plates(prep, o, 0, 0, gw, gh, step, plates, texture_images, fit)
     rgb, a = composite(bm, plates, blend, o, float_out=True)
     pw, ph = max(1, round(out_w * scale)), max(1, round(out_h * scale))
     if (pw, ph) != (gw, gh):
@@ -608,13 +863,14 @@ def render_full(prep: Prepared, o: ToneOptions, texture_images: dict | None = No
     if out_w * out_h > MAX_OUTPUT_PX:
         raise ImageError(f"That print would be {out_w} x {out_h} px. Lower the width or DPI "
                          f"(limit {MAX_OUTPUT_PX // 1_000_000} megapixels).")
-    plates, blend = plate_specs(prep, o)
+    fit = resolve_fit(prep, o)
+    plates, blend = plate_specs(prep, o, fit)
     _misregistration(plates, o)
     rgba = np.zeros((out_h, out_w, 4), np.uint8)
     seps = [np.zeros((out_h, out_w), bool) for _ in plates] if keep_plates else None
     for y0 in range(0, out_h, strip):
         h = min(strip, out_h - y0)
-        bm = render_plates(prep, o, 0, y0, out_w, h, 1.0, plates, texture_images)
+        bm = render_plates(prep, o, 0, y0, out_w, h, 1.0, plates, texture_images, fit)
         rgba[y0:y0 + h] = composite(bm, plates, blend, o)
         if seps is not None:
             for s, b in zip(seps, bm):
@@ -683,22 +939,46 @@ def report(prep: Prepared, o: ToneOptions, plates: list[Plate], bitmaps: list[np
     inks = []
     for p, b in zip(plates, bitmaps):
         inks.append({"name": p.name, "hex": to_hex(p.rgb), "angle": round(p.angle % 180, 1),
-                     "coverage": round(float(b.mean()) * 100, 1)})
-        any_ink |= b
+                     "coverage": round(float(b.mean()) * 100, 1), "underbase": p.underbase})
+        if not p.underbase:
+            any_ink |= b
     info["ink_area_pct"] = round(float(any_ink.mean()) * 100, 1) if any_ink is not None else 0
     if o.target == "dtf" and info["ink_area_pct"] > 60:
         warnings.append({"level": "info", "text": "Lots of solid film: the transfer will feel heavy. "
                          "More halftone (lower max dot, or a worn texture) makes it lighter and more breathable."})
     garment = _hex(o.garment)
-    for ink in inks:
-        if np.linalg.norm(np.array(_hex(ink["hex"])) - garment) < 40 and not o.knockout:
-            warnings.append({"level": "info", "text": f"{ink['name']} is almost the garment colour. "
-                             "Turn on knockout to let the shirt show through instead of printing it.",
-                             "fix": {"knockout": True}})
-            break
+    fit = resolve_fit(prep, o)
+    info["fit"] = {"mode": fit.mode, "notes": fit.notes, "underbase": fit.underbase,
+                   "photo_like": prep.photo_like}
+    if o.shirt_fit == "off":
+        for ink in inks:
+            if np.linalg.norm(np.array(_hex(ink["hex"])) - garment) < 40 and not o.knockout and not ink["underbase"]:
+                warnings.append({"level": "info", "text": f"{ink['name']} is almost the shirt colour. "
+                                 "Turn on Fit to shirt to fix it automatically.", "fix": {"shirt_fit": "auto"}})
+                break
+    elif fit.mode == "tones" and o.mode == "mono":
+        lost = _lost_to_shirt(prep, o, fit)
+        if lost > 0.4:
+            warnings.append({"level": "warn", "text": f"{round(lost * 100)}% of the picture is darker than this "
+                             "shirt, so it blends into the shirt. Recolor prints it as ink instead.",
+                             "fix": {"shirt_fit": "recolor"}})
     info["inks"] = inks
     info["warnings"] = warnings
     return info
+
+
+def _lost_to_shirt(prep: Prepared, o: ToneOptions, fit: Fit) -> float:
+    """Share of the art that needs 'negative ink' on this shirt (and so vanishes into it)."""
+    src = prep.level(max(1.0, prep.src_w / 300))
+    a = src[..., 3]
+    sel = a > 0.5
+    if not sel.any():
+        return 0.0
+    rgb = src[..., :3][sel] / a[sel][:, None]
+    light = _tone(_luma(rgb), o)
+    li, lg = _lum(fit.inks[0]), _lum(_hex(o.garment))
+    c = (light - lg) / (li - lg)
+    return float((c < 0.02).mean())
 
 
 def _min_dot_for(o: ToneOptions, tgt: dict) -> float:

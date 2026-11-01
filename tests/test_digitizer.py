@@ -271,3 +271,18 @@ def test_hiding_everything_is_an_error(logo_artwork):
     art, opts = logo_artwork
     with pytest.raises(ValueError):
         plan(art, opts, Edits(objects={str(r.id): {"hidden": True} for r in art.regions}))
+
+
+def test_curved_lettering_is_taller_than_straight():
+    from ecko.digitizer.text import TextLayer, render_mask
+
+    straight = render_mask(TextLayer(text="TEAM ECKO", height_mm=10))
+    arched = render_mask(TextLayer(text="TEAM ECKO", height_mm=10, arc=160))
+    smile = render_mask(TextLayer(text="TEAM ECKO", height_mm=10, arc=-160))
+    assert arched.shape[0] > straight.shape[0] * 1.8
+    assert smile.shape[0] > straight.shape[0] * 1.8
+    # letter area is about the same: bent, not distorted
+    assert abs(arched.sum() / straight.sum() - 1) < 0.15
+    import pytest
+    with pytest.raises(ValueError):
+        TextLayer(text="A", arc=999).validate()

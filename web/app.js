@@ -199,7 +199,7 @@ function bindForm() {
   $("fitHoop").addEventListener("click", fitToHoop);
   $("go").addEventListener("click", digitize);
   $("addText").addEventListener("click", () => {
-    state.layers.push({ text: "Your text", font: "block", height_mm: 15, color: "#000000", x_mm: null, y_mm: null });
+    state.layers.push({ text: "Your text", font: "block", height_mm: 15, color: "#000000", x_mm: null, y_mm: null, arc: 0 });
     renderLayers(); updateGo(); scheduleUpdate();
   });
   $("download").addEventListener("click", () => download(currentBrand().formats[0]));
@@ -275,6 +275,15 @@ function renderLayers() {
       scheduleUpdate();
     });
     el.querySelector(".height").closest("label").firstChild.textContent = `Letter height (${inches() ? "in" : "mm"}) `;
+    const arc = el.querySelector(".arc");
+    const arcOut = el.querySelector(".arcOut");
+    const arcLabel = () => {
+      const v = layer.arc || 0;
+      arcOut.textContent = v === 0 ? "(straight)" : `(${v > 0 ? "arch" : "smile"} ${Math.abs(v)}°)`;
+    };
+    arc.value = layer.arc || 0;
+    arcLabel();
+    arc.addEventListener("input", () => { layer.arc = parseFloat(arc.value); arcLabel(); scheduleUpdate(); });
     const c = el.querySelector(".color");
     c.value = layer.color;
     c.addEventListener("change", () => { layer.color = c.value; scheduleUpdate(); });

@@ -42,3 +42,23 @@ output { color: var(--ink); font-variant-numeric: tabular-nums; float: right; }
 .busy .spinner { width: 22px; height: 22px; }
 .inkSwatch { width: 22px; height: 22px; border-radius: 6px; border: 1px solid rgba(0,0,0,.2); flex: none; }
 .threads input[type=color] { flex: none; }
+
+.fitSel { display: inline-flex; align-items: center; gap: 6px; margin: 0 0 0 8px; color: var(--muted); font-size: 13px; }
+.fitSel select { width: auto; margin: 0; padding: 4px 8px; }
+.fitNotes { margin: -4px 0 0; font-size: 13px; color: var(--ink); background: var(--panel); border: 1px solid var(--line);
+  border-left: 3px solid var(--accent); border-radius: 8px; padding: 6px 10px; }
+.toneStage #mockup { cursor: default; }
+.textLayer .row { gap: 8px; align-items: center; }
+.textLayer .row label { margin: 0; font-size: 12px; }
+.textLayer input[type=text] { margin: 0 0 6px; background: var(--panel); }
+.textLayer select { margin: 0; background: var(--panel); }
+.textLayer input[type=color] { width: 34px; height: 30px; border: 1px solid var(--line); border-radius: 6px; padding: 0; flex: 0 0 auto; }
+.textLayer .link { flex: 0 0 auto; }
+.batchList { list-style: none; margin: 8px 0; padding: 0; display: flex; flex-direction: column; gap: 4px; font-size: 13px; }
+.batchList li { display: flex; align-items: center; gap: 8px; }
+.batchList img { width: 36px; height: 36px; object-fit: contain; border-radius: 4px; background: var(--bg); border: 1px solid var(--line); }
+.batchList input { flex: 1; margin: 0; }
+.batchShirts { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 8px; }
+.batchShirts label { display: inline-flex; align-items: center; gap: 5px; margin: 0; padding: 4px 8px; border: 1px solid var(--line);
+  border-radius: 99px; color: var(--ink); font-size: 12.5px; cursor: pointer; }
+.batchShirts span.dot { width: 14px; height: 14px; border-radius: 50%; border: 1px solid rgba(0,0,0,.25); }

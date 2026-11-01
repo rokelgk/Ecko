@@ -8,6 +8,7 @@ import io
 import json
 import re
 import threading
+import zipfile
 from collections import OrderedDict
 from dataclasses import asdict
 
@@ -19,6 +20,7 @@ from PIL import Image
 from ..digitizer.preprocess import ImageError, load_image
 from . import engine as E
 from .export import png_bytes, separations_zip
+from .mockup import GARMENTS, mockup_jpeg
 from .presets import PRESETS
 
 router = APIRouter(prefix="/api/tone")
@@ -26,6 +28,10 @@ router = APIRouter(prefix="/api/tone")
 MAX_UPLOAD_BYTES = 25 * 1024 * 1024
 MAX_IMAGES = 48
 MAX_PREPARED = 24
+MAX_BATCH_ITEMS = 25
+MAX_BATCH_GARMENTS = 12
+MAX_BATCH_RENDERS = 60
+MAX_BATCH_MEGAPIXELS = 2500
 ID_RE = re.compile(r"^[0-9a-f]{32}$")
 
 _lock = threading.Lock()
@@ -61,7 +67,10 @@ def _options(raw) -> E.ToneOptions:
         raise HTTPException(400, str(exc)) from exc
 
 
-def _prepare(iid: str, o: E.ToneOptions) -> E.Prepared:
+def _prepare(iid: str | None, o: E.ToneOptions) -> E.Prepared:
+    """Prepared source for a picture id, or for a text-only design when iid is None."""
+    if iid is None and not o.text:
+        raise HTTPException(400, "Upload a picture or add some text.")
     key = (iid, o.prepare_key())
     with _lock:
         prep = _prepared.get(key)
@@ -69,7 +78,7 @@ def _prepare(iid: str, o: E.ToneOptions) -> E.Prepared:
             _prepared.move_to_end(key)
             return prep
     try:
-        prep = E.prepare(_image(iid), o)
+        prep = E.prepare(_image(iid) if iid is not None else None, o)
     except ImageError as exc:
         raise HTTPException(422, str(exc)) from exc
     with _lock:
@@ -112,8 +121,13 @@ def catalog():
         "targets": [{"id": k, "name": v["label"], "lpi": list(v["lpi"]), "min_dot_mm": v["min_dot_mm"]}
                     for k, v in E.TARGETS.items()],
         "presets": PRESETS,
+        "fonts": [{"id": f.id, "name": f.name} for f in E.FONTS.values()],
+        "shirt_fits": [{"id": k, "name": v} for k, v in E.SHIRT_FITS.items()],
+        "garments": GARMENTS,
         "defaults": asdict(E.ToneOptions()),
-        "limits": {"max_megapixels": E.MAX_OUTPUT_PX // 1_000_000, "loupe_max": E.LOUPE_MAX},
+        "limits": {"max_megapixels": E.MAX_OUTPUT_PX // 1_000_000, "loupe_max": E.LOUPE_MAX,
+                   "batch_items": MAX_BATCH_ITEMS, "batch_garments": MAX_BATCH_GARMENTS,
+                   "batch_renders": MAX_BATCH_RENDERS},
     }
 
 
@@ -178,6 +192,97 @@ def export(body: dict = Body(...)):
                     headers={"Content-Disposition": f'attachment; filename="{name}-separations.zip"'})
 
 
+@router.post("/mockup")
+def mockup(body: dict = Body(...)):
+    """JPEG of the print, to scale, on a flat T-shirt in the garment colour."""
+    o = _options(body.get("options"))
+    prep = _prepare(body.get("image_id"), o)
+    try:
+        size = max(400, min(int(body.get("size", 1000)), 2000))
+    except (TypeError, ValueError) as exc:
+        raise HTTPException(400, "size must be a number.") from exc
+    return Response(mockup_jpeg(prep, o, size, _texture_images(o)), media_type="image/jpeg")
+
+
+@router.post("/batch")
+def batch(body: dict = Body(...)):
+    """Many designs x many shirt colours, same settings, one ZIP.
+
+    ``items``: [{image_id (or null for text only), name}]; ``garments``: [{hex, name}]
+    (defaults to the options' garment). With Fit to shirt on, every colour gets its own
+    adapted print. ``mockups`` adds a JPEG of each print on its shirt.
+    """
+    base = body.get("options") if isinstance(body.get("options"), dict) else {}
+    _options(base)  # validate once up front
+    items = body.get("items")
+    garments = body.get("garments") or [{"hex": base.get("garment", "#ffffff"), "name": ""}]
+    if not isinstance(items, list) or not items:
+        raise HTTPException(400, "Add at least one design.")
+    if not isinstance(garments, list):
+        raise HTTPException(400, "garments must be a list.")
+    if len(items) > MAX_BATCH_ITEMS or len(garments) > MAX_BATCH_GARMENTS:
+        raise HTTPException(400, f"Batches are limited to {MAX_BATCH_ITEMS} designs and {MAX_BATCH_GARMENTS} colours.")
+    if len(items) * len(garments) > MAX_BATCH_RENDERS:
+        raise HTTPException(400, f"That's {len(items) * len(garments)} prints; the limit is {MAX_BATCH_RENDERS} per batch.")
+    with_mockups = bool(body.get("mockups", True))
+    zip_name = _safe_name(body.get("name") or "ecko-batch")
+
+    shirts = []
+    for g in garments:
+        if not isinstance(g, dict):
+            raise HTTPException(400, "Each garment is {hex, name}.")
+        try:
+            hexv = E.to_hex(E._hex(g.get("hex", "")))
+        except ValueError as exc:
+            raise HTTPException(400, str(exc)) from exc
+        label = _safe_name(g.get("name") or next((x["name"] for x in GARMENTS if x["hex"] == hexv), hexv.lstrip("#")))
+        shirts.append((hexv, label))
+
+    buf = io.BytesIO()
+    lines, errors, total_mp, seen = [], [], 0.0, set()
+    with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as z:
+        for n, item in enumerate(items, 1):
+            if not isinstance(item, dict):
+                raise HTTPException(400, "Each item is {image_id, name}.")
+            name = _safe_name(item.get("name") or f"design-{n}")
+            while name in seen:
+                name = f"{name}-{n}"
+            seen.add(name)
+            for hexv, label in shirts:
+                o = _options({**base, "garment": hexv})
+                try:
+                    prep = _prepare(item.get("image_id"), o)
+                    w, h = prep.out_size(o)
+                    total_mp += w * h / 1e6
+                    if total_mp > MAX_BATCH_MEGAPIXELS:
+                        raise HTTPException(400, "This batch is too big to render at once. "
+                                            "Use fewer designs or colours, or a smaller size or DPI.")
+                    tex = _texture_images(o)
+                    rgba, plates, _ = E.render_full(prep, o, tex)
+                    stem = f"{name}/{name}-{label}"
+                    z.writestr(f"{stem}.png", png_bytes(rgba, o.dpi))
+                    if with_mockups:
+                        z.writestr(f"{stem}-mockup.jpg", mockup_jpeg(prep, o, 1000, tex))
+                    fit = E.resolve_fit(prep, o)
+                    inks = ", ".join(E.to_hex(p.rgb) for p in plates if not p.underbase)
+                    lines.append(f"{stem}.png  {w}x{h}px  fit={fit.mode}  inks: {inks}")
+                    lines += [f"    {note}" for note in fit.notes]
+                except HTTPException as exc:
+                    if exc.status_code == 400 and "batch" in str(exc.detail):
+                        raise
+                    errors.append(f"{name} on {label}: {exc.detail}")
+                except ImageError as exc:
+                    errors.append(f"{name} on {label}: {exc}")
+        readme = [f"{zip_name}: {len(items)} design(s) x {len(shirts)} shirt colour(s)", ""] + lines
+        if errors:
+            readme += ["", "Skipped:"] + [f"  {e}" for e in errors]
+        z.writestr("README.txt", "\n".join(readme) + "\n")
+    if not lines:
+        raise HTTPException(422, "Nothing could be rendered: " + "; ".join(errors))
+    return Response(buf.getvalue(), media_type="application/zip",
+                    headers={"Content-Disposition": f'attachment; filename="{zip_name}.zip"'})
+
+
 @router.post("/raw")
 async def raw(request: Request, width: int, height: int, options: str = "{}"):
     """For the Photoshop panel: raw RGBA bytes in the body, raw RGBA out at the same pixel size.
@@ -197,6 +302,7 @@ async def raw(request: Request, width: int, height: int, options: str = "{}"):
     except ValueError as exc:
         raise HTTPException(400, "options must be a JSON object.") from exc
     opts["width_in"] = 1.0  # replaced below once the artwork box is known
+    opts["text"] = []        # Photoshop has its own type tools
     o = _options(opts)
     rgba_in = np.frombuffer(data, np.uint8).reshape(height, width, 4)
     # A layer with transparency already has its background removed.

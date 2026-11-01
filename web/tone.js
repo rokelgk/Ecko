@@ -4,12 +4,10 @@
   const $ = (id) => document.getElementById(id);
   const SLIDERS = ["bg_tolerance", "lpi", "grain_mm", "angle", "spot_colors", "spot_softness", "brightness",
     "contrast", "gamma", "black_point", "white_point", "sharpen", "min_dot", "max_dot", "dot_gain",
-    "roughness", "misregister_mm"];
+    "roughness", "misregister_mm", "choke_mm"];
   const CHECKS = ["remove_background", "invert", "knockout", "registration_marks"];
-  const SELECTS = ["mode", "style", "target"];
+  const SELECTS = ["mode", "style", "target", "shirt_fit", "underbase"];
   const TONE_KEYS = ["brightness", "contrast", "gamma", "black_point", "white_point", "sharpen", "invert"];
-  const GARMENTS = [["White", "#ffffff"], ["Natural", "#f1e9d8"], ["Heather", "#9b9b9b"], ["Black", "#141414"],
-    ["Navy", "#1f2a44"], ["Red", "#a3262a"], ["Forest", "#23412f"]];
   const STORE_KEY = "ecko-tone-options";
 
   let catalog = null;
@@ -18,7 +16,10 @@
   let file = null, imageId = null, texFile = null;
   let palette = null, spotInks = null;
   let report = null, loupeAt = null;
-  let seq = 0, loupeSeq = 0, timer = null, view = "print";
+  let seq = 0, loupeSeq = 0, mockSeq = 0, timer = null, view = "print";
+  let batch = [];          // extra designs: {file, id, name, url}
+  let batchShirts = null;  // Set of garment hexes for the batch
+  let batchTouched = false;  // until the user picks colours, the batch follows the garment
 
   // ---------------------------------------------------------------- helpers
 
@@ -44,8 +45,12 @@
     return (await r.json()).id;
   }
 
+  const hasText = () => (opts.text || []).some((t) => t.text && t.text.trim());
+  const hasDesign = () => !!file || hasText();
+
   async function ensureUploads() {
     if (file && !imageId) imageId = await uploadFile(file);
+    for (const b of batch) if (!b.id) b.id = await uploadFile(b.file);
     if (texFile && tex.image && !tex.image.image_id) tex.image.image_id = await uploadFile(texFile);
   }
 
@@ -55,6 +60,7 @@
     let r = await post(url, build());
     if (r.status === 410) {
       imageId = null;
+      for (const b of batch) b.id = null;
       if (tex.image) tex.image.image_id = null;
       await ensureUploads();
       r = await post(url, build());
@@ -143,7 +149,7 @@
   function buildGarments() {
     const box = $("garments");
     box.innerHTML = "";
-    for (const [name, hex] of GARMENTS) {
+    for (const { name, hex } of catalog.garments) {
       const b = document.createElement("button");
       b.type = "button";
       b.style.background = hex;
@@ -158,8 +164,9 @@
   function setGarment(hex) {
     opts.garment = hex;
     $("garment").value = hex;
-    $("stage").style.backgroundColor = hex;
+    $("stage").style.backgroundColor = view === "shirt" ? "" : hex;
     document.querySelectorAll("#garments button").forEach((b) => b.classList.toggle("on", b.dataset.hex === hex));
+    buildBatchShirts();
     changed();
   }
 
@@ -178,6 +185,140 @@
     }
   }
 
+  // ---------------------------------------------------------------- text
+
+  const TEXT_DEFAULT = { text: "YOUR TEXT", font: "varsity", size: 0.15, arc: 0, x: 0, y: -0.75, spacing: 0.05, color: "#000000" };
+
+  function buildText() {
+    const box = $("textLayers");
+    box.innerHTML = "";
+    (opts.text || []).forEach((t, i) => {
+      const el = document.createElement("div");
+      el.className = "layer textLayer";
+      el.innerHTML = `
+        <input type="text" maxlength="80" aria-label="Text" data-k="text">
+        <div class="row">
+          <select data-k="font" aria-label="Font">${catalog.fonts.map((f) => `<option value="${f.id}">${f.name}</option>`).join("")}</select>
+          <input type="color" data-k="color" aria-label="Text colour">
+          <button type="button" class="link" data-del>Remove</button>
+        </div>
+        <div class="row">
+          <label>Size <input type="range" data-k="size" min="0.03" max="0.6" step="0.005"></label>
+          <label>Curve <input type="range" data-k="arc" min="-300" max="300" step="5"></label>
+        </div>
+        <div class="row">
+          <label>Up / down <input type="range" data-k="y" min="-1.6" max="1.6" step="0.01"></label>
+          <label>Left / right <input type="range" data-k="x" min="-1.2" max="1.2" step="0.01"></label>
+          <label>Spacing <input type="range" data-k="spacing" min="-0.1" max="0.8" step="0.01"></label>
+        </div>`;
+      el.querySelectorAll("[data-k]").forEach((inp) => {
+        const k = inp.dataset.k;
+        inp.value = t[k];
+        inp.addEventListener("input", () => {
+          t[k] = inp.type === "range" ? parseFloat(inp.value) : inp.value;
+          changed();
+        });
+      });
+      el.querySelector("[data-del]").addEventListener("click", () => {
+        opts.text.splice(i, 1);
+        buildText();
+        changed();
+      });
+      box.appendChild(el);
+    });
+    $("addText").disabled = (opts.text || []).length >= 6;
+  }
+
+  // ---------------------------------------------------------------- batch
+
+  function buildBatchShirts() {
+    if (!catalog || !opts) return;
+    if (!batchShirts || !batchTouched) batchShirts = new Set([opts.garment]);
+    const box = $("batchShirts");
+    box.innerHTML = "";
+    const list = [...catalog.garments];
+    if (!list.some((g) => g.hex === opts.garment)) list.push({ name: "Custom", hex: opts.garment });
+    for (const g of list) {
+      const lab = document.createElement("label");
+      lab.innerHTML = `<input type="checkbox" ${batchShirts.has(g.hex) ? "checked" : ""}><span class="dot" style="background:${g.hex}"></span>${g.name}`;
+      lab.querySelector("input").addEventListener("change", (e) => {
+        batchTouched = true;
+        if (e.target.checked) batchShirts.add(g.hex); else batchShirts.delete(g.hex);
+        batchHint();
+      });
+      box.appendChild(lab);
+    }
+    batchHint();
+  }
+
+  function buildBatchList() {
+    const ul = $("batchList");
+    ul.innerHTML = "";
+    batch.forEach((b, i) => {
+      const li = document.createElement("li");
+      li.innerHTML = `<img alt=""><input type="text" aria-label="Name"><button type="button" class="link">Remove</button>`;
+      li.querySelector("img").src = b.url;
+      const inp = li.querySelector("input");
+      inp.value = b.name;
+      inp.addEventListener("input", () => { b.name = inp.value; });
+      li.querySelector("button").addEventListener("click", () => {
+        URL.revokeObjectURL(b.url);
+        batch.splice(i, 1);
+        buildBatchList();
+      });
+      ul.appendChild(li);
+    });
+    batchHint();
+  }
+
+  function batchHint() {
+    const designs = (hasDesign() ? 1 : 0) + batch.length;
+    const shirts = batchShirts ? batchShirts.size : 0;
+    const max = catalog.limits.batch_renders;
+    $("batchHint").textContent = `${designs} design(s) × ${shirts} colour(s) = ${designs * shirts} prints`
+      + (designs * shirts > max ? `, over the limit of ${max}.` : ".");
+    $("dlBatch").disabled = !designs || !shirts || designs * shirts > max;
+  }
+
+  const garmentName = (hex) => (catalog.garments.find((g) => g.hex === hex) || {}).name || hex.slice(1);
+
+  async function downloadBatch(btn) {
+    const old = btn.textContent;
+    btn.disabled = true;
+    btn.textContent = "Rendering every print…";
+    showError("");
+    try {
+      const build = () => {
+        const items = [];
+        if (hasDesign()) items.push({ image_id: file ? imageId : null, name: $("name").value || "design" });
+        for (const b of batch) items.push({ image_id: b.id, name: b.name });
+        const garments = [...batchShirts].map((hex) => ({ hex, name: garmentName(hex) }));
+        return { items, garments, options: serverOpts(), mockups: $("batchMockups").checked,
+          name: `${$("name").value || "ecko"}-batch` };
+      };
+      const r = await postWithReupload("/api/tone/batch", build);
+      if (!r.ok) throw new Error(await detail(r));
+      saveBlob(await r.blob(), r, "ecko-batch.zip");
+    } catch (e) {
+      showError(e.message);
+    } finally {
+      btn.textContent = old;
+      batchHint();
+    }
+  }
+
+  function saveBlob(blob, r, fallback) {
+    const cd = r.headers.get("content-disposition") || "";
+    const m = cd.match(/filename="([^"]+)"/);
+    const a = document.createElement("a");
+    a.href = URL.createObjectURL(blob);
+    a.download = m ? m[1] : fallback;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    setTimeout(() => URL.revokeObjectURL(a.href), 10000);
+  }
+
   function syncUI() {
     for (const k of SLIDERS) $(k).value = opts[k];
     for (const k of CHECKS) $(k).checked = !!opts[k];
@@ -190,6 +331,7 @@
     $("bgTolRow").hidden = !opts.remove_background;
     buildInks();
     buildTextures();
+    buildText();
     setGarment(opts.garment);
     labels();
   }
@@ -203,12 +345,14 @@
     $("maxOut").textContent = `${Math.round(opts.max_dot * 100)}%`;
     $("gainOut").textContent = `${Math.round(opts.dot_gain * 100)}%`;
     $("misOut").textContent = `${fmt(opts.misregister_mm)} mm`;
+    $("chokeOut").textContent = `${fmt(opts.choke_mm)} mm`;
     $("dpiNote").textContent = $("dpi").value;
     document.querySelectorAll("#presets button").forEach((b) => b.classList.toggle("on", b.dataset.id === opts._preset));
   }
 
   function applyPreset(p) {
-    const keep = { remove_background: opts.remove_background, bg_tolerance: opts.bg_tolerance, seed: opts.seed };
+    const keep = { remove_background: opts.remove_background, bg_tolerance: opts.bg_tolerance, seed: opts.seed,
+      text: opts.text, shirt_fit: opts.shirt_fit, underbase: opts.underbase, choke_mm: opts.choke_mm };
     opts = { ...structuredClone(catalog.defaults), ...keep, ...structuredClone(p.options), _preset: p.id };
     for (const t of Object.values(tex)) t.on = false;
     for (const t of p.options.textures || []) tex[t.type] = { type: t.type, on: true, strength: t.strength, scale: t.scale };
@@ -234,14 +378,19 @@
   }
 
   async function render() {
-    if (!file) return;
+    if (!hasDesign()) {
+      $("preview").hidden = $("mockup").hidden = true;
+      $("empty").hidden = false;
+      $("results").hidden = true;
+      return;
+    }
     const my = ++seq;
     $("busy").hidden = false;
     showError("");
     try {
       const maxPx = Math.round(Math.min(1600, Math.max(400, $("stage").clientWidth * (window.devicePixelRatio || 1))));
       const r = await postWithReupload("/api/tone/preview",
-        () => ({ image_id: imageId, options: serverOpts(), max_px: maxPx }));
+        () => ({ image_id: file ? imageId : null, options: serverOpts(), max_px: maxPx }));
       if (my !== seq) return;
       if (!r.ok) throw new Error(await detail(r));
       const j = await r.json();
@@ -256,6 +405,7 @@
       report = j.report;
       showReport();
       if (loupeAt) renderLoupe();
+      if (view === "shirt") renderMockup();
     } catch (e) {
       if (my === seq) showError(e.message);
     } finally {
@@ -272,19 +422,37 @@
     const y = Math.round(Math.min(Math.max(loupeAt.fy * H - h / 2, 0), H - h));
     try {
       const r = await postWithReupload("/api/tone/preview",
-        () => ({ image_id: imageId, options: serverOpts(), region: [x, y, w, h] }));
+        () => ({ image_id: file ? imageId : null, options: serverOpts(), region: [x, y, w, h] }));
       if (!r.ok || my !== loupeSeq) return;
       $("loupeImg").src = (await r.json()).image;
       $("loupe").hidden = false;
     } catch { /* the main preview reports errors */ }
   }
 
+  async function renderMockup() {
+    if (!hasDesign()) return;
+    const my = ++mockSeq;
+    try {
+      const size = Math.round(Math.min(1600, Math.max(600, $("stage").clientHeight * (window.devicePixelRatio || 1))));
+      const r = await postWithReupload("/api/tone/mockup",
+        () => ({ image_id: file ? imageId : null, options: serverOpts(), size }));
+      if (!r.ok || my !== mockSeq) return;
+      const old = $("mockup").src;
+      $("mockup").src = URL.createObjectURL(await r.blob());
+      if (old.startsWith("blob:")) URL.revokeObjectURL(old);
+    } catch { /* the main preview reports errors */ }
+  }
+
   function showView(v) {
+    const was = view;
     view = v;
     document.querySelectorAll(".tabs button").forEach((b) => b.classList.toggle("on", b.dataset.view === v));
-    $("preview").hidden = v !== "print" || !file;
+    $("preview").hidden = v !== "print" || !hasDesign();
+    $("mockup").hidden = v !== "shirt" || !hasDesign();
     $("original").hidden = v !== "original" || !file;
-    $("stageHint").hidden = v !== "print" || !file || !!loupeAt;
+    $("stageHint").hidden = v !== "print" || !hasDesign() || !!loupeAt;
+    $("stage").style.backgroundColor = v === "shirt" ? "" : opts.garment;  // the mockup has its own backdrop
+    if (v === "shirt" && was !== "shirt") renderMockup();
     if (v !== "print") $("loupe").hidden = true;
     else if (loupeAt && $("loupeImg").src) $("loupe").hidden = false;
   }
@@ -302,6 +470,13 @@
     if (r.grain_mm) stats.push(["Grain", `${r.grain_mm} mm`]);
     $("stats").innerHTML = stats.map(([k, v]) => `<li>${k}: <b>${v}</b></li>`).join("");
     $("sizeHint").textContent = `${r.inches[0]} × ${r.inches[1]} in, ${r.megapixels} MP`;
+    const fit = r.fit || { notes: [] };
+    const modeName = { recolor: "recolouring the ink", tones: "matching the picture's tones", off: "off" }[fit.mode];
+    const notes = opts.shirt_fit === "off" ? [] : [`Fit to shirt: ${modeName}${opts.shirt_fit === "auto"
+      ? (fit.photo_like ? " (looks like a photo)" : " (looks like a logo or text)") : ""}.`, ...fit.notes];
+    $("fitNotes").textContent = notes.join(" ");
+    $("fitNotes").hidden = !notes.length;
+    batchHint();
 
     const ul = $("warnings");
     ul.innerHTML = "";
@@ -327,16 +502,18 @@
     ol.innerHTML = "";
     r.inks.forEach((ink, i) => {
       const li = document.createElement("li");
-      const editable = opts.mode !== "cmyk";
+      const editable = opts.mode !== "cmyk" && !ink.underbase;
       li.innerHTML = `${editable ? `<input type="color" value="${ink.hex}" aria-label="${ink.name} colour">`
         : `<span class="inkSwatch" style="background:${ink.hex}"></span>`}
-        <span class="tname"><b>${ink.name}</b><small>${ink.hex} · ${ink.angle}°</small></span>
+        <span class="tname"><b>${ink.name}</b><small>${ink.underbase ? "films only, under the colours" : `${ink.hex} · ${ink.angle}°`}</small></span>
         <span class="meta">${ink.coverage}% cover</span>`;
       const inp = li.querySelector("input");
       if (inp) inp.addEventListener("input", () => {
         if (opts.mode === "spot") {
+          // the ink list skips the underbase and inks the shirt supplies; map back by spot number
+          const n = parseInt(ink.name.replace(/\D+/g, ""), 10) - 1;
           spotInks = (spotInks || palette).slice();
-          spotInks[i] = inp.value;
+          spotInks[n] = inp.value;
         } else {
           opts.inks[i] = inp.value;
           buildInks();
@@ -361,7 +538,7 @@
   }
 
   async function download(format, btn) {
-    if (!file) return;
+    if (!hasDesign()) return;
     const old = btn.textContent;
     btn.disabled = true;
     btn.textContent = "Rendering full size…";
@@ -369,18 +546,9 @@
     try {
       const name = $("name").value || "ecko-tone";
       const r = await postWithReupload("/api/tone/export",
-        () => ({ image_id: imageId, options: serverOpts(), format, name }));
+        () => ({ image_id: file ? imageId : null, options: serverOpts(), format, name }));
       if (!r.ok) throw new Error(await detail(r));
-      const blob = await r.blob();
-      const cd = r.headers.get("content-disposition") || "";
-      const m = cd.match(/filename="([^"]+)"/);
-      const a = document.createElement("a");
-      a.href = URL.createObjectURL(blob);
-      a.download = m ? m[1] : `${name}.${format}`;
-      document.body.appendChild(a);
-      a.click();
-      a.remove();
-      setTimeout(() => URL.revokeObjectURL(a.href), 10000);
+      saveBlob(await r.blob(), r, `${name}.${format}`);
     } catch (e) {
       showError(e.message);
     } finally {
@@ -404,8 +572,21 @@
     $("thumb").hidden = false;
     $("original").src = url;
     $("dropText").hidden = true;
+    $("clearPicture").hidden = false;
     const base = f.name.replace(/\.[^.]+$/, "").replace(/[^A-Za-z0-9_-]+/g, "-").slice(0, 40);
     if (base) $("name").value = base;
+    changed();
+  }
+
+  function clearPicture() {
+    file = null;
+    imageId = null;
+    loupeAt = null;
+    $("loupe").hidden = true;
+    $("thumb").hidden = true;
+    $("dropText").hidden = false;
+    $("clearPicture").hidden = true;
+    $("file").value = "";
     changed();
   }
 
@@ -480,6 +661,22 @@
     });
     $("dlPng").addEventListener("click", (e) => download("png", e.currentTarget));
     $("dlZip").addEventListener("click", (e) => download("zip", e.currentTarget));
+    $("clearPicture").addEventListener("click", clearPicture);
+    $("addText").addEventListener("click", () => {
+      opts.text = opts.text || [];
+      opts.text.push({ ...TEXT_DEFAULT, y: file ? -0.75 : 0, color: opts.text.length ? opts.text[0].color : "#000000" });
+      buildText();
+      changed();
+    });
+    $("batchFiles").addEventListener("change", (e) => {
+      for (const f of e.target.files) {
+        batch.push({ file: f, id: null, url: URL.createObjectURL(f),
+          name: f.name.replace(/\.[^.]+$/, "").replace(/[^A-Za-z0-9_-]+/g, "-").slice(0, 40) || "design" });
+      }
+      e.target.value = "";
+      buildBatchList();
+    });
+    $("dlBatch").addEventListener("click", (e) => downloadBatch(e.currentTarget));
   }
 
   async function init() {
@@ -487,6 +684,7 @@
     buildSelect("mode", catalog.modes);
     buildSelect("style", catalog.styles);
     buildSelect("target", catalog.targets);
+    buildSelect("shirt_fit", catalog.shirt_fits);
     buildPresets();
     buildGarments();
     opts = structuredClone(catalog.defaults);
