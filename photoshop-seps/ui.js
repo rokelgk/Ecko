@@ -30,6 +30,7 @@
     reg: Object.assign({}, E.REG_DEFAULTS, saved.reg || {}),
     regInDoc: saved.regInDoc !== false,
     openInk: -1,
+    clean: { active: false, target: '', tool: 'brush', size: 0.015, limit: 0.25 },
     artPick: [],
     artColors: null, artColorsKey: '',
     texture: Object.assign({ type: 'none', density: 0.3, scale: 0.3, softness: 0.25, strength: 1, seed: 1, invert: false, apply: 'all', fit: 'tile' }, saved.texture || {}),
@@ -103,7 +104,7 @@
     // A fresh run (new inks) wins over an ink-keeping run.
     // Changes to the art itself (background, knockout, levels, size) make the
     // old and new match scores incomparable, so they get no better/worse verdict.
-    const artChanged = kind === 'prep' || /background|knock|levels|high-res|texture/i.test(note || '');
+    const artChanged = kind === 'prep' || /background|knock|levels|high-res|texture|clean|patch/i.test(note || '');
     pending = { fresh: (pending && pending.fresh) || kind === 'fresh', note: note || (pending && pending.note), artChanged: (pending && pending.artChanged) || artChanged };
     $('busy').classList.remove('hidden');
     clearTimeout(timer);
@@ -795,7 +796,8 @@
       const inches = (320 / (f.dpi || 720)).toFixed(2);
       hint = `Close-up, ${inches} in wide at ${f.dpi || 720} dpi with your film settings. Tap to go back.`;
     } else {
-      const reg = E.applyRegistration(r, state.film, state.reg);
+      // While cleaning up, show the bare screen so taps map straight onto it.
+      const reg = state.clean.active ? r : E.applyRegistration(r, state.film, state.reg);
       const s = reg.screens[state.view];
       ww = reg.width; hh = reg.height;
       rgba = new Uint8ClampedArray(ww * hh * 4);
@@ -832,7 +834,7 @@
         renderTabs(); renderMergeControls();
       });
       const meta = document.createElement('span'); meta.className = 'meta';
-      meta.textContent = ink.hidden ? 'hidden' : !own ? `on ${ink.mergeInto}` : s ? `${(s.coverage * 100).toFixed(1)}% · ${s.mesh} mesh` : '';
+      meta.textContent = (ink.hidden ? 'hidden' : !own ? `on ${ink.mergeInto}` : s ? `${(s.coverage * 100).toFixed(1)}% · ${s.mesh} mesh` : '') + (ink.erase && ink.erase.length ? ` · 🧹${ink.erase.length}` : '');
       if (s) meta.title = `Mesh range ${s.meshRange}`;
       row.appendChild(n); row.appendChild(chip); row.appendChild(name); row.appendChild(meta);
       const btn = (txt, title, fn, on) => { const b = document.createElement('button'); b.className = 'btn ic' + (on ? ' on' : ''); b.textContent = txt; b.title = title; b.addEventListener('click', fn); row.appendChild(b); };
@@ -995,6 +997,10 @@
     const row = document.createElement('div'); row.className = 'row';
     const reset = document.createElement('button'); reset.className = 'btn small'; reset.textContent = 'Reset this color';
     reset.addEventListener('click', () => editInks(`Reset ${ink.name}`, () => { delete ink.adjust; delete ink.film; }));
+    const cl = document.createElement('button'); cl.className = 'btn small'; cl.textContent = '🧹 Clean up an area';
+    cl.title = 'Brush or click to remove this color from just one spot';
+    cl.addEventListener('click', () => openClean(ink.name));
+    row.appendChild(cl);
     const view = document.createElement('button'); view.className = 'btn small'; view.textContent = 'Show this screen';
     view.addEventListener('click', () => { const idx = visibleInks().indexOf(ink); if (idx >= 0) { state.view = idx; renderTabs(); renderView(); } });
     row.appendChild(view); row.appendChild(reset);
@@ -1226,6 +1232,166 @@
     } catch (e) { status('Could not load that image: ' + e.message, true); }
   }
 
+  // ---------- clean-up: remove stray color from one area ----------
+  const ALL = '*';
+  function cleanTargets() { return (state.inks || []).filter((x) => hasScreen(x)); }
+  function screenIndexOf(name) { return state.result ? state.result.screens.findIndex((x) => x.name === name) : -1; }
+
+  function openClean(target) {
+    if (!state.result) { status('Separate first, then clean up.', true); return; }
+    const c = state.clean;
+    c.active = true;
+    const targets = cleanTargets();
+    c.target = target || c.target || (targets[1] || targets[0] || {}).name || ALL;
+    if (c.target !== ALL && !targets.some((x) => x.name === c.target)) c.target = (targets[0] || {}).name || ALL;
+    $('app').classList.add('cleaning');
+    $('cleanBar').classList.remove('hidden');
+    showCleanView();
+    renderCleanBar();
+  }
+
+  function closeClean() {
+    state.clean.active = false;
+    $('app').classList.remove('cleaning', 'tool-area');
+    $('cleanBar').classList.add('hidden');
+    $('brushRing').classList.add('hidden');
+    $('strokeLayer').innerHTML = '';
+    renderTabs(); renderView();
+  }
+
+  function showCleanView() {
+    const c = state.clean;
+    const idx = c.target === ALL ? -1 : screenIndexOf(c.target);
+    state.view = idx >= 0 ? idx : 'preview';
+    renderTabs(); renderView();
+  }
+
+  function renderCleanBar() {
+    const c = state.clean;
+    const sel = $('cleanTarget');
+    sel.innerHTML = '';
+    for (const x of cleanTargets()) { const o = document.createElement('option'); o.value = x.name; o.textContent = `Screen: ${x.name}`; sel.appendChild(o); }
+    const all = document.createElement('option'); all.value = ALL; all.textContent = 'All screens (make it bare shirt)'; sel.appendChild(all);
+    sel.value = c.target;
+    $('toolBrush').classList.toggle('on', c.tool === 'brush');
+    $('toolArea').classList.toggle('on', c.tool === 'area');
+    $('app').classList.toggle('tool-area', c.tool === 'area');
+    $('cleanSize').value = c.size;
+    $('cleanLimit').value = c.limit;
+    $('cleanSize').parentNode.style.display = c.tool === 'brush' ? '' : 'none';
+    $('limitWrap').style.display = c.tool === 'area' ? '' : 'none';
+    const who = c.target === ALL ? 'every screen' : `the ${c.target} screen`;
+    $('cleanHint').textContent = c.tool === 'brush'
+      ? `Paint over unwanted pixels to remove ${who} there. The rest of the color is untouched. Black on the screen view = ink.`
+      : `Tap a stray speck or blob to remove that connected patch from ${who}. "Reach" limits how far it spreads.`;
+    const n = c.target === ALL ? (state.inks || []).reduce((t, x) => t + ((x.erase || []).length ? 1 : 0), 0) : ((state.inks || []).find((x) => x.name === c.target) || {}).erase;
+    $('cleanClear').disabled = !(c.target === ALL ? n : n && n.length);
+  }
+
+  // Art-relative position of a pointer event on the letterboxed picture.
+  function imgPoint(ev) {
+    const rect = $('previewImg').getBoundingClientRect();
+    const iw = state.result.width, ih = state.result.height;
+    const k = Math.min(rect.width / iw, rect.height / ih);
+    const dx = (rect.width - iw * k) / 2, dy = (rect.height - ih * k) / 2;
+    return { fx: (ev.clientX - rect.left - dx) / (iw * k), fy: (ev.clientY - rect.top - dy) / (ih * k), k, rect };
+  }
+
+  function addErase(item, note) {
+    const c = state.clean;
+    editInks(note, () => {
+      const targets = c.target === ALL ? (state.inks || []).filter((x) => !x.hidden) : (state.inks || []).filter((x) => x.name === c.target);
+      for (const t of targets) t.erase = (t.erase || []).concat([item]);
+    });
+    renderCleanBar();
+  }
+
+  let stroke = null;
+  function stageXY(ev) {
+    const sr = $('stage').getBoundingClientRect();
+    return [ev.clientX - sr.left, ev.clientY - sr.top];
+  }
+  function drawRing(ev) {
+    const c = state.clean, ring = $('brushRing');
+    if (!c.active || c.tool !== 'brush' || !state.result || typeof state.view !== 'number' && state.view !== 'preview' && state.view !== 'art') { ring.classList.add('hidden'); return; }
+    const p = imgPoint(ev);
+    const d = Math.max(4, c.size * state.result.width * p.k * 2);
+    const [x, y] = stageXY(ev);
+    ring.style.width = ring.style.height = `${d}px`;
+    ring.style.left = `${x - d / 2}px`; ring.style.top = `${y - d / 2}px`;
+    ring.classList.remove('hidden');
+  }
+  function dot(ev) {
+    const c = state.clean;
+    const p = imgPoint(ev);
+    const d = Math.max(4, c.size * state.result.width * p.k * 2);
+    const [x, y] = stageXY(ev);
+    const el = document.createElement('div');
+    el.style.width = el.style.height = `${d}px`; el.style.left = `${x - d / 2}px`; el.style.top = `${y - d / 2}px`;
+    $('strokeLayer').appendChild(el);
+  }
+
+  const img = $('previewImg');
+  const onDown = (ev) => {
+    const c = state.clean;
+    if (!c.active || !state.result) return;
+    if (state.view === 'dots') { showCleanView(); return; }
+    const p = imgPoint(ev);
+    if (p.fx < 0 || p.fy < 0 || p.fx > 1 || p.fy > 1) return;
+    if (ev.preventDefault) ev.preventDefault();
+    if (c.tool === 'area') {
+      // One screen: the connected patch of that screen's ink. All screens: the
+      // connected patch of that color in the art.
+      const item = c.target === ALL
+        ? { type: 'region', x: +p.fx.toFixed(5), y: +p.fy.toFixed(5), limit: c.limit, tol: 14 }
+        : { type: 'area', x: +p.fx.toFixed(5), y: +p.fy.toFixed(5), limit: c.limit, tol: 0.03 };
+      addErase(item, `Removed a patch from ${c.target === ALL ? 'all screens' : c.target}`);
+      return;
+    }
+    stroke = [[+p.fx.toFixed(5), +p.fy.toFixed(5)]];
+    dot(ev);
+  };
+  const onMove = (ev) => {
+    if (!state.clean.active) return;
+    drawRing(ev);
+    if (!stroke) return;
+    const p = imgPoint(ev);
+    const last = stroke[stroke.length - 1];
+    if (Math.hypot(p.fx - last[0], p.fy - last[1]) < state.clean.size * 0.3) return;
+    stroke.push([+Math.max(0, Math.min(1, p.fx)).toFixed(5), +Math.max(0, Math.min(1, p.fy)).toFixed(5)]);
+    dot(ev);
+  };
+  const onUp = () => {
+    if (!stroke) return;
+    const pts = stroke;
+    stroke = null;
+    addErase({ type: 'brush', r: state.clean.size, pts }, `Cleaned ${state.clean.target === ALL ? 'all screens' : state.clean.target}`);
+    setTimeout(() => { $('strokeLayer').innerHTML = ''; }, 400);
+  };
+  img.addEventListener('pointerdown', onDown);
+  img.addEventListener('pointermove', onMove);
+  img.addEventListener('pointerleave', () => $('brushRing').classList.add('hidden'));
+  window.addEventListener('pointerup', onUp);
+  if (!window.PointerEvent) { img.addEventListener('mousedown', onDown); img.addEventListener('mousemove', onMove); window.addEventListener('mouseup', onUp); }
+  img.addEventListener('dragstart', (ev) => ev.preventDefault());
+
+  $('cleanOpen').addEventListener('click', () => (state.clean.active ? closeClean() : openClean()));
+  $('cleanOpen2').addEventListener('click', () => openClean());
+  $('cleanDone').addEventListener('click', closeClean);
+  $('cleanTarget').addEventListener('change', () => { state.clean.target = $('cleanTarget').value; showCleanView(); renderCleanBar(); });
+  $('toolBrush').addEventListener('click', () => { state.clean.tool = 'brush'; renderCleanBar(); });
+  $('toolArea').addEventListener('click', () => { state.clean.tool = 'area'; $('brushRing').classList.add('hidden'); renderCleanBar(); });
+  $('cleanSize').addEventListener('input', () => { state.clean.size = Number($('cleanSize').value); });
+  $('cleanLimit').addEventListener('input', () => { state.clean.limit = Number($('cleanLimit').value); });
+  $('cleanUndo').addEventListener('click', () => { undo(); renderCleanBar(); });
+  $('cleanClear').addEventListener('click', () => {
+    const c = state.clean;
+    editInks(`Cleared clean-ups on ${c.target === ALL ? 'all screens' : c.target}`, () => {
+      for (const x of state.inks || []) if (c.target === ALL || x.name === c.target) delete x.erase;
+    });
+    renderCleanBar();
+  });
+
   function renderAll() {
     renderTexture();
     renderReg();
@@ -1244,7 +1410,7 @@
   }
 
   $('previewImg').addEventListener('click', (ev) => {
-    if (!state.result) return;
+    if (!state.result || state.clean.active) return;
     if (state.view === 'dots' && !state.picking) { state.view = 'preview'; renderTabs(); renderView(); return; }
     // The picture is letterboxed inside the element (object-fit: contain).
     const rect = $('previewImg').getBoundingClientRect();

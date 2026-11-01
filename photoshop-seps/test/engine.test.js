@@ -319,3 +319,37 @@ test('textures knock out about the chosen amount and follow "apply to"', () => {
   const all = engine.separate(art, preset('dark-sim', { inks, texture: { type: 'custom', image: custom, density: 0.5 } }));
   for (const s of all.screens) assert.strictEqual(s.plate.reduce((a, v) => a + v, 0), 0, 'all-white texture knocks out everything');
 });
+
+test('clean-up removes a screen\'s ink in one area only', () => {
+  const img = fx('four-color.png');
+  const first = engine.separate(img, preset('dark-sim', { screens: 6 }));
+  const inks = first.screens.map((s) => ({ name: s.name, hex: s.hex, role: s.role }));
+  const base = engine.separate(img, preset('dark-sim', { inks }));
+  const gold = inks.find((i) => /Gold|Yellow/.test(i.name));
+  const cov = (r, n) => avgPlate(r.screens.find((s) => s.name === n).plate);
+  // Magic area on the yellow shape: that patch goes, other screens stay.
+  gold.erase = [{ type: 'area', x: 0.77, y: 0.25, limit: 0.3 }];
+  const a = engine.separate(img, preset('dark-sim', { inks }));
+  assert.ok(cov(a, gold.name) < cov(base, gold.name) * 0.5);
+  const red = inks.find((i) => i.name === 'Red').name;
+  assert.strictEqual(cov(a, red), cov(base, red));
+  assert.ok(cov(a, 'Underbase White') < cov(base, 'Underbase White'), 'underbase follows');
+  // Brush: ink removed along the stroke only.
+  gold.erase = [{ type: 'brush', r: 0.02, pts: [[0.75, 0.2], [0.8, 0.25]] }];
+  const b = engine.separate(img, preset('dark-sim', { inks }));
+  const gp = b.screens.find((s) => s.name === gold.name).plate;
+  assert.strictEqual(gp[Math.round(0.225 * b.height) * b.width + Math.round(0.775 * b.width)], 0);
+  assert.ok(cov(b, gold.name) > cov(a, gold.name));
+});
+
+test('clean-up on all screens removes the clicked color region from every screen', () => {
+  const img = fx('four-color.png');
+  const first = engine.separate(img, preset('dark-sim', { screens: 6 }));
+  const inks = first.screens.map((s) => ({ name: s.name, hex: s.hex, role: s.role, erase: [{ type: 'region', x: 0.77, y: 0.25, limit: 0.4, tol: 14 }] }));
+  const r = engine.separate(img, preset('dark-sim', { inks }));
+  const p = Math.round(0.25 * r.height) * r.width + Math.round(0.77 * r.width);
+  for (const s of r.screens) assert.strictEqual(s.plate[p], 0, s.name);
+  // The blue background next to it is untouched.
+  const q = Math.round(0.6 * r.height) * r.width + Math.round(0.9 * r.width);
+  assert.ok(r.screens.some((s) => s.role === 'color' && s.plate[q] > 0));
+});

@@ -20,6 +20,12 @@ Pick the job type, the shirt color and the number of screens, then press
 - **Tonal underbase:** the underbase follows the art's own light and color
   (like a fuller highlight white), keeping the shading instead of going
   solid under every ink. "Solid under every color" is still an option.
+- **Clean-up tool (🧹):** remove unwanted color from just one area, not the
+  whole color. Pick a screen (or all screens), then **Brush** over stray
+  pixels or tap them with **Magic area** to remove that connected patch
+  ("Reach" limits how far it spreads). Clean-ups are stored in art
+  coordinates, so they carry to the full-size output, and the underbase
+  follows. Undo or clear any time; each screen shows its 🧹 count.
 - **Merge screens:** fold any screen into another (for example Highlight
   White into the Underbase) so both print on one screen; unmerge any time.
   At 5 screens or fewer the highlight white is merged into the underbase

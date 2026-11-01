@@ -48,7 +48,7 @@ body { overflow: hidden; }
 .pane-options::-webkit-scrollbar-track, .pane-preview::-webkit-scrollbar-track { background: #262626; }
 .pane-options::-webkit-scrollbar-thumb, .pane-preview::-webkit-scrollbar-thumb { background: #6e6e6e; border-radius: 6px; border: 2px solid #262626; min-height: 40px; }
 .pane-options::-webkit-scrollbar-thumb:hover { background: #8d8d8d; }
-.to-top { position: sticky; bottom: 6px; display: block; width: fit-content; margin: 6px 0 0 auto; opacity: 0.92; box-shadow: 0 2px 6px rgba(0,0,0,0.5); z-index: 2; }
+.btn.to-top { position: sticky; bottom: 6px; display: block; width: fit-content; margin: 6px 0 0 auto; opacity: 0.92; box-shadow: 0 2px 6px rgba(0,0,0,0.5); z-index: 2; }
 
 /* UI size: compact for small laptops and short panels, large for big screens. */
 body.ui-compact { font-size: 11px; }
@@ -223,3 +223,23 @@ footer { text-align: center; margin: 10px 0 20px 0; }
 .scr.merged { opacity: 0.8; padding-left: 14px; }
 .scr.merged .name { font-style: italic; }
 .merge-row select { max-width: 120px; }
+
+/* Clean-up tool */
+.cleanbar { background: #2a3442; border: 1px solid #3f5774; border-radius: 6px; padding: 4px 8px 6px; margin: 2px 0 6px 0; }
+.cleanbar .row { margin-top: 4px; }
+.cleanbar select { max-width: 170px; }
+.cleanbar .seg2 .btn { margin-right: 0; border-radius: 0; }
+.cleanbar .seg2 .btn:first-child { border-radius: 4px 0 0 4px; }
+.cleanbar .seg2 .btn:last-child { border-radius: 0 4px 4px 0; }
+.cleanbar .seg2 .btn.on { background: var(--accent); border-color: var(--accent); color: #fff; }
+.cleanbar label.mini { display: inline-flex; align-items: center; color: var(--muted); font-size: 11px; }
+.cleanbar label.mini input { width: 90px; margin-left: 4px; }
+.cleaning .stage img { cursor: none; touch-action: none; }
+.cleaning.tool-area .stage img { cursor: crosshair; }
+.strokes { position: absolute; left: 0; top: 0; right: 0; bottom: 0; pointer-events: none; }
+.strokes div { position: absolute; border-radius: 50%; background: rgba(255, 60, 60, 0.45); pointer-events: none; }
+.ring { position: absolute; border: 2px solid #ff5050; border-radius: 50%; pointer-events: none; box-shadow: 0 0 0 1px rgba(0,0,0,0.6); }
+/* The picture always keeps usable room, even with the clean-up bar open. */
+.pane-preview .stage { min-height: 170px; flex-shrink: 0; flex-grow: 1; }
+.layout.short .pane-preview .stage { min-height: 140px; }
+.layout.narrow.cleaning .pane-preview { height: 64vh; height: max(var(--pv-h, 45vh), 64vh); }

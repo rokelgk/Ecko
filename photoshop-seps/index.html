@@ -15,14 +15,32 @@
         <div class="brand">Ecko <b>Seps</b></div>
         <div class="pv-tools">
           <span id="matchBadge" class="badge hidden"></span>
+          <button id="cleanOpen" class="btn" title="Remove unwanted color from just one area">🧹 Clean up</button>
           <button id="uiSmaller" class="btn" title="Smaller interface (fits small screens)">A−</button>
           <button id="uiBigger" class="btn" title="Larger interface">A+</button>
           <button id="togglePreview" class="btn" title="Hide the preview to give the options all the room">Hide preview</button>
         </div>
       </div>
       <div id="viewTabs" class="tabs"></div>
+      <div id="cleanBar" class="cleanbar hidden">
+        <div class="row">
+          <b>🧹 Clean up</b>
+          <select id="cleanTarget" title="Which screen to clean"></select>
+          <span class="seg2"><button id="toolBrush" class="btn small">Brush</button><button id="toolArea" class="btn small">Magic area</button></span>
+          <button id="cleanDone" class="btn small primary">Done</button>
+        </div>
+        <div class="row">
+          <label class="mini">Size <input id="cleanSize" type="range" min="0.003" max="0.08" step="0.001"></label>
+          <label class="mini" id="limitWrap">Reach <input id="cleanLimit" type="range" min="0.03" max="1" step="0.01"></label>
+          <button id="cleanUndo" class="btn small">Undo</button>
+          <button id="cleanClear" class="btn small">Clear clean-ups</button>
+        </div>
+        <div id="cleanHint" class="muted small"></div>
+      </div>
       <div id="stage" class="stage">
         <img id="previewImg" alt="">
+        <div id="strokeLayer" class="strokes"></div>
+        <div id="brushRing" class="ring hidden"></div>
         <div id="emptyStage" class="empty">
           <div class="empty-title">Separations preview</div>
           <div class="muted" id="emptyHint">Open your artwork, pick the job, shirt color and screens, then press Separate.</div>
@@ -99,6 +117,7 @@
         <div id="screens" class="screens"></div>
         <div class="row gap">
           <button id="addInk" class="btn small">+ Add ink</button>
+          <button id="cleanOpen2" class="btn small">🧹 Clean up stray color</button>
         </div>
         <div class="row merge-row">
           <span class="muted small">Merge</span>

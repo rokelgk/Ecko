@@ -1705,7 +1705,7 @@ function planInks(img, o, garment) {
   const dark = isDark(garment.lab);
   const wantUb = o.underbase === 'auto' ? dark : !!o.underbase;
   if (o.inks && o.inks.length) {
-    const colors = o.inks.filter((i) => i.role !== 'underbase').map((i) => screen(i.name, i.hex, i.role || 'color', { code: i.code || '', library: i.library || '', locked: !!i.locked, adjust: i.adjust || null, film: i.film || null, mergeInto: i.mergeInto || null }));
+    const colors = o.inks.filter((i) => i.role !== 'underbase').map((i) => screen(i.name, i.hex, i.role || 'color', { code: i.code || '', library: i.library || '', locked: !!i.locked, adjust: i.adjust || null, film: i.film || null, mergeInto: i.mergeInto || null, erase: i.erase || null }));
     return { colors, wantUb: o.inks.some((i) => i.role === 'underbase') || (o.underbase === true), dark };
   }
   if (o.mode === 'cmyk') {
@@ -2441,6 +2441,109 @@ function plateHistogram(plate) {
   return bins;
 }
 
+// ---------- local clean-up (eraser) ----------
+//
+// Edits are stored in art coordinates (0..1 of width/height), so they apply
+// the same to the fast proof and the full-size output.
+//   { type: 'brush', r, pts: [[x, y], ...] }  erase ink along a painted path
+//   { type: 'area', x, y, limit, tol }       erase the connected patch of ink
+//                                            around a clicked point (within
+//                                            `limit` of it), not the whole color
+function regionMask(img, w, h, e) {
+  // Connected pixels of the art whose color is close to the clicked color.
+  const sx = Math.min(w - 1, Math.max(0, Math.round(e.x * w))), sy = Math.min(h - 1, Math.max(0, Math.round(e.y * h)));
+  const d = img.data, cache = new Map();
+  const labAt = (i) => {
+    const key = (d[i * 3] << 16) | (d[i * 3 + 1] << 8) | d[i * 3 + 2];
+    let v = cache.get(key);
+    if (!v) { v = C.rgbToLab([d[i * 3], d[i * 3 + 1], d[i * 3 + 2]]); cache.set(key, v); }
+    return v;
+  };
+  const seed = sy * w + sx, ref = labAt(seed), tol = e.tol == null ? 14 : e.tol;
+  const lim = (e.limit == null ? 0.25 : e.limit) * w, lim2 = lim * lim;
+  const mask = new Uint8Array(w * h);
+  const stack = [seed];
+  mask[seed] = 1;
+  while (stack.length) {
+    const i = stack.pop(), x = i % w, y = (i / w) | 0;
+    for (const [nx, ny] of [[x - 1, y], [x + 1, y], [x, y - 1], [x, y + 1]]) {
+      if (nx < 0 || ny < 0 || nx >= w || ny >= h) continue;
+      const j = ny * w + nx;
+      if (mask[j] || (nx - sx) * (nx - sx) + (ny - sy) * (ny - sy) > lim2) continue;
+      if (C.deltaE76(labAt(j), ref) > tol) continue;
+      mask[j] = 1;
+      stack.push(j);
+    }
+  }
+  // Grow by one pixel so anti-aliased edges of the patch go too.
+  return ops.dilate(mask, w, h, 1);
+}
+
+function applyErase(plate, w, h, list, img) {
+  const out = new Uint8Array(plate);
+  for (const e of list) {
+    if (e.type === 'region') {
+      if (!img) continue;
+      if (!e._mask || e._mask.length !== w * h) Object.defineProperty(e, '_mask', { value: regionMask(img, w, h, e), enumerable: false, writable: true, configurable: true });
+      for (let p = 0; p < out.length; p++) if (e._mask[p]) out[p] = 0;
+      continue;
+    }
+    if (e.type === 'area') {
+      const sx = Math.min(w - 1, Math.max(0, Math.round(e.x * w))), sy = Math.min(h - 1, Math.max(0, Math.round(e.y * h)));
+      const thr = Math.round((e.tol == null ? 0.03 : e.tol) * 255);
+      // Start at the nearest inked pixel to the click (within a few px).
+      let seed = -1, best = Infinity;
+      const look = Math.max(3, Math.round(w * 0.01));
+      for (let dy = -look; dy <= look; dy++) for (let dx = -look; dx <= look; dx++) {
+        const x = sx + dx, y = sy + dy;
+        if (x < 0 || y < 0 || x >= w || y >= h || out[y * w + x] <= thr) continue;
+        const d = dx * dx + dy * dy;
+        if (d < best) { best = d; seed = y * w + x; }
+      }
+      if (seed < 0) continue;
+      const lim = (e.limit == null ? 0.25 : e.limit) * w, lim2 = lim * lim;
+      const stack = [seed];
+      const seen = new Uint8Array(w * h);
+      seen[seed] = 1;
+      while (stack.length) {
+        const i = stack.pop();
+        out[i] = 0;
+        const x = i % w, y = (i / w) | 0;
+        for (const [nx, ny] of [[x - 1, y], [x + 1, y], [x, y - 1], [x, y + 1]]) {
+          if (nx < 0 || ny < 0 || nx >= w || ny >= h) continue;
+          const j = ny * w + nx;
+          if (seen[j] || out[j] <= thr) continue;
+          if ((nx - sx) * (nx - sx) + (ny - sy) * (ny - sy) > lim2) continue;
+          seen[j] = 1;
+          stack.push(j);
+        }
+      }
+    } else {
+      const r = Math.max(0.5, (e.r || 0.01) * w);
+      const pts = e.pts || [];
+      // Densify the path so fast strokes leave no gaps.
+      const path = [];
+      for (let k = 0; k < pts.length; k++) {
+        const [x1, y1] = pts[k];
+        if (k === 0) { path.push([x1 * w, y1 * h]); continue; }
+        const [x0, y0] = pts[k - 1];
+        const steps = Math.max(1, Math.ceil(Math.hypot((x1 - x0) * w, (y1 - y0) * h) / Math.max(1, r / 2)));
+        for (let t = 1; t <= steps; t++) path.push([(x0 + (x1 - x0) * t / steps) * w, (y0 + (y1 - y0) * t / steps) * h]);
+      }
+      for (const [cx, cy] of path) {
+        const x0 = Math.max(0, Math.floor(cx - r - 1)), x1 = Math.min(w - 1, Math.ceil(cx + r + 1));
+        const y0 = Math.max(0, Math.floor(cy - r - 1)), y1 = Math.min(h - 1, Math.ceil(cy + r + 1));
+        for (let y = y0; y <= y1; y++) for (let x = x0; x <= x1; x++) {
+          const d = Math.hypot(x + 0.5 - cx, y + 0.5 - cy);
+          if (d <= r) out[y * w + x] = 0;
+          else if (d < r + 1) out[y * w + x] = Math.round(out[y * w + x] * (d - r)); // soft 1 px edge
+        }
+      }
+    }
+  }
+  return out;
+}
+
 // ---------- CMYK on dark garments ----------
 // A white underbase goes down where the art needs to be lighter or more
 // colorful than the shirt; the process inks then filter that white. Each
@@ -2635,6 +2738,9 @@ function separate(image, options) {
 
   // The user's per-screen adjustments (amount, levels, spread).
   platesRaw = platesRaw.map((pl, i) => (colors[i] && colors[i].adjust ? applyAdjust(pl, colors[i].adjust, img.width, img.height, binary) : pl));
+  // Local clean-ups the user painted or clicked on a screen (stray pixels in
+  // one area), applied before the underbase is built so it follows.
+  platesRaw = platesRaw.map((pl, i) => (colors[i] && colors[i].erase && colors[i].erase.length ? applyErase(pl, img.width, img.height, colors[i].erase, img) : pl));
 
   const screens = [];
   let ubScreen = null;
@@ -2642,6 +2748,7 @@ function separate(image, options) {
     let ubPlate = cmykUb ? (o.choke > 0 ? ops.erode(cmykUb, img.width, img.height, o.choke) : cmykUb) : buildUnderbase(platesRaw, colors, garment, img, o);
     if (mask) for (let p = 0; p < ubPlate.length; p++) if (mask[p] < 8) ubPlate[p] = 0;
     if (ubInk && ubInk.adjust) ubPlate = applyAdjust(ubPlate, ubInk.adjust, img.width, img.height, binary);
+    if (ubInk && ubInk.erase && ubInk.erase.length) ubPlate = applyErase(ubPlate, img.width, img.height, ubInk.erase, img);
     ubScreen = screen(ubInk ? ubInk.name : 'Underbase White', '#f4f4f0', 'underbase', { plate: ubPlate, adjust: ubInk ? ubInk.adjust || null : null, film: ubInk ? ubInk.film || null : null });
     screens.push(ubScreen);
   }
@@ -2658,6 +2765,9 @@ function separate(image, options) {
     t.merged = (t.merged || []).concat([{ name: src.name, hex: src.hex, role: src.role, adjust: src.adjust || null }]);
     screens.splice(screens.indexOf(src), 1);
   }
+
+  // Clean-ups made on "All screens": that spot prints nothing at all.
+  if (o.erase && o.erase.length) for (const sc of screens) sc.plate = applyErase(sc.plate, img.width, img.height, o.erase, img);
 
   // Distress texture knockout (grunge, cracks, your own texture...).
   let texMask = null;
@@ -2703,7 +2813,7 @@ function separate(image, options) {
     if (dead.length && screens.length - dead.length >= 1) {
       const keep = [];
       for (const x of screens.filter((y) => !dead.includes(y))) {
-        keep.push({ name: x.name, hex: x.hex, role: x.role, code: x.code, library: x.library, locked: x.locked });
+        keep.push({ name: x.name, hex: x.hex, role: x.role, code: x.code, library: x.library, locked: x.locked, erase: x.erase || null });
         for (const m of x.merged || []) keep.push(Object.assign({}, m, { mergeInto: x.name }));
       }
       uniqueNames(keep);
@@ -2773,7 +2883,7 @@ function autoScreenCount(image, o) {
   return best;
 }
 
-module.exports = { separate, plateHistogram, adjustLut, DEFAULTS, underbaseNeed, solveSimplex, compensateDotGain, composite, autoScreenCount, isDark };
+module.exports = { separate, applyErase, plateHistogram, adjustLut, DEFAULTS, underbaseNeed, solveSimplex, compensateDotGain, composite, autoScreenCount, isDark };
 
   };
   defs["./texture"] = function (module, exports, require) {
