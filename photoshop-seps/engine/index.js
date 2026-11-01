@@ -11,6 +11,7 @@ const tiff = require('./tiff');
 const presets = require('./presets');
 const ops = require('./image-ops');
 const prepare = require('./prepare');
+const texture = require('./texture');
 
 // Per-screen film settings from a preset/global film setting.
 function filmSettingsFor(screen, film) {
@@ -106,5 +107,5 @@ function screenSummary(result, film) {
 
 module.exports = Object.assign(
   { separate: sep.separate, DEFAULTS: sep.DEFAULTS, autoScreenCount: sep.autoScreenCount, filmSettingsFor, filmLabel, renderScreenFilm, applyRegistration, REG_DEFAULTS, screenSummary, dotPreview, prepareArt: prepare.prepareArt, artInfo: prepare.artInfo, PREP_DEFAULTS: prepare.PREP_DEFAULTS },
-  { color, inks, palette, halftone, tiff, presets, ops },
+  { color, inks, palette, halftone, tiff, presets, ops, texture },
 );

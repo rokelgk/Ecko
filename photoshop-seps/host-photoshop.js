@@ -99,6 +99,25 @@
       return { name: f.name, data: new Uint8Array(data) };
     },
 
+    // Texture image: open the file in Photoshop, read its pixels, close it.
+    async pickImage() {
+      const f = await lfs.getFileForOpening({ types: ['png', 'jpg', 'jpeg', 'tif', 'tiff', 'psd', 'webp'] });
+      if (!f) return null;
+      return modal('Load texture', async () => {
+        const doc = await app.open(f);
+        try {
+          const pix = await imaging.getPixels({ documentID: doc.id, componentSize: 8, colorSpace: 'RGB', colorProfile: 'sRGB IEC61966-2.1' });
+          const id = pix.imageData;
+          const data = await id.getData({ chunky: true });
+          const out = { data: new Uint8ClampedArray(data.buffer, data.byteOffset, data.byteLength), width: id.width, height: id.height, channels: id.components, name: f.name };
+          id.dispose();
+          return out;
+        } finally {
+          await doc.closeWithoutSaving();
+        }
+      });
+    },
+
     async saveFiles(files) {
       const folder = await lfs.getFolder();
       if (!folder) return null;

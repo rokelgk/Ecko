@@ -714,6 +714,7 @@ const tiff = require('./tiff');
 const presets = require('./presets');
 const ops = require('./image-ops');
 const prepare = require('./prepare');
+const texture = require('./texture');
 
 // Per-screen film settings from a preset/global film setting.
 function filmSettingsFor(screen, film) {
@@ -809,7 +810,7 @@ function screenSummary(result, film) {
 
 module.exports = Object.assign(
   { separate: sep.separate, DEFAULTS: sep.DEFAULTS, autoScreenCount: sep.autoScreenCount, filmSettingsFor, filmLabel, renderScreenFilm, applyRegistration, REG_DEFAULTS, screenSummary, dotPreview, prepareArt: prepare.prepareArt, artInfo: prepare.artInfo, PREP_DEFAULTS: prepare.PREP_DEFAULTS },
-  { color, inks, palette, halftone, tiff, presets, ops },
+  { color, inks, palette, halftone, tiff, presets, ops, texture },
 );
 
   };
@@ -1205,7 +1206,75 @@ function describeLab(lab) {
   return toHex(labToRgb(lab));
 }
 
-module.exports = { pickColors, sampleLab, kmeans, mulberry32, describeLab };
+// Picks `count` inks so every distinct color in the art is close to some
+// ink. The art is first split into many small color groups; inks are then
+// chosen (greedy + swaps) to minimise sum( sqrt(share) * distance to nearest
+// ink ). The square root keeps big areas from winning every slot, so a
+// small but clearly different yellow beats a second shade of the sky blue.
+function pickColorsDiverse(image, count, fixedLabs, opts) {
+  const samples = sampleLab(image, opts && opts.maxSamples, opts && opts.skipEdges);
+  if (count <= 0 || samples.n === 0) return [];
+  const k = Math.min(28, Math.max(12, count * 3));
+  const res = kmeans(samples, k, fixedLabs, Object.assign({}, opts, { iterations: 14 }));
+  if (!res.centers) return [];
+  const strong = opts && opts.strongFrom;
+  const groups = [];
+  for (let c = res.nFixed; c < res.centers.length; c++) {
+    const share = res.counts[c] / samples.n;
+    if (share < 0.0002) continue;
+    // Groups the garment / fixed inks already cover can't become inks.
+    const lab0 = res.centers[c];
+    if (fixedLabs.some((f) => deltaE2000(f, lab0) < 6)) continue;
+    groups.push({ lab: strong ? strongEnd(samples, res, c, strong, opts.strongFraction || 0.3) : res.centers[c], share, w: Math.sqrt(share) });
+  }
+  if (!groups.length) return [];
+  const dist = groups.map((g) => groups.map((h) => deltaE2000(g.lab, h.lab)));
+  const fixedD = groups.map((g) => Math.min(60, ...fixedLabs.map((f) => deltaE2000(g.lab, f))));
+  const cost = (sel) => {
+    let c = 0;
+    for (let j = 0; j < groups.length; j++) {
+      let d = fixedD[j];
+      for (const i of sel) if (dist[i][j] < d) d = dist[i][j];
+      c += groups[j].w * d;
+    }
+    return c;
+  };
+  const sel = [];
+  const n = Math.min(count, groups.length);
+  while (sel.length < n) {
+    let best = -1, bestC = Infinity;
+    for (let i = 0; i < groups.length; i++) {
+      if (sel.includes(i)) continue;
+      const c = cost(sel.concat([i]));
+      if (c < bestC) { bestC = c; best = i; }
+    }
+    sel.push(best);
+  }
+  // Swap pass (PAM): replace a chosen ink with an unchosen group while it helps.
+  for (let round = 0; round < 4; round++) {
+    let improved = false;
+    let cur = cost(sel);
+    for (let a = 0; a < sel.length; a++) {
+      for (let i = 0; i < groups.length; i++) {
+        if (sel.includes(i)) continue;
+        const trial = sel.slice(); trial[a] = i;
+        const c = cost(trial);
+        if (c < cur - 1e-6) { sel[a] = i; cur = c; improved = true; }
+      }
+    }
+    if (!improved) break;
+  }
+  // Each ink's share: the groups it ends up nearest to.
+  const shares = sel.map(() => 0);
+  for (let j = 0; j < groups.length; j++) {
+    let bi = -1, bd = fixedD[j];
+    sel.forEach((i, si) => { if (dist[i][j] < bd) { bd = dist[i][j]; bi = si; } });
+    if (bi >= 0) shares[bi] += groups[j].share;
+  }
+  return sel.map((i, si) => ({ lab: groups[i].lab, share: shares[si] })).sort((a, b) => b.share - a.share);
+}
+
+module.exports = { pickColorsDiverse, pickColors, sampleLab, kmeans, mulberry32, describeLab };
 
   };
   defs["./prepare"] = function (module, exports, require) {
@@ -1515,9 +1584,10 @@ module.exports = { PRESETS, SCREEN_COUNTS, LPI_CHOICES, DPI_CHOICES, ANGLE_CHOIC
 // you see is what the plates will print.
 
 const C = require('./color');
-const { pickColors } = require('./palette');
+const { pickColors, pickColorsDiverse } = require('./palette');
 const { nearestInk, makeInk } = require('./inks');
 const ops = require('./image-ops');
+const { applyTexture } = require('./texture');
 
 // Lookup-table resolution per axis. 33 for output; the live preview uses a
 // smaller table (lutGrid option) so edits redraw quickly.
@@ -1635,7 +1705,7 @@ function planInks(img, o, garment) {
   const dark = isDark(garment.lab);
   const wantUb = o.underbase === 'auto' ? dark : !!o.underbase;
   if (o.inks && o.inks.length) {
-    const colors = o.inks.filter((i) => i.role !== 'underbase').map((i) => screen(i.name, i.hex, i.role || 'color', { code: i.code || '', library: i.library || '', locked: !!i.locked, adjust: i.adjust || null, film: i.film || null }));
+    const colors = o.inks.filter((i) => i.role !== 'underbase').map((i) => screen(i.name, i.hex, i.role || 'color', { code: i.code || '', library: i.library || '', locked: !!i.locked, adjust: i.adjust || null, film: i.film || null, mergeInto: i.mergeInto || null }));
     return { colors, wantUb: o.inks.some((i) => i.role === 'underbase') || (o.underbase === true), dark };
   }
   if (o.mode === 'cmyk') {
@@ -1663,12 +1733,23 @@ function planInks(img, o, garment) {
   }
   if (highlight && total > 0 && !colors.some((c) => c.lab[0] > 95 && C.chroma(c.lab) < 6)) {
     const role = ub || !dark ? 'highlight' : 'color';
-    const w = screen(ub ? 'Highlight White' : 'White', '#ffffff', role);
-    colors.push(w); fixed.push(w.lab); total--;
+    // With few screens, white comes from the underbase itself: the highlight
+    // is still used to work out the colors, then merged into the underbase
+    // so it doesn't cost a screen.
+    const share = shareAbove(img, 88);
+    const ownScreen = !ub || (o.screens | 0) >= 6 || ((o.screens | 0) >= 5 && share > 0.03);
+    const w = screen(ub ? 'Highlight White' : 'White', '#ffffff', role, ownScreen ? {} : { mergeInto: 'Underbase White' });
+    colors.push(w); fixed.push(w.lab);
+    if (ownScreen) total--;
   }
   if (total > 0) {
     const flat = o.mode === 'spot';
-    const picked = pickColors(img, total, fixed, { seed: o.seed, skipEdges: true, mergeDeltaE: flat ? 8 : 0, strongFrom: o.mode === 'simulated' || o.mode === 'index' ? garment.lab : null, strongFraction: o.strongFraction || (o.mode === 'index' ? 0.5 : 0.1) });
+    const pickOpts = { seed: o.seed, skipEdges: true, mergeDeltaE: flat ? 8 : 0, strongFrom: o.mode === 'simulated' || o.mode === 'index' ? garment.lab : null, strongFraction: o.strongFraction || (o.mode === 'index' ? 0.5 : 0.1) };
+    let picked;
+    if (o.picker === 'kmeans') picked = pickColors(img, total, fixed, pickOpts);
+    else if (o.picker === 'diverse') picked = pickColorsDiverse(img, total, fixed, pickOpts);
+    else if (o.mode === 'spot') picked = pickColorsDiverse(img, total, fixed, pickOpts);
+    else picked = pickColors(img, total, fixed, pickOpts);
     picked.forEach((p) => colors.push(screen(C.colorName(p.lab), C.toHex(C.labToRgb(p.lab)), 'color', { share: p.share })));
   }
   if (o.matchLibrary && o.library && o.library.length) {
@@ -1696,6 +1777,34 @@ function uniqueNames(colors) {
     seen.set(b, k);
     c.name = total.get(b) > 1 && k > 1 ? `${b} ${k}` : b;
   }
+}
+
+// Two ways of choosing inks (area-weighted k-means, and the diversity
+// picker that protects small distinct colors) are tried on a quick low-res
+// separation; the palette whose print matches better wins. The score adds
+// the worst-matched 5% so a missing color (a yellow lost to a second blue)
+// counts even when it covers little area.
+function bestPalette(image, o, ub, candidates) {
+  const scale = Math.min(1, 160 / Math.max(image.width, image.height));
+  const small = ops.resizeImage(image, Math.max(1, Math.round(image.width * scale)), Math.max(1, Math.round(image.height * scale)));
+  small.dpi = (image.dpi || 300) * scale;
+  const savedGrid = GRID;
+  let best = candidates[0], bestScore = Infinity;
+  for (const cand of candidates) {
+    if (!cand.length) continue;
+    const inks = (ub ? [{ name: 'Underbase White', hex: '#f4f4f0', role: 'underbase' }] : [])
+      .concat(cand.map((c) => ({ name: c.name, hex: c.hex, role: c.role, locked: c.locked, mergeInto: c.mergeInto || null })));
+    const r = separate(small, Object.assign({}, o, { inks, lutGrid: 13, refine: false, minDot: 0, maxDot: 1, despeckle: false, matchLibrary: false, _pruned: true }));
+    let score = r.report.match.avgDeltaE + 0.35 * r.report.match.p95DeltaE;
+    // A distinct, saturated color the other palette has but this one lacks
+    // (a small red eye is nearly invisible at trial size) costs extra.
+    for (const other of candidates) for (const c of other) {
+      if (c.role === 'color' && C.chroma(c.lab) >= 35 && !cand.some((x) => C.deltaE2000(x.lab, c.lab) < 25)) score += 1.5;
+    }
+    if (score < bestScore) { bestScore = score; best = cand; }
+  }
+  GRID = savedGrid;
+  return best;
 }
 
 // Print order: underbase, colors light to dark, highlight white last.
@@ -2479,6 +2588,13 @@ function separate(image, options) {
   let colors = o.inks && o.inks.length ? plan.colors : orderColors(plan.colors);
   if (o.refine && !(o.inks && o.inks.length) && (o.mode === 'simulated' || o.mode === 'index') && colors.length > 1) {
     colors = orderColors(refineInks(image, Object.assign({}, o, { _wantUb: plan.wantUb }), colors));
+    if (!o.picker) {
+      // Second opinion: the diversity picker (protects small distinct colors
+      // like a yellow among blues), refined the same way; keep the better.
+      const alt = planInks(img, Object.assign({}, o, { picker: 'diverse' }), garment);
+      const altColors = orderColors(refineInks(image, Object.assign({}, o, { _wantUb: plan.wantUb }), orderColors(alt.colors)));
+      colors = bestPalette(image, o, plan.wantUb, [colors, altColors]);
+    }
     GRID = o.lutGrid || 33; // trials ran with a smaller table
     if (o.matchLibrary && o.library && o.library.length) {
       const used = new Set(colors.filter((c) => c.locked).map((c) => c.name));
@@ -2531,6 +2647,22 @@ function separate(image, options) {
   }
   colors.forEach((c, i) => screens.push(Object.assign(c, { plate: platesRaw[i] })));
 
+  // Merged screens: a screen with mergeInto prints on its target's screen
+  // (plates combined), e.g. highlight white folded into the underbase.
+  for (const src of screens.filter((x) => x.mergeInto)) {
+    const t = screens.find((x) => x !== src && !x.mergeInto && x.name === src.mergeInto);
+    if (!t) { src.mergeInto = null; continue; }
+    const a = t.plate, b = src.plate, m = new Uint8Array(a.length);
+    for (let p = 0; p < a.length; p++) m[p] = 255 - (((255 - a[p]) * (255 - b[p])) / 255 | 0);
+    t.plate = m;
+    t.merged = (t.merged || []).concat([{ name: src.name, hex: src.hex, role: src.role, adjust: src.adjust || null }]);
+    screens.splice(screens.indexOf(src), 1);
+  }
+
+  // Distress texture knockout (grunge, cracks, your own texture...).
+  let texMask = null;
+  if (o.texture && o.texture.type && o.texture.type !== 'none') texMask = applyTexture(screens, o.texture, img.width, img.height, dpi);
+
   const spotBinary = o.mode === 'spot' && !o.smoothEdges;
   let removedTotal = 0;
   for (const s of screens) {
@@ -2546,7 +2678,22 @@ function separate(image, options) {
   }
 
   const preview = composite(screens, garment, img.width, img.height, o, { binary: binary || spotBinary });
-  const report = buildReport(img, preview, mask, screens, garment, o, removedTotal);
+  // The match is judged where the design prints; areas a texture knocks out
+  // on purpose don't count against it.
+  let matchMask = mask, matchImg = img;
+  if (texMask && (o.texture.apply || 'all') === 'all') {
+    // Compare with the art distressed the same way (shirt where knocked out).
+    const d = new Uint8ClampedArray(img.data.length);
+    for (let p = 0; p < texMask.length; p++) {
+      const k = texMask[p] / 255;
+      for (let c = 0; c < 3; c++) d[p * 3 + c] = img.data[p * 3 + c] * (1 - k) + garment.rgb[c] * k;
+    }
+    matchImg = Object.assign({}, img, { data: d });
+  } else if (texMask) {
+    matchMask = new Uint8Array(texMask.length);
+    for (let p = 0; p < texMask.length; p++) matchMask[p] = texMask[p] < 64 && (!mask || mask[p] >= 128) ? 255 : 0;
+  }
+  const report = buildReport(matchImg, preview, matchMask, screens, garment, o, removedTotal);
   // A fresh separation never hands back an empty screen: drop inks that
   // ended up printing nothing and separate again with the rest.
   if (!(o.inks && o.inks.length) && !o._pruned) {
@@ -2554,7 +2701,11 @@ function separate(image, options) {
     const dead = screens.filter((x) => x.role === 'color' && !x.locked && (x.coverage < 0.0005 ||
       screens.some((y) => y !== x && y.role !== 'underbase' && y.coverage >= x.coverage && C.deltaE2000(x.lab, y.lab) < 4)));
     if (dead.length && screens.length - dead.length >= 1) {
-      const keep = screens.filter((x) => !dead.includes(x)).map((x) => ({ name: x.name, hex: x.hex, role: x.role, code: x.code, library: x.library, locked: x.locked }));
+      const keep = [];
+      for (const x of screens.filter((y) => !dead.includes(y))) {
+        keep.push({ name: x.name, hex: x.hex, role: x.role, code: x.code, library: x.library, locked: x.locked });
+        for (const m of x.merged || []) keep.push(Object.assign({}, m, { mergeInto: x.name }));
+      }
       uniqueNames(keep);
       return separate(image, Object.assign({}, options, { inks: keep, _pruned: true, screens: keep.length }));
     }
@@ -2623,6 +2774,174 @@ function autoScreenCount(image, o) {
 }
 
 module.exports = { separate, plateHistogram, adjustLut, DEFAULTS, underbaseNeed, solveSimplex, compensateDotGain, composite, autoScreenCount, isDark };
+
+  };
+  defs["./texture"] = function (module, exports, require) {
+'use strict';
+// Distress textures used as knockouts: wherever the texture is "on", ink is
+// removed from the chosen screens, so the shirt shows through like a worn
+// vintage print. Built-in textures are procedural (resolution independent:
+// sizes are in inches, so the proof and the full-size output match), or use
+// your own grayscale texture image.
+//
+// texture = {
+//   type: 'none'|'grunge'|'cracks'|'scratches'|'speckle'|'worn'|'halftone-grain'|'custom',
+//   density 0..1   how much of the print is knocked out
+//   scale          feature size in inches
+//   softness 0..1  hard edges (0) to soft fades (1)
+//   strength 0..1  1 = full knockout, lower = partial
+//   seed           any number, changes the pattern
+//   invert         swap knocked-out and kept areas
+//   apply          'all' | 'underbase' | 'colors'
+//   image          { data: Uint8Array gray, width, height } for 'custom' (white = knock out)
+//   fit            'tile' | 'stretch' for 'custom'
+// }
+
+function hash(ix, iy, seed) {
+  let h = (ix * 374761393 + iy * 668265263 + seed * 2147483647) | 0;
+  h = Math.imul(h ^ (h >>> 13), 1274126177);
+  h ^= h >>> 16;
+  return (h >>> 0) / 4294967296;
+}
+
+function valueNoise(x, y, seed) {
+  const ix = Math.floor(x), iy = Math.floor(y);
+  const fx = x - ix, fy = y - iy;
+  const ux = fx * fx * fx * (fx * (fx * 6 - 15) + 10), uy = fy * fy * fy * (fy * (fy * 6 - 15) + 10);
+  const a = hash(ix, iy, seed), b = hash(ix + 1, iy, seed), c = hash(ix, iy + 1, seed), d = hash(ix + 1, iy + 1, seed);
+  return (a + (b - a) * ux) * (1 - uy) + (c + (d - c) * ux) * uy;
+}
+
+function fbm(x, y, seed, octaves) {
+  let v = 0, amp = 0.5, f = 1, norm = 0;
+  for (let o = 0; o < octaves; o++) { v += valueNoise(x * f, y * f, seed + o * 17) * amp; norm += amp; amp *= 0.5; f *= 2.03; }
+  return v / norm;
+}
+
+// Distance to cell edges (Worley F2 - F1): thin lines along cell borders.
+function cellEdges(x, y, seed) {
+  const ix = Math.floor(x), iy = Math.floor(y);
+  let f1 = 9, f2 = 9;
+  for (let j = -1; j <= 1; j++) {
+    for (let i = -1; i <= 1; i++) {
+      const cx = ix + i + hash(ix + i, iy + j, seed), cy = iy + j + hash(ix + i, iy + j, seed + 91);
+      const d = Math.hypot(x - cx, y - cy);
+      if (d < f1) { f2 = f1; f1 = d; } else if (d < f2) f2 = d;
+    }
+  }
+  return f2 - f1;
+}
+
+// Raw texture value 0..1 at a point in inches; high = knock out.
+function rawAt(type, u, v, seed, scale) {
+  const s = 1 / Math.max(0.01, scale);
+  switch (type) {
+    case 'cracks': {
+      const warp = fbm(u * s * 0.7, v * s * 0.7, seed + 5, 3) - 0.5;
+      const e = cellEdges(u * s + warp * 0.8, v * s + warp * 0.8, seed);
+      return 1 - Math.min(1, e / 0.18);
+    }
+    case 'scratches': {
+      // Long thin streaks: noise stretched along a slanted direction.
+      const a = 0.35 + hash(seed, 3, 7) * 0.5;
+      const ca = Math.cos(a), sa = Math.sin(a);
+      const x = (u * ca + v * sa) * s * 0.15, y = (-u * sa + v * ca) * s * 9;
+      const n = fbm(x, y, seed + 11, 3);
+      return Math.max(0, (n - 0.5) * 2.2);
+    }
+    case 'speckle': {
+      const cell = s * 6;
+      const ix = Math.floor(u * cell), iy = Math.floor(v * cell);
+      const r = hash(ix, iy, seed + 23);
+      const dx = u * cell - ix - 0.5, dy = v * cell - iy - 0.5;
+      const size = 0.15 + 0.3 * hash(ix, iy, seed + 29);
+      return r > 0.82 && Math.hypot(dx, dy) < size ? 1 : fbm(u * s * 3, v * s * 3, seed + 31, 2) * 0.5;
+    }
+    case 'halftone-grain':
+      return valueNoise(u * s * 40, v * s * 40, seed + 41) * 0.6 + fbm(u * s, v * s, seed + 43, 3) * 0.4;
+    case 'worn': {
+      const g = fbm(u * s, v * s, seed, 5);
+      const sc = rawAt('scratches', u, v, seed + 101, scale * 1.5);
+      const sp = rawAt('speckle', u, v, seed + 202, scale);
+      return Math.min(1, Math.max(g, sc * 0.9, sp * 0.95));
+    }
+    case 'grunge':
+    default:
+      return fbm(u * s, v * s, seed, 5);
+  }
+}
+
+// Spread of each built-in texture's raw values, so "density" means roughly
+// the share of the print that gets knocked out.
+const quantileCache = new Map();
+function quantiles(type, seed, scale) {
+  const key = `${type}:${seed}:${scale}`;
+  if (quantileCache.has(key)) return quantileCache.get(key);
+  const vals = [];
+  for (let i = 0; i < 4096; i++) vals.push(rawAt(type, hash(i, 1, 5) * 8 * scale, hash(i, 2, 5) * 8 * scale, seed, scale));
+  vals.sort((a, b) => a - b);
+  quantileCache.set(key, vals);
+  return vals;
+}
+
+function customAt(t, u, v, widthIn, heightIn) {
+  const img = t.image;
+  let fx, fy;
+  if (t.fit === 'stretch') { fx = u / widthIn; fy = v / heightIn; } else { const s = Math.max(0.05, t.scale || 2); fx = u / s; fy = v / s * (img.width / img.height); }
+  fx -= Math.floor(fx); fy -= Math.floor(fy);
+  const x = Math.min(img.width - 1, Math.floor(fx * img.width)), y = Math.min(img.height - 1, Math.floor(fy * img.height));
+  return img.data[y * img.width + x] / 255;
+}
+
+// Knockout mask for a plate-sized area: Uint8Array, 255 = remove all ink.
+function textureMask(t, width, height, dpi) {
+  const n = width * height;
+  const mask = new Uint8Array(n);
+  if (!t || !t.type || t.type === 'none') return null;
+  if (t.type === 'custom' && !(t.image && t.image.data)) return null;
+  const density = t.density == null ? 0.35 : t.density;
+  const soft = Math.max(0.01, (t.softness == null ? 0.25 : t.softness) * 0.5);
+  const strength = t.strength == null ? 1 : t.strength;
+  const seed = (t.seed | 0) || 1;
+  const scale = t.scale || 0.4;
+  const widthIn = width / dpi, heightIn = height / dpi;
+  let thr;
+  if (t.type === 'custom') thr = 1 - density;
+  else { const q = quantiles(t.type, seed, scale); thr = q[Math.min(q.length - 1, Math.floor((1 - density) * q.length))]; }
+  for (let y = 0; y < height; y++) {
+    const v = y / dpi;
+    for (let x = 0; x < width; x++) {
+      const u = x / dpi;
+      let r = t.type === 'custom' ? customAt(t, u, v, widthIn, heightIn) : rawAt(t.type, u, v, seed, scale);
+      if (t.invert) r = 1 - r;
+      // Smooth step around the threshold: values above it knock out.
+      const k = Math.max(0, Math.min(1, (r - thr) / soft + 0.5));
+      mask[y * width + x] = Math.round(k * strength * 255);
+    }
+  }
+  return mask;
+}
+
+function applyTexture(screens, t, width, height, dpi) {
+  const mask = textureMask(t, width, height, dpi);
+  if (!mask) return null;
+  const target = t.apply || 'all';
+  for (const s of screens) {
+    if (target === 'underbase' && s.role !== 'underbase') continue;
+    if (target === 'colors' && s.role === 'underbase') continue;
+    const out = new Uint8Array(s.plate.length);
+    for (let p = 0; p < out.length; p++) out[p] = (s.plate[p] * (255 - mask[p])) / 255 | 0;
+    s.plate = out;
+  }
+  return mask;
+}
+
+const TEXTURES = [
+  ['none', 'None'], ['grunge', 'Grunge (blotchy)'], ['worn', 'Worn vintage (mix)'], ['cracks', 'Cracked'],
+  ['scratches', 'Scratches'], ['speckle', 'Speckle / dust'], ['halftone-grain', 'Fine grain'], ['custom', 'My texture image'],
+];
+
+module.exports = { textureMask, applyTexture, TEXTURES, rawAt };
 
   };
   defs["./tiff"] = function (module, exports, require) {

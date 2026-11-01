@@ -30,6 +30,10 @@
     reg: Object.assign({}, E.REG_DEFAULTS, saved.reg || {}),
     regInDoc: saved.regInDoc !== false,
     openInk: -1,
+    artPick: [],
+    artColors: null, artColorsKey: '',
+    texture: Object.assign({ type: 'none', density: 0.3, scale: 0.3, softness: 0.25, strength: 1, seed: 1, invert: false, apply: 'all', fit: 'tile' }, saved.texture || {}),
+    textureImage: null,
     dragging: false,
     picking: false,
     prep: Object.assign({}, E.PREP_DEFAULTS, saved.prep || {}),
@@ -59,19 +63,34 @@
   function save() {
     host.storage.set('ecko-seps-settings', JSON.stringify({
       presetId: state.presetId, garment: state.garment, screens: state.screens, tune: state.tune, film: state.film,
-      prep: state.prep, reg: state.reg, regInDoc: state.regInDoc, libraryId: state.libraryId, matchLibrary: state.matchLibrary, bake: state.bake,
+      prep: state.prep, reg: state.reg, texture: state.texture, regInDoc: state.regInDoc, libraryId: state.libraryId, matchLibrary: state.matchLibrary, bake: state.bake,
     }));
     host.storage.set('ecko-seps-libraries', JSON.stringify(state.libraries));
   }
   const visibleInks = () => (state.inks || []).filter((i) => !i.hidden);
+  // Inks that have their own screen in the result (not hidden, not merged).
+  const hasScreen = (i) => !i.hidden && !(i.mergeInto && (state.inks || []).some((t) => t !== i && !t.hidden && !t.mergeInto && t.name === i.mergeInto));
 
   function options(fresh) {
     const o = Object.assign({}, preset().options, state.tune, {
       garment: state.garment, screens: state.screens, library: library(), matchLibrary: state.matchLibrary,
     });
+    if (state.texture && state.texture.type !== 'none') {
+      o.texture = Object.assign({}, state.texture);
+      if (o.texture.type === 'custom') o.texture.image = state.textureImage;
+    }
     if (!fresh && state.inks) o.inks = visibleInks();
-    else {
-      const locked = (state.inks || []).filter((i) => i.locked && !i.hidden && i.role !== 'underbase');
+    else if (state.onlyColors) {
+      // "Separate with only these": exactly the chosen art colors (+ underbase).
+      o.lockedInks = state.onlyColors;
+      const dark = E.color.rgbToLab(E.color.parseHex(state.garment))[0] < 55;
+      const ub = o.underbase === 'auto' ? dark : !!o.underbase;
+      o.screens = state.onlyColors.length + (ub && state.onlyColors.length >= 2 ? 1 : 0);
+      o.highlightWhite = false;
+      o.refine = false;
+      state.onlyColors = null;
+    } else {
+      const locked = (state.inks || []).filter((i) => i.locked && !i.hidden && !i.mergeInto && i.role !== 'underbase');
       if (locked.length) o.lockedInks = locked;
     }
     return o;
@@ -84,7 +103,7 @@
     // A fresh run (new inks) wins over an ink-keeping run.
     // Changes to the art itself (background, knockout, levels, size) make the
     // old and new match scores incomparable, so they get no better/worse verdict.
-    const artChanged = kind === 'prep' || /background|knock|levels|high-res/i.test(note || '');
+    const artChanged = kind === 'prep' || /background|knock|levels|high-res|texture/i.test(note || '');
     pending = { fresh: (pending && pending.fresh) || kind === 'fresh', note: note || (pending && pending.note), artChanged: (pending && pending.artChanged) || artChanged };
     $('busy').classList.remove('hidden');
     clearTimeout(timer);
@@ -120,7 +139,11 @@
       const r = E.separate(p.image, o);
       state.result = r;
       if (fresh || !state.inks) {
-        state.inks = r.screens.map((s) => ({ name: s.name, hex: s.hex, role: s.role, code: s.code, library: s.library, locked: !!s.locked, hidden: false }));
+        state.inks = [];
+        for (const s of r.screens) {
+          state.inks.push({ name: s.name, hex: s.hex, role: s.role, code: s.code, library: s.library, locked: !!s.locked, hidden: false });
+          for (const m of s.merged || []) state.inks.push({ name: m.name, hex: m.hex, role: m.role, locked: false, hidden: false, mergeInto: s.name });
+        }
         state.undo = [];
       }
       state.full = null;
@@ -465,7 +488,7 @@
   }
 
   // ---------- workflow checklist ----------
-  const CARD = { art: 'artCard', job: 'presetCard', shirt: 'garmentCard', screens: 'countCard', sep: 'separate', colors: 'screensCard', ub: 'tuneCard', film: 'filmCard', reg: 'regCard', out: 'outputCard' };
+  const CARD = { art: 'artCard', job: 'presetCard', shirt: 'garmentCard', screens: 'countCard', sep: 'separate', colors: 'screensCard', tex: 'textureCard', ub: 'tuneCard', film: 'filmCard', reg: 'regCard', out: 'outputCard' };
   function renderSteps() {
     const box = $('steps');
     if (!box) return;
@@ -488,12 +511,15 @@
     if (r) {
       const adjusted = (state.inks || []).filter((x) => x.adjust || x.film).length;
       const hidden = (state.inks || []).filter((x) => x.hidden).length;
-      steps.push(['colors', 'ok', 'Colors & order', `${adjusted ? `${adjusted} adjusted` : 'optional tweaks'}${hidden ? ` · ${hidden} hidden` : ''}`]);
+      const merged = (state.inks || []).filter((x) => x.mergeInto && !x.hidden).length;
+      steps.push(['colors', 'ok', 'Colors & order', `${adjusted ? `${adjusted} adjusted` : 'optional tweaks'}${merged ? ` · ${merged} merged` : ''}${hidden ? ` · ${hidden} hidden` : ''}`]);
+      steps.push(['tex', 'ok', 'Texture & distress', state.texture.type === 'none' ? 'none (optional)' : `${state.texture.type} · ${Math.round(state.texture.density * 100)}%`]);
       const ub = r.screens.find((x) => x.role === 'underbase');
       const choke = state.tune.choke != null ? state.tune.choke : (preset().options.choke != null ? preset().options.choke : E.DEFAULTS.choke);
       steps.push(['ub', 'ok', 'Underbase & fine-tune', ub ? `underbase ${(ub.coverage * 100).toFixed(0)}% · choke ${choke}px` : 'no underbase needed']);
     } else {
       steps.push(['colors', '', 'Colors & order', 'after separating']);
+      steps.push(['tex', '', 'Texture & distress', 'optional']);
       steps.push(['ub', '', 'Underbase & fine-tune', 'after separating']);
     }
     const f = state.film;
@@ -791,21 +817,34 @@
     const summary = E.screenSummary(r, state.film);
     let vi = 0;
     state.inks.forEach((ink, i) => {
-      const s = ink.hidden ? null : summary[vi++];
+      const own = hasScreen(ink);
+      const s = own ? summary[vi++] : null;
       const row = document.createElement('div');
-      row.className = 'scr' + (ink.role === 'underbase' ? ' ub' : '') + (ink.hidden ? ' off' : '');
-      const n = document.createElement('span'); n.className = 'n'; n.textContent = ink.hidden ? '–' : String(vi);
+      row.className = 'scr' + (ink.role === 'underbase' ? ' ub' : '') + (ink.hidden ? ' off' : '') + (!own && !ink.hidden ? ' merged' : '');
+      const n = document.createElement('span'); n.className = 'n'; n.textContent = ink.hidden ? '–' : own ? String(vi) : '↳';
       const chip = document.createElement('span'); chip.className = 'chip'; chip.style.background = ink.hex; chip.title = 'Change ink color';
       chip.addEventListener('click', () => openInkPicker(i, row));
       const name = document.createElement('input'); name.className = 'name'; name.value = ink.name; name.title = 'Ink name (used for the spot channel and film label)';
-      name.addEventListener('change', () => { ink.name = name.value.trim() || ink.name; renderTabs(); });
+      name.addEventListener('change', () => {
+        const old = ink.name;
+        ink.name = name.value.trim() || ink.name;
+        for (const x of state.inks) if (x.mergeInto === old) x.mergeInto = ink.name; // keep merges attached
+        renderTabs(); renderMergeControls();
+      });
       const meta = document.createElement('span'); meta.className = 'meta';
-      meta.textContent = ink.hidden ? 'hidden' : s ? `${(s.coverage * 100).toFixed(1)}% · ${s.mesh} mesh` : '';
+      meta.textContent = ink.hidden ? 'hidden' : !own ? `on ${ink.mergeInto}` : s ? `${(s.coverage * 100).toFixed(1)}% · ${s.mesh} mesh` : '';
       if (s) meta.title = `Mesh range ${s.meshRange}`;
       row.appendChild(n); row.appendChild(chip); row.appendChild(name); row.appendChild(meta);
       const btn = (txt, title, fn, on) => { const b = document.createElement('button'); b.className = 'btn ic' + (on ? ' on' : ''); b.textContent = txt; b.title = title; b.addEventListener('click', fn); row.appendChild(b); };
       btn(ink.hidden ? '◌' : '👁', ink.hidden ? 'Show this screen again' : 'Hide this screen (see the print without it)',
         () => editInks(`${ink.hidden ? 'Showed' : 'Hid'} ${ink.name}`, () => { ink.hidden = !ink.hidden; }), ink.hidden);
+      if (!own && !ink.hidden) {
+        btn('Unmerge', `Give ${ink.name} its own screen again`, () => editInks(`Unmerged ${ink.name}`, () => { delete ink.mergeInto; }));
+        row.lastChild.style.width = 'auto';
+        btn('✕', 'Remove', () => editInks(`Removed ${ink.name}`, () => { state.inks.splice(i, 1); }));
+        box.appendChild(row);
+        return;
+      }
       btn('⚙', 'Amount, levels and advanced settings for this color', () => { state.openInk = state.openInk === i ? -1 : i; renderScreens(); }, state.openInk === i);
       row.lastChild.classList.add('gear');
       if (ink.role !== 'underbase') btn(ink.locked ? '🔒' : '🔓', 'Lock this ink (kept when you start over with new inks)', () => { ink.locked = !ink.locked; renderScreens(); }, ink.locked);
@@ -815,6 +854,80 @@
       box.appendChild(row);
       if (state.openInk === i) box.appendChild(inkPanel(ink, s));
     });
+    renderMergeControls();
+    renderArtColors();
+  }
+
+  // ---------- merge screens ----------
+  function renderMergeControls() {
+    const from = $('mergeFrom'), to = $('mergeTo');
+    if (!from || !state.inks) return;
+    const standalone = state.inks.filter((x) => hasScreen(x));
+    const fill = (sel, list, keep) => {
+      const prev = sel.value;
+      sel.innerHTML = '';
+      for (const x of list) { const o = document.createElement('option'); o.value = x.name; o.textContent = x.name; sel.appendChild(o); }
+      if (list.some((x) => x.name === prev)) sel.value = prev; else if (keep && list.length) sel.value = keep;
+    };
+    const hw = standalone.find((x) => x.role === 'highlight');
+    const ub = standalone.find((x) => x.role === 'underbase');
+    fill(from, standalone, hw ? hw.name : (standalone[standalone.length - 1] || {}).name);
+    fill(to, standalone, ub ? ub.name : (standalone[0] || {}).name);
+  }
+
+  function mergeSelected() {
+    const a = $('mergeFrom').value, b = $('mergeTo').value;
+    if (!a || !b || a === b) { status('Pick two different screens to merge.', true); return; }
+    editInks(`Merged ${a} into ${b}`, () => {
+      const src = state.inks.find((x) => x.name === a);
+      src.mergeInto = b;
+      // Anything already merged into the source moves to the new target.
+      for (const x of state.inks) if (x.mergeInto === a) x.mergeInto = b;
+    });
+  }
+
+  // ---------- colors in the art ----------
+  function renderArtColors() {
+    const box = $('artColors');
+    if (!box || !state.art) return;
+    const p = proofImage();
+    const key = state.proofKey + state.garment;
+    if (state.artColorsKey !== key) {
+      const g = E.color.rgbToLab(E.color.parseHex(state.garment));
+      // Distinct colors only: shades closer than ΔE 12 fold into one swatch.
+      const raw = E.palette.pickColorsDiverse(p.image, 16, [g], { skipEdges: true, seed: 7 }).sort((a, b) => b.share - a.share);
+      const kept = [];
+      for (const c of raw) {
+        const twin = kept.find((k) => E.color.deltaE2000(k.lab, c.lab) < 12);
+        if (twin) twin.share += c.share; else kept.push({ lab: c.lab, share: c.share });
+      }
+      state.artColors = kept.slice(0, 12).map((c) => ({ hex: E.color.toHex(E.color.labToRgb(c.lab)), lab: c.lab, share: c.share }));
+      state.artColorsKey = key;
+      state.artPick = [];
+    }
+    box.innerHTML = '';
+    for (const c of state.artColors) {
+      const d = document.createElement('div');
+      const on = state.artPick.includes(c.hex);
+      d.className = 'asw' + (on ? ' on' : '');
+      d.style.background = c.hex;
+      d.title = `${E.color.colorName(c.lab)} ${c.hex} · ${(c.share * 100).toFixed(1)}% of the art`;
+      d.textContent = c.share >= 0.01 ? `${Math.round(c.share * 100)}%` : '';
+      d.addEventListener('click', () => {
+        state.artPick = on ? state.artPick.filter((h) => h !== c.hex) : state.artPick.concat([c.hex]);
+        renderArtColors();
+      });
+      box.appendChild(d);
+    }
+    $('useArtColors').disabled = state.artPick.length < 1;
+    $('addArtColors').disabled = state.artPick.length < 1;
+    $('useArtColors').textContent = state.artPick.length ? `Separate with only these (${state.artPick.length})` : 'Separate with only these';
+  }
+
+  function inkFromHex(hex) {
+    const lab = E.color.rgbToLab(E.color.parseHex(hex));
+    if (state.matchLibrary) { const m = E.inks.nearestInk(lab, library()); if (m) return { name: m.ink.name, hex: m.ink.hex, role: 'color', locked: true, hidden: false, library: m.ink.library }; }
+    return { name: E.color.colorName(lab), hex, role: 'color', locked: true, hidden: false };
   }
 
   // ---------- per-color panel: amount, levels, advanced ----------
@@ -1016,7 +1129,63 @@
     $('app').classList.toggle('narrow', window.innerWidth < 760);
   }
 
+  // ---------- texture & distress ----------
+  function renderTexture() {
+    const body = $('textureBody');
+    if (!body) return;
+    body.innerHTML = '';
+    const t = state.texture;
+    const set = (k, fresh) => (v) => { t[k] = v; if (k === 'type') renderTexture(); schedule('tune', k === 'type' ? `Texture: ${v}` : null); };
+    body.appendChild(fieldEl({ label: 'Texture', type: 'select', opts: E.texture.TEXTURES }, t.type, set('type')));
+    if (t.type === 'custom') {
+      const row = document.createElement('div'); row.className = 'row';
+      const b = document.createElement('button'); b.className = 'btn small'; b.textContent = state.textureImage ? 'Change texture image…' : 'Load texture image…';
+      b.addEventListener('click', loadTextureImage);
+      const info = document.createElement('span'); info.className = 'muted small';
+      info.textContent = state.textureImage ? `${state.textureImage.name} (${state.textureImage.width}×${state.textureImage.height})` : 'White in the texture = knocked out (Invert flips it).';
+      row.appendChild(b); row.appendChild(info);
+      body.appendChild(row);
+      body.appendChild(fieldEl({ label: 'Fit', type: 'select', opts: [['tile', 'Tile'], ['stretch', 'Stretch over the design']] }, t.fit, set('fit')));
+    }
+    if (t.type !== 'none') {
+      body.appendChild(fieldEl({ label: 'Amount', type: 'range', min: 0, max: 0.9, step: 0.01, fmt: pct, tip: 'Share of the print knocked out.' }, t.density, set('density')));
+      if (t.type !== 'custom' || t.fit === 'tile') body.appendChild(fieldEl({ label: 'Size', type: 'range', min: 0.05, max: t.type === 'custom' ? 12 : 2, step: 0.05, fmt: (v) => `${v.toFixed(2)} in` }, t.scale, set('scale')));
+      body.appendChild(fieldEl({ label: 'Edge softness', type: 'range', min: 0, max: 1, step: 0.05, fmt: pct }, t.softness, set('softness')));
+      body.appendChild(fieldEl({ label: 'Strength', type: 'range', min: 0.1, max: 1, step: 0.05, fmt: pct, tip: 'Under 100% leaves some ink in the knocked-out areas.' }, t.strength, set('strength')));
+      body.appendChild(fieldEl({ label: 'Apply to', type: 'select', opts: [['all', 'All screens'], ['underbase', 'Underbase only (soft vintage)'], ['colors', 'Top colors only']] }, t.apply, set('apply')));
+      body.appendChild(fieldEl({ label: 'Invert', type: 'check' }, t.invert, set('invert')));
+      const row = document.createElement('div'); row.className = 'row';
+      const sh = document.createElement('button'); sh.className = 'btn small'; sh.textContent = '🎲 New pattern';
+      sh.addEventListener('click', () => { t.seed = (t.seed | 0) + 1; schedule('tune', 'New texture pattern'); });
+      if (t.type !== 'custom') row.appendChild(sh);
+      body.appendChild(row);
+    }
+    const n = document.createElement('div'); n.className = 'muted small';
+    n.textContent = 'Textures knock ink out of the screens so the shirt shows through: a distressed, vintage look that also softens the print. Sizes are real inches, so the preview matches the films.';
+    body.appendChild(n);
+  }
+
+  async function loadTextureImage() {
+    try {
+      const img = await host.pickImage();
+      if (!img) return;
+      // Grayscale, at most 1024 px, kept in memory for this session.
+      const s = Math.min(1, 1024 / Math.max(img.width, img.height));
+      const small = s < 1 ? E.ops.resizeImage(img, Math.round(img.width * s), Math.round(img.height * s)) : img;
+      const g = new Uint8Array(small.width * small.height);
+      for (let p = 0; p < g.length; p++) {
+        const c = small.channels, a = c === 4 ? small.data[p * 4 + 3] / 255 : 1;
+        g[p] = Math.round((0.299 * small.data[p * c] + 0.587 * small.data[p * c + 1] + 0.114 * small.data[p * c + 2]) * a + 255 * (1 - a));
+      }
+      state.textureImage = { data: g, width: small.width, height: small.height, name: img.name || 'texture' };
+      state.texture.type = 'custom';
+      renderTexture();
+      schedule('tune', 'Loaded your texture');
+    } catch (e) { status('Could not load that image: ' + e.message, true); }
+  }
+
   function renderAll() {
+    renderTexture();
     renderReg();
     renderBg();
     renderArtLevels();
@@ -1057,6 +1226,21 @@
   $('separate').addEventListener('click', () => separateFresh(host.name === 'photoshop' && !state.result));
   $('reload').addEventListener('click', () => separateFresh(true));
   $('addInk').addEventListener('click', addInk);
+  $('mergeBtn').addEventListener('click', mergeSelected);
+  $('useArtColors').addEventListener('click', () => {
+    if (!state.artPick.length) return;
+    state.onlyColors = state.artPick.map(inkFromHex);
+    state.inks = null;
+    schedule('fresh', `Separated with ${state.artPick.length} chosen colors`);
+  });
+  $('addArtColors').addEventListener('click', () => {
+    const add = state.artPick.map(inkFromHex);
+    state.artPick = [];
+    editInks(`Added ${add.length} spot color${add.length > 1 ? 's' : ''}`, () => {
+      const hl = state.inks.findIndex((q) => q.role === 'highlight');
+      if (hl >= 0) state.inks.splice(hl, 0, ...add); else state.inks.push(...add);
+    });
+  });
   $('pickSpot').addEventListener('click', () => {
     state.picking = !state.picking;
     $('app').classList.toggle('picking', state.picking);

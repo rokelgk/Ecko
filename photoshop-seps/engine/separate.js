@@ -17,9 +17,10 @@
 // you see is what the plates will print.
 
 const C = require('./color');
-const { pickColors } = require('./palette');
+const { pickColors, pickColorsDiverse } = require('./palette');
 const { nearestInk, makeInk } = require('./inks');
 const ops = require('./image-ops');
+const { applyTexture } = require('./texture');
 
 // Lookup-table resolution per axis. 33 for output; the live preview uses a
 // smaller table (lutGrid option) so edits redraw quickly.
@@ -137,7 +138,7 @@ function planInks(img, o, garment) {
   const dark = isDark(garment.lab);
   const wantUb = o.underbase === 'auto' ? dark : !!o.underbase;
   if (o.inks && o.inks.length) {
-    const colors = o.inks.filter((i) => i.role !== 'underbase').map((i) => screen(i.name, i.hex, i.role || 'color', { code: i.code || '', library: i.library || '', locked: !!i.locked, adjust: i.adjust || null, film: i.film || null }));
+    const colors = o.inks.filter((i) => i.role !== 'underbase').map((i) => screen(i.name, i.hex, i.role || 'color', { code: i.code || '', library: i.library || '', locked: !!i.locked, adjust: i.adjust || null, film: i.film || null, mergeInto: i.mergeInto || null }));
     return { colors, wantUb: o.inks.some((i) => i.role === 'underbase') || (o.underbase === true), dark };
   }
   if (o.mode === 'cmyk') {
@@ -165,12 +166,23 @@ function planInks(img, o, garment) {
   }
   if (highlight && total > 0 && !colors.some((c) => c.lab[0] > 95 && C.chroma(c.lab) < 6)) {
     const role = ub || !dark ? 'highlight' : 'color';
-    const w = screen(ub ? 'Highlight White' : 'White', '#ffffff', role);
-    colors.push(w); fixed.push(w.lab); total--;
+    // With few screens, white comes from the underbase itself: the highlight
+    // is still used to work out the colors, then merged into the underbase
+    // so it doesn't cost a screen.
+    const share = shareAbove(img, 88);
+    const ownScreen = !ub || (o.screens | 0) >= 6 || ((o.screens | 0) >= 5 && share > 0.03);
+    const w = screen(ub ? 'Highlight White' : 'White', '#ffffff', role, ownScreen ? {} : { mergeInto: 'Underbase White' });
+    colors.push(w); fixed.push(w.lab);
+    if (ownScreen) total--;
   }
   if (total > 0) {
     const flat = o.mode === 'spot';
-    const picked = pickColors(img, total, fixed, { seed: o.seed, skipEdges: true, mergeDeltaE: flat ? 8 : 0, strongFrom: o.mode === 'simulated' || o.mode === 'index' ? garment.lab : null, strongFraction: o.strongFraction || (o.mode === 'index' ? 0.5 : 0.1) });
+    const pickOpts = { seed: o.seed, skipEdges: true, mergeDeltaE: flat ? 8 : 0, strongFrom: o.mode === 'simulated' || o.mode === 'index' ? garment.lab : null, strongFraction: o.strongFraction || (o.mode === 'index' ? 0.5 : 0.1) };
+    let picked;
+    if (o.picker === 'kmeans') picked = pickColors(img, total, fixed, pickOpts);
+    else if (o.picker === 'diverse') picked = pickColorsDiverse(img, total, fixed, pickOpts);
+    else if (o.mode === 'spot') picked = pickColorsDiverse(img, total, fixed, pickOpts);
+    else picked = pickColors(img, total, fixed, pickOpts);
     picked.forEach((p) => colors.push(screen(C.colorName(p.lab), C.toHex(C.labToRgb(p.lab)), 'color', { share: p.share })));
   }
   if (o.matchLibrary && o.library && o.library.length) {
@@ -198,6 +210,34 @@ function uniqueNames(colors) {
     seen.set(b, k);
     c.name = total.get(b) > 1 && k > 1 ? `${b} ${k}` : b;
   }
+}
+
+// Two ways of choosing inks (area-weighted k-means, and the diversity
+// picker that protects small distinct colors) are tried on a quick low-res
+// separation; the palette whose print matches better wins. The score adds
+// the worst-matched 5% so a missing color (a yellow lost to a second blue)
+// counts even when it covers little area.
+function bestPalette(image, o, ub, candidates) {
+  const scale = Math.min(1, 160 / Math.max(image.width, image.height));
+  const small = ops.resizeImage(image, Math.max(1, Math.round(image.width * scale)), Math.max(1, Math.round(image.height * scale)));
+  small.dpi = (image.dpi || 300) * scale;
+  const savedGrid = GRID;
+  let best = candidates[0], bestScore = Infinity;
+  for (const cand of candidates) {
+    if (!cand.length) continue;
+    const inks = (ub ? [{ name: 'Underbase White', hex: '#f4f4f0', role: 'underbase' }] : [])
+      .concat(cand.map((c) => ({ name: c.name, hex: c.hex, role: c.role, locked: c.locked, mergeInto: c.mergeInto || null })));
+    const r = separate(small, Object.assign({}, o, { inks, lutGrid: 13, refine: false, minDot: 0, maxDot: 1, despeckle: false, matchLibrary: false, _pruned: true }));
+    let score = r.report.match.avgDeltaE + 0.35 * r.report.match.p95DeltaE;
+    // A distinct, saturated color the other palette has but this one lacks
+    // (a small red eye is nearly invisible at trial size) costs extra.
+    for (const other of candidates) for (const c of other) {
+      if (c.role === 'color' && C.chroma(c.lab) >= 35 && !cand.some((x) => C.deltaE2000(x.lab, c.lab) < 25)) score += 1.5;
+    }
+    if (score < bestScore) { bestScore = score; best = cand; }
+  }
+  GRID = savedGrid;
+  return best;
 }
 
 // Print order: underbase, colors light to dark, highlight white last.
@@ -981,6 +1021,13 @@ function separate(image, options) {
   let colors = o.inks && o.inks.length ? plan.colors : orderColors(plan.colors);
   if (o.refine && !(o.inks && o.inks.length) && (o.mode === 'simulated' || o.mode === 'index') && colors.length > 1) {
     colors = orderColors(refineInks(image, Object.assign({}, o, { _wantUb: plan.wantUb }), colors));
+    if (!o.picker) {
+      // Second opinion: the diversity picker (protects small distinct colors
+      // like a yellow among blues), refined the same way; keep the better.
+      const alt = planInks(img, Object.assign({}, o, { picker: 'diverse' }), garment);
+      const altColors = orderColors(refineInks(image, Object.assign({}, o, { _wantUb: plan.wantUb }), orderColors(alt.colors)));
+      colors = bestPalette(image, o, plan.wantUb, [colors, altColors]);
+    }
     GRID = o.lutGrid || 33; // trials ran with a smaller table
     if (o.matchLibrary && o.library && o.library.length) {
       const used = new Set(colors.filter((c) => c.locked).map((c) => c.name));
@@ -1033,6 +1080,22 @@ function separate(image, options) {
   }
   colors.forEach((c, i) => screens.push(Object.assign(c, { plate: platesRaw[i] })));
 
+  // Merged screens: a screen with mergeInto prints on its target's screen
+  // (plates combined), e.g. highlight white folded into the underbase.
+  for (const src of screens.filter((x) => x.mergeInto)) {
+    const t = screens.find((x) => x !== src && !x.mergeInto && x.name === src.mergeInto);
+    if (!t) { src.mergeInto = null; continue; }
+    const a = t.plate, b = src.plate, m = new Uint8Array(a.length);
+    for (let p = 0; p < a.length; p++) m[p] = 255 - (((255 - a[p]) * (255 - b[p])) / 255 | 0);
+    t.plate = m;
+    t.merged = (t.merged || []).concat([{ name: src.name, hex: src.hex, role: src.role, adjust: src.adjust || null }]);
+    screens.splice(screens.indexOf(src), 1);
+  }
+
+  // Distress texture knockout (grunge, cracks, your own texture...).
+  let texMask = null;
+  if (o.texture && o.texture.type && o.texture.type !== 'none') texMask = applyTexture(screens, o.texture, img.width, img.height, dpi);
+
   const spotBinary = o.mode === 'spot' && !o.smoothEdges;
   let removedTotal = 0;
   for (const s of screens) {
@@ -1048,7 +1111,22 @@ function separate(image, options) {
   }
 
   const preview = composite(screens, garment, img.width, img.height, o, { binary: binary || spotBinary });
-  const report = buildReport(img, preview, mask, screens, garment, o, removedTotal);
+  // The match is judged where the design prints; areas a texture knocks out
+  // on purpose don't count against it.
+  let matchMask = mask, matchImg = img;
+  if (texMask && (o.texture.apply || 'all') === 'all') {
+    // Compare with the art distressed the same way (shirt where knocked out).
+    const d = new Uint8ClampedArray(img.data.length);
+    for (let p = 0; p < texMask.length; p++) {
+      const k = texMask[p] / 255;
+      for (let c = 0; c < 3; c++) d[p * 3 + c] = img.data[p * 3 + c] * (1 - k) + garment.rgb[c] * k;
+    }
+    matchImg = Object.assign({}, img, { data: d });
+  } else if (texMask) {
+    matchMask = new Uint8Array(texMask.length);
+    for (let p = 0; p < texMask.length; p++) matchMask[p] = texMask[p] < 64 && (!mask || mask[p] >= 128) ? 255 : 0;
+  }
+  const report = buildReport(matchImg, preview, matchMask, screens, garment, o, removedTotal);
   // A fresh separation never hands back an empty screen: drop inks that
   // ended up printing nothing and separate again with the rest.
   if (!(o.inks && o.inks.length) && !o._pruned) {
@@ -1056,7 +1134,11 @@ function separate(image, options) {
     const dead = screens.filter((x) => x.role === 'color' && !x.locked && (x.coverage < 0.0005 ||
       screens.some((y) => y !== x && y.role !== 'underbase' && y.coverage >= x.coverage && C.deltaE2000(x.lab, y.lab) < 4)));
     if (dead.length && screens.length - dead.length >= 1) {
-      const keep = screens.filter((x) => !dead.includes(x)).map((x) => ({ name: x.name, hex: x.hex, role: x.role, code: x.code, library: x.library, locked: x.locked }));
+      const keep = [];
+      for (const x of screens.filter((y) => !dead.includes(y))) {
+        keep.push({ name: x.name, hex: x.hex, role: x.role, code: x.code, library: x.library, locked: x.locked });
+        for (const m of x.merged || []) keep.push(Object.assign({}, m, { mergeInto: x.name }));
+      }
       uniqueNames(keep);
       return separate(image, Object.assign({}, options, { inks: keep, _pruned: true, screens: keep.length }));
     }

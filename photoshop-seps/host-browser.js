@@ -55,6 +55,21 @@
         input.click();
       });
     },
+    pickImage() {
+      return new Promise((resolve) => {
+        const input = document.createElement('input');
+        input.type = 'file';
+        input.accept = 'image/*';
+        input.style.position = 'fixed'; input.style.left = '-100px';
+        document.body.appendChild(input);
+        input.addEventListener('change', async () => {
+          const f = input.files[0];
+          input.remove();
+          resolve(f ? await readImageFile(f) : null);
+        });
+        input.click();
+      });
+    },
     async saveFiles(files) {
       for (const f of files) download(f.name, f.data);
       return 'your Downloads folder';

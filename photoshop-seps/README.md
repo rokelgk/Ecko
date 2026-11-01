@@ -20,6 +20,20 @@ Pick the job type, the shirt color and the number of screens, then press
 - **Tonal underbase:** the underbase follows the art's own light and color
   (like a fuller highlight white), keeping the shading instead of going
   solid under every ink. "Solid under every color" is still an option.
+- **Merge screens:** fold any screen into another (for example Highlight
+  White into the Underbase) so both print on one screen; unmerge any time.
+  At 5 screens or fewer the highlight white is merged into the underbase
+  automatically, so low counts spend screens on real colors.
+- **Colors in your art:** a strip of the art's distinct colors with their
+  coverage. Tap to choose, then "Separate with only these" or "Add as spot
+  colors"; or pick any color on the art.
+- **Smarter ink choice:** two pickers (area-weighted, and one that protects
+  small but distinct colors like a yellow among blues) are both refined and
+  the better print wins.
+- **Texture & distress:** grunge, worn vintage, cracked, scratches, speckle
+  and fine-grain knockouts, or your own texture image; amount, size,
+  softness, strength, invert, new pattern, and apply to all screens, the
+  underbase only or the top colors only.
 - **Background & shirt:** one-tap background removal (auto-detected or
   picked on the art, with tolerance, edge-only and soft-edge controls; edges
   are cleaned so no halo is left) and shirt-color knockout so the shirt
@@ -129,6 +143,7 @@ npm run build     # rebuild engine.bundle.js after editing engine/*.js
 | `engine/color.js` | sRGB, Lab, Yule-Nielsen space, CIEDE2000, color names |
 | `engine/tiff.js` | 1-bit / 8-bit PackBits TIFF writer for films |
 | `engine/presets.js` | One-click presets and option lists |
+| `engine/texture.js` | Distress textures (procedural or your image) as knockouts |
 | `engine/prepare.js` | Print size, upscaling, sharpening and noise clean-up |
 | `engine.bundle.js` | Generated single-file engine loaded by the panel |
 | `index.html`, `styles.css`, `ui.js` | The panel (same code in Photoshop and the browser) |

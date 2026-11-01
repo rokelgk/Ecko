@@ -224,4 +224,72 @@ function describeLab(lab) {
   return toHex(labToRgb(lab));
 }
 
-module.exports = { pickColors, sampleLab, kmeans, mulberry32, describeLab };
+// Picks `count` inks so every distinct color in the art is close to some
+// ink. The art is first split into many small color groups; inks are then
+// chosen (greedy + swaps) to minimise sum( sqrt(share) * distance to nearest
+// ink ). The square root keeps big areas from winning every slot, so a
+// small but clearly different yellow beats a second shade of the sky blue.
+function pickColorsDiverse(image, count, fixedLabs, opts) {
+  const samples = sampleLab(image, opts && opts.maxSamples, opts && opts.skipEdges);
+  if (count <= 0 || samples.n === 0) return [];
+  const k = Math.min(28, Math.max(12, count * 3));
+  const res = kmeans(samples, k, fixedLabs, Object.assign({}, opts, { iterations: 14 }));
+  if (!res.centers) return [];
+  const strong = opts && opts.strongFrom;
+  const groups = [];
+  for (let c = res.nFixed; c < res.centers.length; c++) {
+    const share = res.counts[c] / samples.n;
+    if (share < 0.0002) continue;
+    // Groups the garment / fixed inks already cover can't become inks.
+    const lab0 = res.centers[c];
+    if (fixedLabs.some((f) => deltaE2000(f, lab0) < 6)) continue;
+    groups.push({ lab: strong ? strongEnd(samples, res, c, strong, opts.strongFraction || 0.3) : res.centers[c], share, w: Math.sqrt(share) });
+  }
+  if (!groups.length) return [];
+  const dist = groups.map((g) => groups.map((h) => deltaE2000(g.lab, h.lab)));
+  const fixedD = groups.map((g) => Math.min(60, ...fixedLabs.map((f) => deltaE2000(g.lab, f))));
+  const cost = (sel) => {
+    let c = 0;
+    for (let j = 0; j < groups.length; j++) {
+      let d = fixedD[j];
+      for (const i of sel) if (dist[i][j] < d) d = dist[i][j];
+      c += groups[j].w * d;
+    }
+    return c;
+  };
+  const sel = [];
+  const n = Math.min(count, groups.length);
+  while (sel.length < n) {
+    let best = -1, bestC = Infinity;
+    for (let i = 0; i < groups.length; i++) {
+      if (sel.includes(i)) continue;
+      const c = cost(sel.concat([i]));
+      if (c < bestC) { bestC = c; best = i; }
+    }
+    sel.push(best);
+  }
+  // Swap pass (PAM): replace a chosen ink with an unchosen group while it helps.
+  for (let round = 0; round < 4; round++) {
+    let improved = false;
+    let cur = cost(sel);
+    for (let a = 0; a < sel.length; a++) {
+      for (let i = 0; i < groups.length; i++) {
+        if (sel.includes(i)) continue;
+        const trial = sel.slice(); trial[a] = i;
+        const c = cost(trial);
+        if (c < cur - 1e-6) { sel[a] = i; cur = c; improved = true; }
+      }
+    }
+    if (!improved) break;
+  }
+  // Each ink's share: the groups it ends up nearest to.
+  const shares = sel.map(() => 0);
+  for (let j = 0; j < groups.length; j++) {
+    let bi = -1, bd = fixedD[j];
+    sel.forEach((i, si) => { if (dist[i][j] < bd) { bd = dist[i][j]; bi = si; } });
+    if (bi >= 0) shares[bi] += groups[j].share;
+  }
+  return sel.map((i, si) => ({ lab: groups[i].lab, share: shares[si] })).sort((a, b) => b.share - a.share);
+}
+
+module.exports = { pickColorsDiverse, pickColors, sampleLab, kmeans, mulberry32, describeLab };

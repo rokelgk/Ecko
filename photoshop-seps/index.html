@@ -81,26 +81,46 @@
       <section id="screensCard" class="card hidden">
         <h2><span class="step">6</span>Colors &amp; print order</h2>
         <div class="muted small">Changes show on the preview right away. 👁 tries the print without a screen, ⚙ opens amount, levels and advanced settings for that color.</div>
+        <h4 class="subhead">Colors in your art <span class="muted small">(tap to choose)</span></h4>
+        <div id="artColors" class="swatches big"></div>
+        <div class="row">
+          <button id="useArtColors" class="btn small primary" disabled>Separate with only these</button>
+          <button id="addArtColors" class="btn small" disabled>Add as spot colors</button>
+          <button id="pickSpot" class="btn small">🎯 Pick on the art</button>
+        </div>
+        <h4 class="subhead">Screens</h4>
         <div id="screens" class="screens"></div>
         <div class="row gap">
-          <button id="pickSpot" class="btn small">🎯 Add spot color from art</button>
           <button id="addInk" class="btn small">+ Add ink</button>
         </div>
+        <div class="row merge-row">
+          <span class="muted small">Merge</span>
+          <select id="mergeFrom"></select>
+          <span class="muted small">into</span>
+          <select id="mergeTo"></select>
+          <button id="mergeBtn" class="btn small">Merge</button>
+        </div>
+        <div class="muted small">Merging prints both screens' dots on one screen (for example Highlight White into the Underbase saves a screen). Unmerge any time.</div>
         <ul id="warnings" class="warnings"></ul>
       </section>
 
+      <section class="card collapsible" id="textureCard">
+        <h2 class="toggle"><span class="step">7</span>Texture &amp; distress</h2>
+        <div class="body" id="textureBody"></div>
+      </section>
+
       <section class="card collapsible open" id="tuneCard">
-        <h2 class="toggle"><span class="step">7</span>Underbase &amp; fine-tune</h2>
+        <h2 class="toggle"><span class="step">8</span>Underbase &amp; fine-tune</h2>
         <div class="body" id="tuneBody"></div>
       </section>
 
       <section class="card collapsible" id="filmCard">
-        <h2 class="toggle"><span class="step">8</span>Halftones, bitmap &amp; films</h2>
+        <h2 class="toggle"><span class="step">9</span>Halftones, bitmap &amp; films</h2>
         <div class="body" id="filmBody"></div>
       </section>
 
       <section class="card" id="regCard">
-        <h2><span class="step">9</span>Registration &amp; pre-registration</h2>
+        <h2><span class="step">10</span>Registration &amp; pre-registration</h2>
         <div id="regToggles" class="toggles"></div>
         <div id="regBody"></div>
         <div class="muted small">Shown on the screen (plate) views, printed on films, and added to the Photoshop document.</div>
@@ -120,7 +140,7 @@
       </section>
 
       <section class="card" id="outputCard">
-        <h2><span class="step">10</span>Output</h2>
+        <h2><span class="step">11</span>Output</h2>
         <button id="build" class="btn primary wide" disabled>Build separation document</button>
         <div class="muted small ps-text">Full-resolution spot channels named after each ink, in print order, on a garment-colored background layer.</div>
         <div class="row gap">

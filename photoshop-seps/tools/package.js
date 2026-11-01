@@ -34,7 +34,7 @@ fs.writeFileSync(path.join(dist, 'ecko-seps-try.html'), html);
 const a = html.indexOf('      <section class="card" id="outputCard">');
 const b = html.indexOf('      <footer');
 const hosted = html.slice(0, a) + `      <section class="card" id="outputCard">
-        <h2><span class="step">10</span>Output</h2>
+        <h2><span class="step">11</span>Output</h2>
         <div class="muted small">This is the try-it preview. In Photoshop the plug-in also builds the separation document (one named spot channel per ink) and exports TIFF films with registration marks and a job sheet.</div>
         <button id="build" class="hidden"></button><button id="exportFilms" class="hidden"></button><button id="exportSheet" class="hidden"></button>
       </section>

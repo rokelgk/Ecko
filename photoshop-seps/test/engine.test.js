@@ -280,3 +280,42 @@ test('tonal underbase follows the art: lighter art, more base', () => {
   const ub = r.screens[0].plate, w = r.width, y = 20;
   assert.ok(ub[y * w + 240] > ub[y * w + 120] && ub[y * w + 120] > ub[y * w + 40], `${ub[y * w + 40]} ${ub[y * w + 120]} ${ub[y * w + 240]}`);
 });
+
+test('four screens on a dark shirt keep red, yellow and blue (highlight folds into the underbase)', () => {
+  const r = engine.separate(fx('four-color.png'), preset('dark-sim', { screens: 4 }));
+  assert.strictEqual(r.screens.length, 4);
+  const hues = r.screens.filter((s) => s.role === 'color').map((s) => s.lab);
+  const has = (test) => hues.some(test);
+  assert.ok(has((l) => l[1] > 40 && l[2] > 20), 'red');
+  assert.ok(has((l) => l[2] > 50 && l[0] > 70), 'yellow');
+  assert.ok(has((l) => l[2] < -30), 'blue');
+  assert.ok(r.screens[0].merged && r.screens[0].merged[0].role === 'highlight');
+});
+
+test('merging a screen puts its dots on the target screen', () => {
+  const first = engine.separate(art, preset('dark-sim', { screens: 6 }));
+  const inks = first.screens.map((s) => ({ name: s.name, hex: s.hex, role: s.role }));
+  const apart = engine.separate(art, preset('dark-sim', { inks }));
+  const hw = inks.find((i) => i.role === 'highlight');
+  hw.mergeInto = 'Underbase White';
+  const merged = engine.separate(art, preset('dark-sim', { inks }));
+  assert.strictEqual(merged.screens.length, apart.screens.length - 1);
+  const ubA = apart.screens[0].plate, hwA = apart.screens.find((s) => s.role === 'highlight').plate, ubM = merged.screens[0].plate;
+  for (let p = 0; p < ubM.length; p += 97) assert.ok(ubM[p] >= Math.max(ubA[p], hwA[p]) - 2);
+  assert.deepStrictEqual(merged.screens[0].merged.map((m) => m.name), ['Highlight White']);
+});
+
+test('textures knock out about the chosen amount and follow "apply to"', () => {
+  const m = engine.texture.textureMask({ type: 'grunge', density: 0.4, scale: 0.3, seed: 2 }, 300, 300, 150);
+  const share = m.reduce((s, v) => s + (v > 127 ? 1 : 0), 0) / m.length;
+  assert.ok(Math.abs(share - 0.4) < 0.08, String(share));
+  const plain = engine.separate(art, preset('dark-sim', { screens: 6 }));
+  const inks = plain.screens.map((s) => ({ name: s.name, hex: s.hex, role: s.role }));
+  const base = engine.separate(art, preset('dark-sim', { inks }));
+  const ubOnly = engine.separate(art, preset('dark-sim', { inks, texture: { type: 'cracks', density: 0.3, scale: 0.2, apply: 'underbase' } }));
+  assert.ok(avgPlate(ubOnly.screens[0].plate) < avgPlate(base.screens[0].plate));
+  assert.ok(Math.abs(avgPlate(ubOnly.screens[2].plate) - avgPlate(base.screens[2].plate)) < 1e-9);
+  const custom = { data: new Uint8Array(4).fill(255), width: 2, height: 2 };
+  const all = engine.separate(art, preset('dark-sim', { inks, texture: { type: 'custom', image: custom, density: 0.5 } }));
+  for (const s of all.screens) assert.strictEqual(s.plate.reduce((a, v) => a + v, 0), 0, 'all-white texture knocks out everything');
+});
