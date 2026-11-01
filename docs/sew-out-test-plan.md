@@ -5,6 +5,9 @@ and write down what you see. Each problem maps to a setting we can adjust.
 
 ## Tests
 
+A ready-made kit of these designs, in every common format with a worksheet, is built by
+`.venv/bin/python scripts/make_sewout_kit.py`, which writes `out/ecko-sewout-kit.zip`.
+
 | # | Design | Settings | What it checks |
 |---|---|---|---|
 | 1 | A simple two-color logo, about 3" wide | Your fabric | Basic quality, gaps between colors |
