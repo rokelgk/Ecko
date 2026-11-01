@@ -1,5 +1,15 @@
 # Ecko: one-click embroidery digitizing
 
+## Try it
+
+**[▶ Open Ecko in your browser (GitHub Codespaces)](https://codespaces.new/rokelgk/ecko?quickstart=1)**:
+click **Create codespace**, wait 2–3 minutes, and the app opens in a new tab. There's nothing to
+install, and it's free within GitHub's monthly allowance.
+
+On your own computer instead: install [Python](https://www.python.org/downloads/), then
+double-click **`start-windows.bat`** (Windows) or **`start-mac.command`** (Mac). The first
+run takes a few minutes to install everything, then the halftone tool opens in your browser.
+
 Upload a picture, pick your machine and fabric, click **Digitize**, and
 download a file your machine can sew.
 
