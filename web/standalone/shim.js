@@ -42,6 +42,20 @@
     });
   }
 
+  // Downloads: on a claude.ai page the host shows a save prompt; elsewhere a normal download.
+  window.eckoSaveFile = async (blob, filename) => {
+    if (!window.claude || typeof window.claude.use !== "function") return false;
+    const downloads = await window.claude.use("downloads");
+    if (!downloads) return false;
+    try {
+      await downloads.save({ filename, data: blob });
+    } catch (e) {
+      if (e && e.code === "declined") return true;   // the viewer said no: nothing more to do
+      throw new Error(`Couldn't save the file (${(e && e.message) || e}).`);
+    }
+    return true;
+  };
+
   const ready = workerCaller().then((send) => { call = send; }, () => { call = mainThreadCaller(); });
 
   // Only the newest request of each kind matters while sliders move: drop the ones in between.

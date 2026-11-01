@@ -24,14 +24,22 @@
   async function loadFonts(fonts) {
     const set = root.fonts || (typeof document !== "undefined" ? document.fonts : null);
     if (!set || typeof FontFace === "undefined") return false;
-    await Promise.all(Object.entries(fonts).map(async ([id, b64]) => {
-      const bin = atob(b64), bytes = new Uint8Array(bin.length);
-      for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
-      const face = new FontFace(`ecko-${id}`, bytes.buffer);
-      await face.load();
-      set.add(face);
+    // A font that won't load falls back to the system font: text still works, it never blocks the app.
+    const results = await Promise.all(Object.entries(fonts).map(async ([id, b64]) => {
+      try {
+        const face = new FontFace(`ecko-${id}`, `url(data:font/woff;base64,${b64})`);
+        set.add(await face.load());
+        return true;
+      } catch (e) {
+        try {
+          const bin = atob(b64), bytes = new Uint8Array(bin.length);
+          for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+          set.add(await new FontFace(`ecko-${id}`, bytes.buffer).load());
+          return true;
+        } catch (e2) { return false; }
+      }
     }));
-    return true;
+    return results.some(Boolean) || true;
   }
 
   /** One line of text bent along an arc (port of ecko/arctext.py). Returns coverage + baseline-centre anchor. */

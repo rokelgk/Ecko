@@ -298,7 +298,7 @@
       };
       const r = await postWithReupload("/api/tone/batch", build);
       if (!r.ok) throw new Error(await detail(r));
-      saveBlob(await r.blob(), r, "ecko-batch.zip");
+      await saveBlob(await r.blob(), r, "ecko-batch.zip");
     } catch (e) {
       showError(e.message);
     } finally {
@@ -307,12 +307,17 @@
     }
   }
 
-  function saveBlob(blob, r, fallback) {
+  async function saveBlob(blob, r, fallback) {
     const cd = r.headers.get("content-disposition") || "";
     const m = cd.match(/filename="([^"]+)"/);
+    const filename = m ? m[1] : fallback;
+    if (window.eckoSaveFile) {   // stand-alone page: may need the host's save prompt
+      const done = await window.eckoSaveFile(blob, filename);
+      if (done) return;
+    }
     const a = document.createElement("a");
     a.href = URL.createObjectURL(blob);
-    a.download = m ? m[1] : fallback;
+    a.download = filename;
     document.body.appendChild(a);
     a.click();
     a.remove();
@@ -548,7 +553,7 @@
       const r = await postWithReupload("/api/tone/export",
         () => ({ image_id: file ? imageId : null, options: serverOpts(), format, name }));
       if (!r.ok) throw new Error(await detail(r));
-      saveBlob(await r.blob(), r, `${name}.${format}`);
+      await saveBlob(await r.blob(), r, `${name}.${format}`);
     } catch (e) {
       showError(e.message);
     } finally {
@@ -700,7 +705,9 @@
         $("dpi").value = saved.dpi || "300";
       }
     } catch { /* ignore */ }
-    if (!localStorage.getItem(STORE_KEY)) {
+    let firstVisit = true;
+    try { firstVisit = !localStorage.getItem(STORE_KEY); } catch { /* storage blocked */ }
+    if (firstVisit) {
       const first = catalog.presets[0];
       opts = { ...opts, ...structuredClone(first.options), _preset: first.id };
       for (const t of first.options.textures || []) tex[t.type] = { type: t.type, on: true, strength: t.strength, scale: t.scale };
