@@ -15,10 +15,25 @@ function status(msg, isErr) {
   $("status").className = isErr ? "err" : "";
 }
 
+// Photoshop's panel engine is picky: set slider values as both property and attribute, and read them
+// back as numbers, so the thumb position and the number beside it always agree.
+function setSlider(id, v) {
+  const el = $(id);
+  el.setAttribute("value", String(v));
+  el.value = v;
+}
+const sliderValue = (id) => Number($(id).value);
+
+function setText(id, text) {
+  const el = $(id);
+  el.textContent = text;
+  el.innerHTML = text;   // older panel versions only repaint on innerHTML
+}
+
 function labels() {
-  $("lpiOut").textContent = $("lpi").value;
-  $("angleOut").textContent = `${$("angle").value}°`;
-  $("borderOut").textContent = $("borderMm").value;
+  setText("lpiOut", String(Math.round(sliderValue("lpi"))));
+  setText("angleOut", `${sliderValue("angle")}°`);
+  setText("borderOut", `${Math.round(sliderValue("borderMm"))} mm`);
 }
 
 function applyPreset() {
@@ -26,8 +41,8 @@ function applyPreset() {
   if (!p) return;
   const o = { ...cat.defaults, ...p.options };
   $("style").value = o.style;
-  $("lpi").value = o.lpi;
-  $("angle").value = o.angle;
+  setSlider("lpi", o.lpi);
+  setSlider("angle", o.angle);
   $("target").value = o.target;
   if (p.options.garment) $("garment").value = p.options.garment;
   labels();
@@ -38,9 +53,9 @@ function options(doc, widthPx) {
   const dpi = Math.round(Math.min(1200, Math.max(72, doc.resolution)));
   const o = {
     ...(p ? p.options : {}),
-    style: $("style").value, lpi: parseFloat($("lpi").value), angle: parseFloat($("angle").value),
+    style: $("style").value, lpi: sliderValue("lpi"), angle: sliderValue("angle"),
     target: $("target").value, garment: $("garment").value, shirt_fit: $("fit").value, dpi,
-    border: $("border").value, border_shape: $("borderShape").value, border_mm: parseFloat($("borderMm").value),
+    border: $("border").value, border_shape: $("borderShape").value, border_mm: sliderValue("borderMm"),
     width_in: Math.max(0.5, widthPx / dpi), text: [],
   };
   // Image textures need a file picker; the web page has them. Procedural textures work here.
@@ -101,8 +116,8 @@ fill("garment", cat.garments, (g) => g.name, (g) => g.hex);
 fill("border", cat.borders);
 fill("borderShape", cat.border_shapes);
 $("borderMm").addEventListener("input", labels);
+$("borderMm").addEventListener("change", labels);
 $("preset").addEventListener("change", applyPreset);
-$("lpi").addEventListener("input", labels);
-$("angle").addEventListener("input", labels);
+for (const id of ["lpi", "angle"]) { $(id).addEventListener("input", labels); $(id).addEventListener("change", labels); }
 $("run").addEventListener("click", run);
 applyPreset();
