@@ -103,6 +103,15 @@ def build_plugin_zip() -> None:
             info.compress_type = zipfile.ZIP_DEFLATED
             z.writestr(info, (src / name).read_bytes())
     print(f"dist/ecko-tone-photoshop-plugin.zip  {out.stat().st_size / 1e3:.0f} KB")
+    # The same files with manifest.json at the top level, as Adobe's .ccx plug-in package:
+    # double-click installs it through the Creative Cloud app.
+    ccx = ROOT / "dist" / "ecko-tone.ccx"
+    with zipfile.ZipFile(ccx, "w", zipfile.ZIP_DEFLATED) as z:
+        for name in ("manifest.json", "index.html", "index.js", "tone-engine.js"):
+            info = zipfile.ZipInfo(name, date_time=(2026, 1, 1, 0, 0, 0))
+            info.compress_type = zipfile.ZIP_DEFLATED
+            z.writestr(info, (src / name).read_bytes())
+    print(f"dist/ecko-tone.ccx  {ccx.stat().st_size / 1e3:.0f} KB")
 
 
 def main() -> None:
