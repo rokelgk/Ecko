@@ -167,7 +167,7 @@ def preview(body: dict = Body(...)):
         "image": "data:image/png;base64," + base64.b64encode(buf.getvalue()).decode(),
         "size": rep["pixels"],
         "report": rep,
-        "palette": [E.to_hex(c) for c in prep.palette] if prep.palette else None,
+        "palette": [E.to_hex(c) for c in E.resolve_fit(prep, o).palette] if o.mode == "spot" else None,
     }
 
 

@@ -75,17 +75,41 @@ test("fit to shirt swaps ink that would vanish", () => {
   assert.deepStrictEqual(E.plateSpecs(p, E.parseOptions({ width_in: 3 })).plates[0].rgb, E.hex("#1d1d1f"));
 });
 
-test("underbase shows white and never changes the ink plates", () => {
+test("black shirt process: white base + C, M, Y, base shows white", () => {
   const { rgba, w, h } = box();
+  for (let k = 0; k < rgba.length; k += 4) if (rgba[k + 3]) { rgba[k] = 230; rgba[k + 1] = 200; rgba[k + 2] = 150; }   // light art
   const base = { mode: "cmyk", width_in: 2, garment: "#141414", target: "screen" };
   const p = E.prepare(rgba, w, h, E.parseOptions(base));
   const a = E.renderFull(p, E.parseOptions(base), null, true);
-  const b = E.renderFull(p, E.parseOptions({ ...base, underbase: "off" }), null, true);
-  assert.ok(a.plates[0].underbase);
-  for (let i = 0; i < 4; i++) assert.deepStrictEqual(Buffer.from(a.seps[i + 1]), Buffer.from(b.seps[i]));
+  assert.deepStrictEqual(a.plates.map((q) => q.name), ["White underbase", "Cyan", "Magenta", "Yellow"]);
   let white = 0;
   for (let k = 0; k < a.rgba.length; k += 4) if (a.rgba[k + 3] && a.rgba[k] === 255 && a.rgba[k + 1] === 255 && a.rgba[k + 2] === 255) white++;
   assert.ok(white > 0);
+  const off = E.plateSpecs(p, E.parseOptions({ ...base, underbase: "off" })).plates.map((q) => q.name);
+  assert.deepStrictEqual(off, ["Cyan", "Magenta", "Yellow", "Black"]);
+});
+
+test("grey ramp on a black shirt is white base only, fading out", () => {
+  const { rgba, w, h } = ramp();
+  const o = E.parseOptions({ mode: "cmyk", width_in: 6, garment: "#000000", underbase: "on", choke_mm: 0, min_dot: 0, max_dot: 1,
+    sharpen: 0, remove_background: false, roughness: 0 });
+  const r = E.renderFull(E.prepare(rgba, w, h, o), o, null, true);
+  const col = (sep, c) => { let on = 0, n = 0; for (let y = 0; y < r.height; y++) for (let x = Math.floor(c * r.width / 8); x < Math.floor((c + 1) * r.width / 8); x++) { on += sep[y * r.width + x]; n++; } return on / n; };
+  const cols = [0, 1, 2, 3, 4, 5, 6, 7].map((c) => col(r.seps[0], c));
+  assert.ok(cols[0] > 0.85 && cols[7] < 0.1, JSON.stringify(cols));
+  for (let i = 1; i < 8; i++) assert.ok(cols[i] < cols[i - 1]);
+  for (const sep of r.seps.slice(1)) { let on = 0; for (const v of sep) on += v; assert.ok(on / sep.length < 0.02); }
+});
+
+test("four spot colours on a black shirt = white base + three", () => {
+  const w = 240, h = 120, rgba = new Uint8Array(w * h * 4);
+  const cols = [[220, 40, 40], [40, 160, 60], [250, 220, 60], [10, 10, 10]];
+  for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) { const c = cols[Math.floor(x / 60)], k = (y * w + x) * 4; rgba.set([...c, 255], k); }
+  const o = E.parseOptions({ mode: "spot", spot_colors: 4, width_in: 2, garment: "#111111", target: "screen", remove_background: false });
+  const { plates } = E.plateSpecs(E.prepare(rgba, w, h, o), o);
+  assert.strictEqual(plates.length, 4);
+  assert.ok(plates[0].underbase);
+  for (const q of plates.slice(1)) assert.ok(Math.hypot(q.rgb[0] - 17, q.rgb[1] - 17, q.rgb[2] - 17) > 40);
 });
 
 test("ink switch and choke", () => {

@@ -57,6 +57,8 @@
 
     <details class="step" open>
       <summary><h2>Screen</h2></summary>
+      <button type="button" class="primary" id="simpleProcess">Simple process</button>
+      <p class="hint" id="simpleHint">Full colour in 4 screens. On a dark shirt: white base + cyan, magenta, yellow (the shirt is the black). On a light shirt: C, M, Y, K.</p>
       <label>Colour <select id="mode"></select></label>
       <label>Pattern <select id="style"></select></label>
       <div id="amRow">
@@ -74,7 +76,8 @@
         <div class="inks" id="inks"></div>
       </div>
       <div id="spotBox">
-        <label>Spot inks <output id="spotOut"></output> <input type="range" id="spot_colors" min="2" max="8" step="1"></label>
+        <label>Spot screens <output id="spotOut"></output> <input type="range" id="spot_colors" min="2" max="8" step="1"></label>
+        <p class="hint">On a dark shirt with a white base, the base is one of these screens.</p>
         <label>Blend between inks <input type="range" id="spot_softness" min="2" max="40" step="1">
           <span class="scale"><span>Hard edges</span><span>Soft blends</span></span></label>
       </div>
@@ -111,14 +114,12 @@
       <button type="button" class="link" id="resetTone">Reset tone</button>
     </details>
 
-    <details class="step">
+    <details class="step" open>
       <summary><h2>Texture</h2></summary>
+      <label class="ghost fileBtn addTexture">+ Add your own texture (image)<input type="file" id="texFile" accept="image/*" hidden></label>
+      <p class="hint">Any grunge, paper or distress image. Dark parts wear the print away. It appears in the list below with its own strength and size.</p>
       <div id="textures" class="texList"></div>
-      <div class="row">
-        <button type="button" class="ghost" id="reseed" title="New random variation of every texture">Shuffle</button>
-        <label class="ghost fileBtn">Use my texture…<input type="file" id="texFile" accept="image/*" hidden></label>
-      </div>
-      <p class="hint">Dark parts of your own texture wear the print away.</p>
+      <button type="button" class="ghost block" id="reseed" title="New random variation of every texture">Shuffle textures</button>
     </details>
 
     <details class="step" open>
@@ -165,7 +166,8 @@
       <details class="step" open>
         <summary><h2>Inks</h2></summary>
         <ol class="inkPanel" id="inkList"></ol>
-        <p class="hint">Eye: print this ink or not. Slider: <b>choke</b> (right) shrinks the dots, <b>spread</b> (left) grows them.</p>
+        <p class="hint" id="soloNote" hidden></p>
+        <p class="hint">Click a name to see that ink alone. Eye: print it or not. Slider: <b>choke</b> (right) shrinks the dots, <b>spread</b> (left) grows them.</p>
       </details>
       <details class="step" open>
         <summary><h2>Download</h2></summary>

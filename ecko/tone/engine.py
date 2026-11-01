@@ -292,6 +292,8 @@ class Prepared:
     palette_lab: np.ndarray | None = None
     crop: tuple = (0, 0, 0, 0)    # artwork box (x, y, w, h) in the uploaded picture's pixels
     photo_like: bool = False      # many smooth tones (photo) rather than flat colours (logo)
+    spot_lab: np.ndarray | None = None   # Lab sample of the art, for spot palettes of any size
+    _palettes: dict = field(default_factory=dict)
     _levels: dict = field(default_factory=dict)
 
     def out_size(self, o: ToneOptions) -> tuple[int, int]:
@@ -452,11 +454,26 @@ def prepare(image: bytes | np.ndarray | None, o: ToneOptions) -> Prepared:
         pix = (rgb[sel] * 255).astype(np.uint8)
         if len(pix) > 200_000:
             pix = pix[np.random.default_rng(0).choice(len(pix), 200_000, replace=False)]
-        centers = _find_palette(pix, int(o.spot_colors))
-        order = np.argsort(-centers[:, 0])  # light inks first, dark inks print on top
-        prep.palette_lab = centers[order]
-        prep.palette = _lab_to_rgb(prep.palette_lab)
+        prep.spot_lab = _to_lab(pix)
+        prep.palette_lab, prep.palette = spot_palette(prep, int(o.spot_colors))
     return prep
+
+
+def spot_palette(prep: Prepared, k: int, exclude=None):
+    """k spot colours from the art (light first). ``exclude``: a shirt colour whose look-alikes
+    are left out, because the shirt itself prints them."""
+    key = (k, tuple(exclude) if exclude is not None else None)
+    if key not in prep._palettes:
+        lab = prep.spot_lab
+        if exclude is not None:
+            keep = np.linalg.norm(lab - _lab1(exclude), axis=1) > 20
+            if keep.sum() >= max(k, 16):
+                lab = lab[keep]
+        rgb = np.array(_lab_to_rgb(lab.astype(np.float32)), np.uint8)
+        centers = _find_palette(rgb, max(1, k))
+        centers = centers[np.argsort(-centers[:, 0])]  # light inks first, dark inks print on top
+        prep._palettes[key] = (centers, _lab_to_rgb(centers))
+    return prep._palettes[key]
 
 
 # ----------------------------------------------------------------- sampling
@@ -550,6 +567,9 @@ class Fit:
     inks: list = field(default_factory=list)    # mono / duotone inks after any swap
     spot: list = field(default_factory=list)    # per palette colour: ink rgb, or None = the shirt supplies it
     underbase: bool = False
+    shirt_is_black: bool = False                # dark shirt under a white base: the shirt prints the blacks
+    palette: list = field(default_factory=list)  # spot colours actually separated
+    palette_lab: np.ndarray | None = None
     notes: list = field(default_factory=list)
 
 
@@ -565,13 +585,22 @@ def resolve_fit(prep: Prepared, o: ToneOptions) -> Fit:
         new = contrast_ink(g)
         fit.notes.append(f"Ink {to_hex(fit.inks[0])} would disappear on this shirt, so it prints in {name(new)}.")
         fit.inks[0] = new
+    printed = fit.inks[:2 if o.mode == "duotone" else 1]
+    auto = o.underbase == "auto" and o.target == "screen" and lg < 0.6
+    if o.mode in ("mono", "duotone"):
+        auto = auto and any(_lum(c) < 0.85 for c in printed)
+    fit.underbase = o.underbase == "on" or auto
+    fit.shirt_is_black = fit.underbase and lg < 0.35 and o.mode in ("cmyk", "spot")
     if o.mode == "spot":
-        pal = prep.palette or []
+        # With a white base, it counts as one of the screens: 4 colours = white + 3 spot colours.
+        k = max(1, o.spot_colors - 1) if fit.underbase else o.spot_colors
+        fit.palette_lab, pal = spot_palette(prep, k, g if fit.shirt_is_black else None)
+        fit.palette = list(pal)
         base = [_hex(c) for c in o.inks] if len(o.inks) == len(pal) else list(pal)
         glab = _lab1(g)
         for i, c in enumerate(base):
             close = mode != "off" and float(np.linalg.norm(_lab1(c) - glab)) < 14
-            if close and mode == "tones":
+            if close and (mode == "tones" or fit.underbase):
                 fit.spot.append(None)
                 fit.notes.append(f"Spot {i + 1} ({to_hex(c)}) matches the shirt, so the shirt shows through instead.")
             elif close:
@@ -580,16 +609,17 @@ def resolve_fit(prep: Prepared, o: ToneOptions) -> Fit:
                 fit.notes.append(f"Spot {i + 1} ({to_hex(c)}) matches the shirt, so it prints in {name(new)}.")
             else:
                 fit.spot.append(c)
-    if o.mode == "cmyk":
-        printed = [c for _, c, _ in PROCESS_INKS]
-    elif o.mode == "spot":
-        printed = [c for c in fit.spot if c is not None]
-    else:
-        printed = fit.inks[:2 if o.mode == "duotone" else 1]
-    fit.underbase = o.underbase == "on" or (
-        o.underbase == "auto" and o.target == "screen" and lg < 0.6 and any(_lum(c) < 0.85 for c in printed))
-    if fit.underbase and o.underbase == "auto":
-        fit.notes.append("Dark shirt: a choked white underbase is added under the colours so they stay bright.")
+    if fit.underbase:
+        if o.mode == "cmyk" and fit.shirt_is_black:
+            fit.notes.append("Dark shirt: prints as a white base + cyan, magenta, yellow. "
+                             "The shirt itself is the black, so there's no black ink.")
+        elif o.mode == "cmyk":
+            fit.notes.append("White base under the process colours, solved for this shirt colour.")
+        elif o.mode == "spot":
+            fit.notes.append(f"White base + {sum(c is not None for c in fit.spot)} spot colours"
+                             + (" (the shirt is the black)." if fit.shirt_is_black else "."))
+        elif o.underbase == "auto":
+            fit.notes.append("Dark shirt: a choked white underbase is added under the colours so they stay bright.")
     return fit
 
 
@@ -602,13 +632,14 @@ def plate_specs(prep: Prepared, o: ToneOptions, fit: Fit | None = None) -> tuple
         plates, blend = [Plate("Shadow ink", fit.inks[0], o.angle, src=0),
                          Plate("Second ink", fit.inks[1], o.angle + 30, src=1)], "multiply"
     elif o.mode == "cmyk":
-        plates, blend = [Plate(n, c, o.angle + a, src=i) for i, (n, c, a) in enumerate(PROCESS_INKS)], "multiply"
+        plates, blend = [Plate(n, c, o.angle + a, src=i) for i, (n, c, a) in enumerate(PROCESS_INKS)
+                         if not (fit.shirt_is_black and n == "Black")], "multiply"
     else:
         plates = [Plate(f"Spot {i + 1}", c, o.angle + 30 * i, src=i) for i, c in enumerate(fit.spot) if c is not None]
         blend = "opaque"
     if fit.underbase:
-        plates.insert(0, Plate("White underbase", (255, 255, 255), o.angle + 7.5, src=-1, underbase=True,
-                               choke_mm=o.choke_mm))
+        plates.insert(0, Plate("White underbase", (255, 255, 255), o.angle + 7.5,
+                               src=4 if o.mode == "cmyk" else -1, underbase=True, choke_mm=o.choke_mm))
     for p in plates:
         e = o.ink_edits.get(p.name)
         if e:
@@ -649,31 +680,61 @@ def _coverages(rgb, a, prep: Prepared, o: ToneOptions, fit: Fit) -> list[np.ndar
             return [c * a]
         return [(c ** 1.6) * a, np.minimum(1, c * 1.3) ** 0.8 * a]
     if o.mode == "cmyk":
-        adj = _tone(rgb, o)
-        cmy = 1 - adj
-        k = cmy.min(axis=2) * 0.85
-        inv = np.maximum(1 - k, 1e-4)[..., None]
-        cmy = np.clip((cmy - k[..., None]) / inv, 0, 1)
-        return [cmy[..., 0] * a, cmy[..., 1] * a, cmy[..., 2] * a, k * a]
-    centers = prep.palette_lab
-    if fit.mode == "tones":  # the shirt is a free extra "ink"
+        t = _tone(rgb, o)
+        if not fit.underbase:
+            cmy, k = _gcr(1 - t)
+            return [cmy[..., 0] * a, cmy[..., 1] * a, cmy[..., 2] * a, k * a]
+        # On a shirt with a white base: you see base * (colour over white) + (1 - base) * shirt.
+        # Use the least base that can reach the wanted colour, then solve the colour over white.
+        g = np.array(_hex(o.garment), np.float32) / 255
+        if fit.shirt_is_black:
+            t = np.maximum(t, g)  # anything darker than a black shirt is just the shirt: no ink at all
+        up = np.where(t > g, (t - g) / np.maximum(1 - g, 1e-4), 0)
+        down = np.where(t < g, 1 - t / np.maximum(g, 1e-4), 0)
+        base = np.clip(np.maximum(up, down).max(axis=2), 0, 1)
+        over = np.clip((t - (1 - base[..., None]) * g) / np.maximum(base[..., None], 1e-4), 0, 1)
+        over = np.where(base[..., None] > 0.04, over, 1)  # (almost) no base: the shirt shows, no colour on it
+        cmy, k = _gcr(1 - over)
+        return [cmy[..., 0] * a, cmy[..., 1] * a, cmy[..., 2] * a, k * a, base * a]
+    centers = fit.palette_lab if fit.palette_lab is not None else prep.palette_lab
+    if fit.mode == "tones" or fit.shirt_is_black:  # the shirt is a free extra "ink"
         centers = np.vstack([centers, _lab1(_hex(o.garment))[None, :]])
     lab = cv2.cvtColor(rgb.astype(np.float32), cv2.COLOR_RGB2LAB)
     d2 = ((lab[..., None, :] - centers[None, None, :, :]) ** 2).sum(-1)
     w = np.exp(-(d2 - d2.min(-1, keepdims=True)) / (2 * o.spot_softness ** 2))
     w /= w.sum(-1, keepdims=True)
-    return [w[..., i] * a for i in range(len(prep.palette_lab))]
+    n = len(fit.palette_lab) if fit.palette_lab is not None else len(prep.palette_lab)
+    return [w[..., i] * a for i in range(n)]
+
+
+def _gcr(cmy: np.ndarray):
+    """Black generation: black replaces the grey part of dark colours only (no muddy black in light
+    tones), and total ink is held under 300% so dots don't fill in."""
+    kmin = cmy.min(axis=2)
+    k = 0.9 * kmin * np.clip((kmin - 0.15) / 0.85, 0, 1) ** 0.5
+    out = np.clip((cmy - k[..., None]) / np.maximum(1 - k, 1e-4)[..., None], 0, 1)
+    tot = out.sum(axis=2)
+    scale = np.where(tot + k > 3.0, (3.0 - k) / np.maximum(tot, 1e-4), 1.0)
+    return (out * scale[..., None]).astype(np.float32), k.astype(np.float32)
 
 
 def _underbase(covs: list[np.ndarray], plates: list[Plate], o: ToneOptions) -> np.ndarray:
     """White base under every ink, shrunk ("choked") so it never peeks out past the colour."""
+    base = next((p for p in plates if p.underbase), None)
+    if base is not None and 0 <= base.src < len(covs):   # CMYK: the base was solved with the colours
+        return _choke(covs[base.src], o.choke_mm, o)
     m = None
     for p in plates:
         if not p.underbase and p.on:
-            m = covs[p.src] if m is None else np.maximum(m, covs[p.src])
+            if m is None:
+                m = covs[p.src].copy()
+            elif o.mode == "spot":
+                m = m + covs[p.src]        # spot colours share the base: it goes under all of them
+            else:
+                m = np.maximum(m, covs[p.src])
     if m is None:
         return np.zeros_like(covs[0]) if covs else np.zeros(1, np.float32)
-    return _choke(m, o.choke_mm, o)
+    return _choke(np.clip(m, 0, 1), o.choke_mm, o)
 
 
 def _choke(c: np.ndarray, mm: float, o: ToneOptions) -> np.ndarray:

@@ -613,7 +613,8 @@
       const a = img.alpha[p];
       pm[p * 4] = img.rgb[p * 3] * a; pm[p * 4 + 1] = img.rgb[p * 3 + 1] * a; pm[p * 4 + 2] = img.rgb[p * 3 + 2] * a; pm[p * 4 + 3] = a;
     }
-    const prep = { rgba: pm, srcW: img.w, srcH: img.h, palette: null, paletteLab: null, crop, photoLike: photo, levels: {} };
+    const prep = { rgba: pm, srcW: img.w, srcH: img.h, palette: null, paletteLab: null, crop, photoLike: photo, levels: {},
+      spotLab: null, palettes: {} };
 
     if (o.mode === "spot") {
       const idx = [];
@@ -623,11 +624,30 @@
         const p = idx.length > n ? idx[Math.floor(rnd() * idx.length)] : idx[k];
         labs.set(rgbToLab(img.rgb[p * 3], img.rgb[p * 3 + 1], img.rgb[p * 3 + 2]), k * 3);
       }
-      const centers = kmeansLab(labs, n, o.spot_colors).sort((a, b) => b[0] - a[0]);   // light inks first
-      prep.paletteLab = centers;
-      prep.palette = centers.map((c) => labToRgb(c[0], c[1], c[2]));
+      prep.spotLab = labs;
+      [prep.paletteLab, prep.palette] = spotPalette(prep, o.spot_colors);
     }
     return prep;
+  }
+
+  /** k spot colours from the art (light first). exclude: a shirt colour whose look-alikes are left out. */
+  function spotPalette(prep, k, exclude = null) {
+    const key = `${k}|${exclude ? exclude.join(",") : ""}`;
+    if (!prep.palettes[key]) {
+      let labs = prep.spotLab, n = labs.length / 3;
+      if (exclude) {
+        const ex = lab1(exclude), keep = [];
+        for (let p = 0; p < n; p++) if (labDist([labs[p * 3], labs[p * 3 + 1], labs[p * 3 + 2]], ex) > 20) keep.push(p);
+        if (keep.length >= Math.max(k, 16)) {
+          const f = new Float32Array(keep.length * 3);
+          keep.forEach((p, i) => f.set(labs.subarray(p * 3, p * 3 + 3), i * 3));
+          labs = f; n = keep.length;
+        }
+      }
+      const centers = kmeansLab(labs, n, Math.max(1, k)).sort((a, b) => b[0] - a[0]);
+      prep.palettes[key] = [centers, centers.map((c) => labToRgb(c[0], c[1], c[2]))];
+    }
+    return prep.palettes[key];
   }
 
   function outSize(prep, o) {
@@ -712,13 +732,22 @@
       fit.notes.push(`Ink ${toHex(fit.inks[0])} would disappear on this shirt, so it prints in ${name(nw)}.`);
       fit.inks[0] = nw;
     }
+    const printed0 = fit.inks.slice(0, o.mode === "duotone" ? 2 : 1);
+    let auto = o.underbase === "auto" && o.target === "screen" && lg < 0.6;
+    if (o.mode === "mono" || o.mode === "duotone") auto = auto && printed0.some((c) => lum(c) < 0.85);
+    fit.underbase = o.underbase === "on" || auto;
+    fit.shirtIsBlack = fit.underbase && lg < 0.35 && (o.mode === "cmyk" || o.mode === "spot");
+    fit.palette = []; fit.paletteLab = null;
     if (o.mode === "spot") {
-      const pal = prep.palette || [];
+      // With a white base, it counts as one of the screens: 4 colours = white + 3 spot colours.
+      const k = fit.underbase ? Math.max(1, o.spot_colors - 1) : o.spot_colors;
+      const [labs, pal] = spotPalette(prep, k, fit.shirtIsBlack ? g : null);
+      fit.paletteLab = labs; fit.palette = pal.slice();
       const base = o.inks.length === pal.length ? o.inks.map(hex) : pal.slice();
       const glab = lab1(g);
       base.forEach((c, i) => {
         const close = mode !== "off" && labDist(lab1(c), glab) < 14;
-        if (close && mode === "tones") {
+        if (close && (mode === "tones" || fit.underbase)) {
           fit.spot.push(null);
           fit.notes.push(`Spot ${i + 1} (${toHex(c)}) matches the shirt, so the shirt shows through instead.`);
         } else if (close) {
@@ -728,12 +757,16 @@
         } else fit.spot.push(c);
       });
     }
-    const printed = o.mode === "cmyk" ? PROCESS_INKS.map((p) => p[1])
-      : o.mode === "spot" ? fit.spot.filter((c) => c) : fit.inks.slice(0, o.mode === "duotone" ? 2 : 1);
-    fit.underbase = o.underbase === "on" || (o.underbase === "auto" && o.target === "screen" && lg < 0.6 &&
-      printed.some((c) => lum(c) < 0.85));
-    if (fit.underbase && o.underbase === "auto") {
-      fit.notes.push("Dark shirt: a choked white underbase is added under the colours so they stay bright.");
+    if (fit.underbase) {
+      if (o.mode === "cmyk" && fit.shirtIsBlack) {
+        fit.notes.push("Dark shirt: prints as a white base + cyan, magenta, yellow. The shirt itself is the black, so there's no black ink.");
+      } else if (o.mode === "cmyk") {
+        fit.notes.push("White base under the process colours, solved for this shirt colour.");
+      } else if (o.mode === "spot") {
+        fit.notes.push(`White base + ${fit.spot.filter((c) => c).length} spot colours` + (fit.shirtIsBlack ? " (the shirt is the black)." : "."));
+      } else if (o.underbase === "auto") {
+        fit.notes.push("Dark shirt: a choked white underbase is added under the colours so they stay bright.");
+      }
     }
     return fit;
   }
@@ -746,13 +779,16 @@
     else if (o.mode === "duotone") {
       plates = [P("Shadow ink", fit.inks[0], o.angle, 0), P("Second ink", fit.inks[1], o.angle + 30, 1)]; blend = "multiply";
     } else if (o.mode === "cmyk") {
-      plates = PROCESS_INKS.map(([n, c, a], i) => P(n, c, o.angle + a, i)); blend = "multiply";
+      plates = PROCESS_INKS.map(([n, c, a], i) => P(n, c, o.angle + a, i)).filter((p) => !(fit.shirtIsBlack && p.name === "Black"));
+      blend = "multiply";
     } else {
       plates = [];
       fit.spot.forEach((c, i) => { if (c) plates.push(P(`Spot ${i + 1}`, c, o.angle + 30 * i, i)); });
       blend = "opaque";
     }
-    if (fit.underbase) plates.unshift(Object.assign(P("White underbase", [255, 255, 255], o.angle + 7.5, -1, true), { choke_mm: o.choke_mm }));
+    if (fit.underbase) {
+      plates.unshift(Object.assign(P("White underbase", [255, 255, 255], o.angle + 7.5, o.mode === "cmyk" ? 4 : -1, true), { choke_mm: o.choke_mm }));
+    }
     for (const p of plates) {
       const e = o.ink_edits[p.name];
       if (!e) continue;
@@ -791,20 +827,29 @@
       return [c1, c2];
     }
     if (o.mode === "cmyk") {
-      const out = [0, 1, 2, 3].map(() => new Float32Array(n));
+      const out = [0, 1, 2, 3, 4].map(() => new Float32Array(n)), g = hex(o.garment).map((v) => v / 255);
       for (let p = 0; p < n; p++) {
-        const c = 1 - tone(rgb[p * 3]), m = 1 - tone(rgb[p * 3 + 1]), y = 1 - tone(rgb[p * 3 + 2]);
-        const k = Math.min(c, m, y) * 0.85, inv = Math.max(1 - k, 1e-4);
-        out[0][p] = Math.max(0, Math.min(1, (c - k) / inv)) * a[p];
-        out[1][p] = Math.max(0, Math.min(1, (m - k) / inv)) * a[p];
-        out[2][p] = Math.max(0, Math.min(1, (y - k) / inv)) * a[p];
-        out[3][p] = k * a[p];
+        let t = [tone(rgb[p * 3]), tone(rgb[p * 3 + 1]), tone(rgb[p * 3 + 2])];
+        if (fit.shirtIsBlack) t = t.map((v, q) => Math.max(v, g[q]));   // darker than a black shirt is just the shirt
+        let over = t, base = 0;
+        if (fit.underbase) {
+          // On a shirt with a white base you see base * (colour over white) + (1 - base) * shirt:
+          // use the least base that can reach the wanted colour, then solve the colour over white.
+          for (let q = 0; q < 3; q++) {
+            const need = t[q] > g[q] ? (t[q] - g[q]) / Math.max(1 - g[q], 1e-4) : t[q] < g[q] ? 1 - t[q] / Math.max(g[q], 1e-4) : 0;
+            base = Math.max(base, need);
+          }
+          base = Math.max(0, Math.min(1, base));
+          over = base > 0.04 ? t.map((v, q) => Math.max(0, Math.min(1, (v - (1 - base) * g[q]) / base))) : [1, 1, 1];
+        }
+        const [c, m, y, k] = gcr(1 - over[0], 1 - over[1], 1 - over[2]);
+        out[0][p] = c * a[p]; out[1][p] = m * a[p]; out[2][p] = y * a[p]; out[3][p] = k * a[p]; out[4][p] = base * a[p];
       }
-      return out;
+      return fit.underbase ? out : out.slice(0, 4);
     }
-    const centers = prep.paletteLab.slice();
-    if (fit.mode === "tones") centers.push(lab1(hex(o.garment)));   // the shirt is a free extra "ink"
-    const K = prep.paletteLab.length, out = Array.from({ length: K }, () => new Float32Array(n));
+    const pl = fit.paletteLab || prep.paletteLab, centers = pl.slice();
+    if (fit.mode === "tones" || fit.shirtIsBlack) centers.push(lab1(hex(o.garment)));   // the shirt is a free extra "ink"
+    const K = pl.length, out = Array.from({ length: K }, () => new Float32Array(n));
     const d2 = new Float64Array(centers.length), inv2 = 1 / (2 * o.spot_softness ** 2);
     for (let p = 0; p < n; p++) {
       const L = rgbToLab(rgb[p * 3], rgb[p * 3 + 1], rgb[p * 3 + 2]);
@@ -820,12 +865,25 @@
     return out;
   }
 
+  /** Black generation in dark colours only (no muddy black in light tones); total ink held under 300%. */
+  function gcr(c, m, y) {
+    const kmin = Math.min(c, m, y), k = 0.9 * kmin * Math.sqrt(Math.max(0, Math.min(1, (kmin - 0.15) / 0.85)));
+    const inv = Math.max(1 - k, 1e-4);
+    let C = Math.max(0, Math.min(1, (c - k) / inv)), M = Math.max(0, Math.min(1, (m - k) / inv)), Y = Math.max(0, Math.min(1, (y - k) / inv));
+    const tot = C + M + Y;
+    if (tot + k > 3) { const s = (3 - k) / Math.max(tot, 1e-4); C *= s; M *= s; Y *= s; }
+    return [C, M, Y, k];
+  }
+
   function underbaseCov(covs, plates, o) {
+    const base = plates.find((p) => p.underbase);
+    if (base && base.src >= 0 && base.src < covs.length) return choke(covs[base.src], o.choke_mm, o);   // CMYK: solved with the colours
     let m = null;
     for (const p of plates) {
       if (p.underbase || !p.on) continue;
       const c = covs[p.src];
-      if (!m) m = c.slice(); else for (let k = 0; k < m.length; k++) m[k] = Math.max(m[k], c[k]);
+      if (!m) m = c.slice();
+      else for (let k = 0; k < m.length; k++) m[k] = o.mode === "spot" ? Math.min(1, m[k] + c[k]) : Math.max(m[k], c[k]);
     }
     if (!m) return new Float32Array(covs[0] ? covs[0].length : 0);
     return choke(m, o.choke_mm, o);
@@ -1207,7 +1265,7 @@
   const api = {
     CATALOG, DEFAULTS, STYLES, AM_STYLES, GRAIN_STYLES, TEXTURES, TARGETS, CREAM, INK_BLACK, LOUPE_MAX, MAX_OUTPUT_PX,
     ImageError, OptionError, hex, toHex, parseOptions, prepareKey, prepare, outSize, resolveFit, plateSpecs,
-    renderPreview, renderFull, renderPlates, composite, report, threshold, shapeDots, lum, contrastInk,
+    renderPreview, renderFull, renderPlates, composite, report, threshold, shapeDots, lum, contrastInk, spotPalette,
     _internal: { hash2, valueNoise, fbm, blueNoise, voronoiEdge, scratches, rgbToLab, labToRgb, resize },
   };
   if (typeof module !== "undefined" && module.exports) module.exports = api;

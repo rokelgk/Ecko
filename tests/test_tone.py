@@ -252,21 +252,38 @@ def test_underbase_for_dark_shirts(logo):
     base = {"mode": "cmyk", "width_in": 3, "garment": "#141414"}
     prep = E.prepare(logo, E.parse_options(base))
     plates, _ = E.plate_specs(prep, E.parse_options({**base, "target": "screen"}))
-    assert plates[0].underbase and len(plates) == 5          # auto: screen print on a dark shirt
+    # black shirt: white base + C, M, Y. The shirt is the black, so no black ink.
+    assert [p.name for p in plates] == ["White underbase", "Cyan", "Magenta", "Yellow"]
     assert not any(p.underbase for p in E.plate_specs(prep, E.parse_options(base))[0])  # DTF auto: RIP adds white
     assert E.plate_specs(prep, E.parse_options({**base, "underbase": "on"}))[0][0].underbase  # your choice wins
+    navy = E.plate_specs(prep, E.parse_options({**base, "garment": "#6b6b6b", "underbase": "on"}))[0]
+    assert "Black" in [p.name for p in navy]  # mid-dark shirt: black ink is still needed
     o = E.parse_options({**base, "target": "screen"})
     rgba, plates, seps = E.render_full(prep, o, keep_plates=True)
-    ub, inks = seps[0], np.logical_or.reduce(seps[1:])
-    assert ub.any() and ub.mean() < inks.mean()  # choked: smaller than the ink it sits under
-    rgba2, _, seps2 = E.render_full(prep, E.parse_options({**base, "target": "screen", "underbase": "off"}), keep_plates=True)
-    for a, b in zip(seps[1:], seps2):
-        assert np.array_equal(a, b)  # adding the white base never changes the colour plates
-    # the base shows in the PNG as white where no colour covers it
+    assert seps[0].any()
     white = (rgba[..., 3] == 255) & (rgba[..., :3].min(axis=2) == 255)
-    assert white.any() and (rgba[..., 3] > 0).sum() >= (rgba2[..., 3] > 0).sum()
+    assert white.any()  # the base shows in the PNG where no colour covers it
     more_choke = E.render_full(prep, E.parse_options({**base, "target": "screen", "choke_mm": 0.3}), keep_plates=True)[2]
-    assert more_choke[0].mean() < ub.mean()
+    assert more_choke[0].mean() < seps[0].mean()
+
+
+def test_black_shirt_process_puts_white_where_the_art_is_light(ramp_png):
+    """A grey ramp on a black shirt is all white base (light end) fading to bare shirt (dark end), no colour."""
+    o = E.parse_options({"mode": "cmyk", "width_in": 6, "garment": "#000000", "underbase": "on", "choke_mm": 0,
+                         "min_dot": 0, "max_dot": 1, "sharpen": 0, "remove_background": False, "roughness": 0})
+    prep = E.prepare(ramp_png, o)
+    _, plates, seps = E.render_full(prep, o, keep_plates=True)
+    cols = [float(c.mean()) for c in np.array_split(seps[0], 8, axis=1)]
+    assert cols[0] > 0.85 and cols[-1] < 0.1 and all(b < a for a, b in zip(cols, cols[1:]))
+    assert all(s.mean() < 0.02 for s in seps[1:])  # neutral greys need no cyan, magenta or yellow
+
+
+def test_four_spot_colours_on_black_shirt_is_white_plus_three(logo):
+    o = E.parse_options({"mode": "spot", "spot_colors": 4, "width_in": 3, "garment": "#111111", "target": "screen"})
+    prep = E.prepare(logo, o)
+    plates, _ = E.plate_specs(prep, o)
+    assert plates[0].underbase and len(plates) == 4
+    assert all(np.linalg.norm(np.array(p.rgb) - 17) > 40 for p in plates[1:])  # no near-black ink: the shirt is black
 
 
 def test_ink_switch_and_choke(logo):
@@ -385,3 +402,17 @@ def test_dark_shirt_cmyk_suggests_underbase(logo):
     o2 = E.parse_options({"mode": "cmyk", "width_in": 2, "garment": "#141414", "underbase": "on"})
     rgba, plates, bm = E.render_preview(prep, o2, 300)
     assert {"underbase": "on"} not in [w.get("fix") for w in E.report(prep, o2, plates, bm)["warnings"]]
+
+
+def test_art_darker_than_black_shirt_prints_nothing():
+    arr = np.zeros((200, 300, 4), np.uint8)
+    arr[..., 3] = 255
+    arr[:, :150, :3] = 5      # darker than the shirt
+    arr[:, 150:, :3] = 230    # light
+    o = E.parse_options({"mode": "cmyk", "width_in": 3, "garment": "#141414", "underbase": "on",
+                         "remove_background": False, "choke_mm": 0})
+    prep = E.prepare(_png(arr), o)
+    _, _, seps = E.render_full(prep, o, keep_plates=True)
+    half = seps[0].shape[1] // 2
+    assert all(s[:, :half - 20].mean() < 0.01 for s in seps)   # dark half: bare shirt
+    assert seps[0][:, half + 20:].mean() > 0.6                   # light half: white base

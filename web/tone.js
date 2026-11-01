@@ -15,7 +15,7 @@
   let tex = {};            // type -> {on, strength, scale, image_id}
   let file = null, imageId = null, texFile = null;
   let palette = null, spotInks = null;
-  let report = null, loupeAt = null;
+  let report = null, loupeAt = null, solo = null;   // solo: show one ink alone in the preview
   let seq = 0, loupeSeq = 0, mockSeq = 0, timer = null, view = "print";
   let batch = [];          // extra designs: {file, id, name, url}
   let batchShirts = null;  // Set of garment hexes for the batch
@@ -377,8 +377,20 @@
   }
 
   function serverOpts() {
-    const o = payload();
+    const o = JSON.parse(JSON.stringify(payload()));
     delete o._preset;
+    return o;
+  }
+
+  function viewOpts() {   // what the screen shows: like the print, but a soloed ink appears alone
+    const o = serverOpts();
+    if (solo && report) {
+      for (const ink of report.inks) {
+        if (ink.name === solo) continue;
+        o.ink_edits[ink.name] = { ...(o.ink_edits[ink.name] || { choke_mm: 0 }), on: false };
+      }
+      o.ink_edits[solo] = { ...(o.ink_edits[solo] || { choke_mm: 0 }), on: true };
+    }
     return o;
   }
 
@@ -399,7 +411,7 @@
         (window.devicePixelRatio || 1) * Math.min(view_.zoom, 2))));
       view_.renderedPx = maxPx;
       const r = await postWithReupload("/api/tone/preview",
-        () => ({ image_id: file ? imageId : null, options: serverOpts(), max_px: maxPx }));
+        () => ({ image_id: file ? imageId : null, options: viewOpts(), max_px: maxPx }));
       if (my !== seq) return;
       if (!r.ok) throw new Error(await detail(r));
       const j = await r.json();
@@ -431,7 +443,7 @@
     const y = Math.round(Math.min(Math.max(loupeAt.fy * H - h / 2, 0), H - h));
     try {
       const r = await postWithReupload("/api/tone/preview",
-        () => ({ image_id: file ? imageId : null, options: serverOpts(), region: [x, y, w, h] }));
+        () => ({ image_id: file ? imageId : null, options: viewOpts(), region: [x, y, w, h] }));
       if (!r.ok || my !== loupeSeq) return;
       $("loupeImg").src = (await r.json()).image;
       $("loupe").hidden = false;
@@ -511,20 +523,24 @@
 
     const ol = $("inkList");
     ol.innerHTML = "";
+    if (solo && !r.inks.some((i) => i.name === solo)) solo = null;
+    $("soloNote").hidden = !solo;
+    $("soloNote").textContent = solo ? `Showing ${solo} only. Click its name again to show all inks. Downloads always include every ink that's on.` : "";
     let colourIndex = 0;
     r.inks.forEach((ink) => {
       const li = document.createElement("li");
       const idx = ink.underbase ? -1 : colourIndex++;
-      const on = ink.on !== false;
+      const e = opts.ink_edits[ink.name];
+      const on = !(e && e.on === false);
       const editable = opts.mode !== "cmyk" && !ink.underbase;
-      li.className = on ? "" : "off";
+      li.className = (on ? "" : "off") + (solo === ink.name ? " solo" : "");
       const chokeVal = ink.underbase ? opts.choke_mm : (ink.choke_mm || 0);
       li.innerHTML = `
         <div class="inkHead">
           <button type="button" class="eye" aria-pressed="${on}" title="${on ? "Printing: click to switch this ink off" : "Off: click to print this ink"}">${on ? "👁" : "–"}</button>
           ${editable ? `<input type="color" value="${ink.hex}" aria-label="${ink.name} colour">`
             : `<span class="inkSwatch" style="background:${ink.hex}"></span>`}
-          <span class="tname"><b>${ink.name}</b><small>${ink.underbase ? "white base under the colours" : `${ink.hex} · ${ink.angle}°`} · ${ink.coverage}%</small></span>
+          <button type="button" class="tname" title="Show this ink alone"><b>${ink.name}</b><small>${ink.underbase ? "white base under the colours" : `${ink.hex} · ${ink.angle}°`}${solo && solo !== ink.name ? "" : ` · ${ink.coverage}%`}</small></button>
         </div>
         <div class="chokeRow">
           <span>${ink.underbase ? "Size" : "Spread"}</span>
@@ -533,6 +549,10 @@
           <output>${chokeLabel(chokeVal)}</output>
         </div>`;
       const edit = () => (opts.ink_edits[ink.name] = opts.ink_edits[ink.name] || { on: true, choke_mm: 0 });
+      li.querySelector(".tname").addEventListener("click", () => {
+        solo = solo === ink.name ? null : ink.name;
+        changed();
+      });
       li.querySelector(".eye").addEventListener("click", () => {
         edit().on = !on;
         changed();
@@ -774,6 +794,7 @@
       if (!f) return;
       texFile = f;
       tex.image = { type: "image", on: true, strength: 0.5, scale: 1, image_id: null };
+      e.target.value = "";
       buildTextures();
       changed();
     });
@@ -786,6 +807,10 @@
     $("dlPng").addEventListener("click", (e) => download("png", e.currentTarget));
     $("dlZip").addEventListener("click", (e) => download("zip", e.currentTarget));
     $("clearPicture").addEventListener("click", clearPicture);
+    $("simpleProcess").addEventListener("click", () => {
+      const p = catalog.presets.find((x) => x.id === "simple-process");
+      if (p) applyPreset(p);
+    });
     $("addText").addEventListener("click", () => {
       opts.text = opts.text || [];
       opts.text.push({ ...TEXT_DEFAULT, y: file ? -0.75 : 0, color: opts.text.length ? opts.text[0].color : "#000000" });
