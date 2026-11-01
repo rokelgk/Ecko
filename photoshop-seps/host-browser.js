@@ -70,19 +70,37 @@
         input.click();
       });
     },
-    async saveFiles(files) {
-      for (const f of files) download(f.name, f.data);
-      return 'your Downloads folder';
+    // One file downloads as itself; several go into one ZIP, because
+    // browsers (Safari especially) block a burst of separate downloads.
+    async saveFiles(files, zipName) {
+      if (files.length === 1) { download(files[0].name, files[0].data); return 'your Downloads folder'; }
+      const name = zipName || 'ecko-seps-films.zip';
+      download(name, window.EckoEngine.zip.makeZip(files), 'application/zip');
+      return `your Downloads folder (${name})`;
     },
-    async buildDocument(result) {
-      const w = result.width, h = result.height;
-      const png = (rgba) => new Promise((r) => toCanvas(rgba, w, h).toBlob((b) => r(b), 'image/png'));
-      download('preview.png', await png(result.preview), 'image/png');
+    // Browser stand-in for the Photoshop document: every plate as a
+    // grayscale TIFF (no canvas, so no browser size limit) plus a preview
+    // PNG, all in one ZIP.
+    async buildDocument(result, film, opts) {
+      const E = window.EckoEngine;
+      const files = [];
       for (const s of result.screens) {
-        const rgba = new Uint8ClampedArray(w * h * 4);
-        for (let p = 0; p < w * h; p++) { const v = 255 - s.plate[p]; rgba[p * 4] = v; rgba[p * 4 + 1] = v; rgba[p * 4 + 2] = v; rgba[p * 4 + 3] = 255; }
-        download(`${String(s.order).padStart(2, '0')}-${s.name.replace(/[^a-z0-9]+/gi, '_')}.png`, await png(rgba), 'image/png');
+        const tif = E.tiff.writeTiff({ data: s.plate, width: result.width, height: result.height, dpi: result.dpi, bits: 8 });
+        files.push({ name: `${String(s.order).padStart(2, '0')}-${s.name.replace(/[^a-z0-9]+/gi, '_')}.tif`, data: tif });
       }
+      const pw = result.previewWidth || result.width, ph = result.previewHeight || result.height;
+      let rgba = result.preview, w = pw, h = ph;
+      // Keep the preview inside the browser's canvas size limit.
+      const max = 16000000;
+      if (w * h > max) {
+        const k = Math.sqrt(max / (w * h));
+        const small = E.ops.resizeImage({ data: rgba, width: w, height: h, channels: 4 }, Math.floor(w * k), Math.floor(h * k));
+        rgba = small.data; w = small.width; h = small.height;
+      }
+      const blob = await new Promise((r) => toCanvas(rgba, w, h).toBlob((bb) => r(bb), 'image/png'));
+      files.push({ name: 'preview.png', data: new Uint8Array(await blob.arrayBuffer()) });
+      const base = ((opts && opts.name) || 'ecko-seps').replace(/[^a-z0-9 _-]+/gi, '').trim().replace(/\s+/g, '_') || 'ecko-seps';
+      download(`${base}-plates.zip`, E.zip.makeZip(files), 'application/zip');
     },
   };
 

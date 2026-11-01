@@ -12,6 +12,7 @@ const presets = require('./presets');
 const ops = require('./image-ops');
 const prepare = require('./prepare');
 const texture = require('./texture');
+const zip = require('./zip');
 
 // Per-screen film settings from a preset/global film setting.
 function filmSettingsFor(screen, film) {
@@ -68,7 +69,8 @@ function applyRegistration(result, film, reg) {
     w = out.width; h = out.height;
     return Object.assign({}, s, { plate: out.data });
   });
-  return Object.assign({}, result, { width: w, height: h, screens, registered: true });
+  // The preview stays the unregistered size: keep its own dimensions.
+  return Object.assign({}, result, { width: w, height: h, screens, registered: true, previewWidth: result.previewWidth || result.width, previewHeight: result.previewHeight || result.height });
 }
 
 // Close-up of the print with real film dots: the region around (cx, cy)
@@ -107,5 +109,5 @@ function screenSummary(result, film) {
 
 module.exports = Object.assign(
   { separate: sep.separate, DEFAULTS: sep.DEFAULTS, autoScreenCount: sep.autoScreenCount, filmSettingsFor, filmLabel, renderScreenFilm, applyRegistration, REG_DEFAULTS, screenSummary, dotPreview, prepareArt: prepare.prepareArt, artInfo: prepare.artInfo, PREP_DEFAULTS: prepare.PREP_DEFAULTS },
-  { color, inks, palette, halftone, tiff, presets, ops, texture },
+  { color, inks, palette, halftone, tiff, presets, ops, texture, zip },
 );

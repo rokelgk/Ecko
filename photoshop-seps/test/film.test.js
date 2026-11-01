@@ -87,3 +87,25 @@ test('film label stays clear of the bottom registration target', () => {
     for (let x = cx - r - 8; x < cx - r - 1; x++) assert.strictEqual(f.data[y * f.width + x], 0, `${x},${y}`);
   }
 });
+
+test('ZIP holds every film intact (one download in the browser)', () => {
+  const zlib = require('zlib');
+  const files = [{ name: '01-White.tif', data: new Uint8Array([1, 2, 3, 4]) }, { name: 'job-sheet.txt', data: new TextEncoder().encode('hello') }];
+  const z = engine.zip.makeZip(files);
+  const buf = Buffer.from(z);
+  assert.strictEqual(buf.readUInt32LE(0), 0x04034b50);
+  const end = buf.length - 22;
+  assert.strictEqual(buf.readUInt32LE(end), 0x06054b50);
+  assert.strictEqual(buf.readUInt16LE(end + 10), 2);
+  // Stored data and CRC are right.
+  const nameLen = buf.readUInt16LE(26);
+  assert.deepStrictEqual(Array.from(buf.subarray(30 + nameLen, 30 + nameLen + 4)), [1, 2, 3, 4]);
+  assert.strictEqual(buf.readUInt32LE(14), zlib.crc32 ? zlib.crc32(Buffer.from([1, 2, 3, 4])) : engine.zip.crc32(new Uint8Array([1, 2, 3, 4])));
+});
+
+test('registered results keep the preview size separate from the padded plates', () => {
+  const r = engine.separate(require('../tools/png').readPng(require('fs').readFileSync(require('path').join(__dirname, 'fixtures', 'logo.png'))), Object.assign({}, engine.presets.getPreset('spot').options));
+  const reg = engine.applyRegistration(r, engine.presets.getPreset('spot').film, { marks: true });
+  assert.ok(reg.width > r.width);
+  assert.strictEqual(reg.previewWidth * reg.previewHeight * 4, reg.preview.length);
+});

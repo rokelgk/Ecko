@@ -1083,7 +1083,7 @@
         files.push({ name: `${String(s.order).padStart(2, '0')}-${s.name.replace(/[^a-z0-9]+/gi, '_')}.tif`, data: E.tiff.writeTiff(film) });
       }
       files.push({ name: 'job-sheet.txt', data: new TextEncoder().encode(jobSheet(r)) });
-      const where = await host.saveFiles(files);
+      const where = await host.saveFiles(files, `${(state.art.name || 'ecko-seps').replace(/[^a-z0-9 _-]+/gi, '').trim().replace(/\s+/g, '_') || 'ecko-seps'}-films.zip`);
       status(where ? `Saved ${files.length - 1} films and a job sheet to ${where}.` : 'Export cancelled.');
     } catch (e) { console.error(e); status('Export failed: ' + e.message, true); }
   }
@@ -1473,7 +1473,7 @@
     $('reload').classList.remove('hidden');
   } else {
     document.querySelectorAll('.ps-only').forEach((el) => el.classList.add('hidden'));
-    $('build').textContent = 'Download plates + preview (PNG)';
+    $('build').textContent = 'Download plates + preview (ZIP)';
     document.querySelectorAll('.ps-text').forEach((el) => { el.textContent = 'In Photoshop this builds a document with one named spot channel per ink.'; });
   }
   host.onArtworkChosen = async () => { await loadArt(); separateFresh(false); };
