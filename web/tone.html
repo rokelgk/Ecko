@@ -1,0 +1,160 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Ecko Tone: vintage halftones for DTF, DTG and screen print</title>
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns=%27http://www.w3.org/2000/svg%27 viewBox=%270 0 32 32%27%3E%3Ccircle cx=%2716%27 cy=%2716%27 r=%2714%27 fill=%27%23c2410c%27/%3E%3C/svg%3E">
+  <link rel="stylesheet" href="styles.css">
+  <link rel="stylesheet" href="tone.css">
+</head>
+<body>
+<header class="top">
+  <div class="brand">
+    <svg viewBox="0 0 32 32" width="28" height="28" aria-hidden="true"><circle cx="16" cy="16" r="14" fill="none" stroke="currentColor" stroke-width="2.5"/><circle cx="11" cy="12" r="3" fill="currentColor"/><circle cx="20" cy="12" r="2.2" fill="currentColor"/><circle cx="11" cy="21" r="2.2" fill="currentColor"/><circle cx="20" cy="21" r="1.4" fill="currentColor"/></svg>
+    <span>Ecko Tone</span>
+  </div>
+  <p class="tagline">Halftones, Xerox and distressed textures, ready to print on shirts.</p>
+  <nav class="topActions">
+    <a class="ghost" href="index.html">Embroidery</a>
+    <a class="ghost on" href="tone.html" aria-current="page">Halftone</a>
+  </nav>
+</header>
+
+<main class="layout">
+  <aside class="panel" aria-label="Settings">
+    <section class="step">
+      <h2><span class="num">1</span> Your art</h2>
+      <label class="drop" id="drop">
+        <input type="file" id="file" accept="image/png,image/jpeg,image/webp,image/gif,image/bmp,image/tiff" hidden>
+        <img id="thumb" alt="" hidden>
+        <span id="dropText"><strong>Drop a photo or design</strong><br>or click to choose (PNG, JPG, WebP)</span>
+      </label>
+      <label class="check"><input type="checkbox" id="remove_background" checked> Remove flat background</label>
+      <label id="bgTolRow">Background tolerance <input type="range" id="bg_tolerance" min="4" max="60" step="1"></label>
+    </section>
+
+    <section class="step">
+      <h2><span class="num">2</span> Pick a look</h2>
+      <div class="presets" id="presets"></div>
+      <p class="hint">A preset is a starting point. Everything below stays editable.</p>
+    </section>
+
+    <section class="step">
+      <h2><span class="num">3</span> Screen</h2>
+      <label>Colour <select id="mode"></select></label>
+      <label>Pattern <select id="style"></select></label>
+      <div id="amRow">
+        <label>Lines per inch (LPI) <output id="lpiOut"></output>
+          <input type="range" id="lpi" min="5" max="150" step="1">
+          <span class="scale"><span>Big bold dots</span><span>Fine detail</span></span></label>
+      </div>
+      <div id="grainRow">
+        <label>Grain size <output id="grainOut"></output>
+          <input type="range" id="grain_mm" min="0.05" max="1.5" step="0.01"></label>
+      </div>
+      <label>Angle <output id="angleOut"></output> <input type="range" id="angle" min="0" max="180" step="0.5"></label>
+      <div id="inksBox">
+        <label>Ink colours</label>
+        <div class="inks" id="inks"></div>
+      </div>
+      <div id="spotBox">
+        <label>Spot inks <output id="spotOut"></output> <input type="range" id="spot_colors" min="2" max="8" step="1"></label>
+        <label>Blend between inks <input type="range" id="spot_softness" min="2" max="40" step="1">
+          <span class="scale"><span>Hard edges</span><span>Soft halftone blends</span></span></label>
+      </div>
+    </section>
+
+    <section class="step">
+      <h2><span class="num">4</span> Tone</h2>
+      <label>Brightness <input type="range" id="brightness" min="-1" max="1" step="0.02"></label>
+      <label>Contrast <input type="range" id="contrast" min="-1" max="1" step="0.02"></label>
+      <label>Midtones (gamma) <input type="range" id="gamma" min="0.3" max="3" step="0.02"></label>
+      <div class="row">
+        <label>Black point <input type="range" id="black_point" min="0" max="0.6" step="0.01"></label>
+        <label>White point <input type="range" id="white_point" min="0.4" max="1" step="0.01"></label>
+      </div>
+      <label>Sharpen <input type="range" id="sharpen" min="0" max="3" step="0.05"></label>
+      <label class="check"><input type="checkbox" id="invert"> Invert (light ink on a dark shirt)</label>
+      <button type="button" class="link" id="resetTone">Reset tone</button>
+    </section>
+
+    <section class="step">
+      <h2><span class="num">5</span> Texture</h2>
+      <div id="textures" class="texList"></div>
+      <div class="row">
+        <button type="button" class="ghost" id="reseed" title="New random variation of every texture">Shuffle</button>
+        <label class="ghost fileBtn">Use my texture…<input type="file" id="texFile" accept="image/*" hidden></label>
+      </div>
+      <p class="hint">Dark parts of your own texture wear the print away.</p>
+    </section>
+
+    <section class="step">
+      <h2><span class="num">6</span> Print</h2>
+      <label>Printing on <select id="target"></select></label>
+      <div class="row">
+        <label>Width <input type="number" id="width" min="0.5" step="0.1" value="10"></label>
+        <label>Units <select id="units"><option value="in">inches</option><option value="cm">cm</option></select></label>
+        <label>DPI <select id="dpi"><option>150</option><option>200</option><option selected>300</option><option>360</option><option>600</option></select></label>
+      </div>
+      <p class="hint" id="sizeHint"></p>
+      <details class="adv">
+        <summary>Press control</summary>
+        <label>Smallest dot <output id="minOut"></output> <input type="range" id="min_dot" min="0" max="0.3" step="0.01"></label>
+        <label>Largest dot before solid <output id="maxOut"></output> <input type="range" id="max_dot" min="0.6" max="1" step="0.01"></label>
+        <label>Dot gain compensation <output id="gainOut"></output> <input type="range" id="dot_gain" min="0" max="0.35" step="0.01"></label>
+        <label>Rough dot edges <input type="range" id="roughness" min="0" max="1" step="0.02"></label>
+        <label>Misregistration <output id="misOut"></output> <input type="range" id="misregister_mm" min="0" max="2" step="0.05"></label>
+        <label class="check"><input type="checkbox" id="knockout"> Knock out the garment colour</label>
+        <label class="check"><input type="checkbox" id="registration_marks" checked> Registration marks on films</label>
+      </details>
+    </section>
+    <p class="error" id="error" role="alert" hidden></p>
+  </aside>
+
+  <section class="stage" aria-label="Preview">
+    <div class="toolbar">
+      <div class="tabs" role="tablist">
+        <button role="tab" data-view="print" class="on">Print</button>
+        <button role="tab" data-view="original">Original</button>
+      </div>
+      <div class="garment" title="Garment colour">
+        <span>Garment</span>
+        <span id="garments"></span>
+        <input type="color" id="garment" aria-label="Custom garment colour">
+      </div>
+    </div>
+    <div class="toneStage" id="stage">
+      <div class="empty" id="empty"><p><strong>Drop a picture to start.</strong><br>Photos, logos, illustrations: anything.</p></div>
+      <img id="preview" alt="Halftone preview" hidden>
+      <img id="original" alt="Original" hidden>
+      <div class="loupe" id="loupe" hidden><img id="loupeImg" alt="Actual print pixels"><span>1:1 print pixels · click elsewhere to move · Esc to close</span></div>
+      <div class="busy" id="busy" hidden><div><div class="spinner"></div></div></div>
+      <p class="canvasHint" id="stageHint" hidden>Click anywhere to see the real print pixels</p>
+    </div>
+
+    <div class="results" id="results" hidden>
+      <div class="card">
+        <h3>Print check</h3>
+        <ul class="stats" id="stats"></ul>
+        <ul class="warnings" id="warnings"></ul>
+      </div>
+      <div class="card">
+        <h3>Inks</h3>
+        <ol class="threads" id="inkList"></ol>
+      </div>
+      <div class="card download">
+        <h3>Download</h3>
+        <label>File name <input type="text" id="name" value="ecko-tone"></label>
+        <div class="row">
+          <button type="button" class="primary" id="dlPng">Print PNG (DTF / DTG)</button>
+          <button type="button" class="ghost" id="dlZip">Separations ZIP (screen print)</button>
+        </div>
+        <p class="hint">The PNG has real <span id="dpiNote">300</span> DPI and pure on/off transparency, so RIP software never gets half-transparent pixels that print as faint white haze. The ZIP adds one 1-bit film per ink.</p>
+      </div>
+    </div>
+  </section>
+</main>
+<script src="tone.js"></script>
+</body>
+</html>

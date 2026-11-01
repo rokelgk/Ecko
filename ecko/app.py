@@ -23,6 +23,7 @@ from .digitizer.pipeline import (ANALYSIS_KEYS, KINDS, Design, Edits, ImageArt, 
                                  build_artwork, plan, preview, threads_used)
 from .digitizer.preprocess import ImageError
 from .store import Store
+from .tone.api import router as tone_router
 
 MAX_UPLOAD_BYTES = 15 * 1024 * 1024
 MAX_CACHED_ART = 64
@@ -32,6 +33,7 @@ WEB_DIR = Path(__file__).resolve().parent.parent / "web"
 
 app = FastAPI(title="Ecko Embroidery Digitizer")
 store = Store()
+app.include_router(tone_router)
 
 _art_cache: OrderedDict[tuple, ImageArt] = OrderedDict()
 _cache_lock = threading.Lock()

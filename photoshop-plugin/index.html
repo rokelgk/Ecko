@@ -1,0 +1,27 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <style>
+    body { font-family: sans-serif; font-size: 12px; color: var(--uxp-host-text-color, #ddd); padding: 8px; }
+    label { display: block; margin: 8px 0 2px; }
+    select, input[type=text], input[type=range] { width: 100%; }
+    button { width: 100%; margin-top: 12px; padding: 6px; }
+    .hint { opacity: .7; margin-top: 6px; }
+    #status { margin-top: 10px; min-height: 2em; }
+    .err { color: #f87171; }
+  </style>
+</head>
+<body>
+  <label>Ecko server <input type="text" id="server" value="http://localhost:8000"></label>
+  <label>Look <select id="preset"><option value="">Loading…</option></select></label>
+  <label>Pattern <select id="style"></select></label>
+  <label>Lines per inch: <span id="lpiOut"></span> <input type="range" id="lpi" min="5" max="150" step="1" value="35"></label>
+  <label>Angle: <span id="angleOut"></span> <input type="range" id="angle" min="0" max="180" step="0.5" value="22.5"></label>
+  <label>Printing on <select id="target"></select></label>
+  <button id="run">Halftone selected layer</button>
+  <p class="hint">Makes a new layer above the selected one. Your original layer is left alone.</p>
+  <div id="status"></div>
+  <script src="index.js"></script>
+</body>
+</html>

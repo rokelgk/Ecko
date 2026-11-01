@@ -31,6 +31,29 @@ download a file your machine can sew.
 - **Saved designs.** Designs are saved automatically and listed under "My
   designs" in your browser. Every design has a link you can reopen or share.
 
+## Ecko Tone: halftones for printed shirts
+
+Open `/tone.html` (or click **Halftone tool**). Drop a photo or design, pick a look, and
+download a print-ready file.
+
+- **10 screens:** round, classic, ellipse, square, diamond, line, cross, stochastic grain,
+  Xerox and mezzotint. Set real LPI, angle, DPI and print size.
+- **Colour:** one ink, duotone, CMYK, or 2–8 spot-colour separations with editable inks.
+- **Textures:** worn, cracked, grunge, paper, scratches and toner, each with strength and
+  size, reseedable for new variations. You can also use your own texture image.
+- **DTF-safe output:** transparency is strictly on/off, with real DPI in the PNG. Knock out
+  the garment colour so the shirt shows through.
+- **Press control:** minimum and maximum dot, dot-gain compensation, rough dot edges, and
+  misregistration for a riso look.
+- **Print check:** tone levels, smallest dot compared with what DTF, DTG or screen print can
+  hold, and LPI range, each with a one-click fix.
+- **1:1 loupe:** click the preview to see the exact print pixels.
+- **Screen print:** a ZIP of 1-bit films with registration marks.
+- **Photoshop panel** (experimental): see [photoshop-plugin/](photoshop-plugin/README.md).
+
+See [docs/tone-research.md](docs/tone-research.md) for how it compares with Photoshop
+halftone templates like GryzTone.
+
 See [docs/competitive-research.md](docs/competitive-research.md) for the
 complaints about existing software and how each one is handled here.
 
@@ -84,6 +107,9 @@ picture ─► colors (k-means in Lab, anti-alias clean-up, background removal)
 | `ecko/threadcharts.py` | Thread brand charts and nearest-thread matching |
 | `ecko/store.py` | Saved designs (SQLite) |
 | `ecko/fonts/` | Bundled fonts (SIL Open Font License / Apache 2.0; licence files included) |
+| `ecko/tone/engine.py` | Halftone engine: screens, colour separation, tone and press control, print check |
+| `ecko/tone/noise.py` | Procedural patterns in global print coordinates (textures, blue noise) |
+| `ecko/tone/api.py`, `export.py`, `presets.py` | Tone API, PNG/ZIP export, starting looks |
 | `ecko/app.py` | FastAPI backend |
 | `web/` | Front end (plain HTML/CSS/JS, no build step) |
 
@@ -99,6 +125,11 @@ picture ─► colors (k-means in Lab, anti-alias clean-up, background removal)
 | GET | `/api/designs?ids=a,b` | Summaries for the ids a browser has saved |
 | GET | `/api/designs/{id}/file?format=pes&rotate=false` | Machine file download |
 | GET | `/api/designs/{id}/image` | The original picture |
+| GET | `/api/tone/catalog` | Screens, colour modes, textures, print targets, presets, defaults |
+| POST | `/api/tone/images` | Multipart `file`; returns an image id (kept in memory, so re-upload on 410) |
+| POST | `/api/tone/preview` | JSON `{image_id, options, max_px?, region?}`: preview (or 1:1 crop) plus print check |
+| POST | `/api/tone/export` | JSON `{image_id, options, format: png\|zip, name}`: full-size print file |
+| POST | `/api/tone/raw?width=&height=&options=` | Raw RGBA body in, RGBA out (for the Photoshop panel) |
 
 `options` fields: `brand`, `model`, `hoop`, `hoop_width_mm`,
 `hoop_height_mm`, `fabric`, `width_mm`, `colors`, `detail`, `density`,
