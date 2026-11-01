@@ -1,0 +1,108 @@
+/* Works in Photoshop UXP (flexbox only, no grid) and in browsers. */
+:root {
+  --bg: var(--uxp-host-background-color, #2b2b2b);
+  --card: #353535;
+  --line: #4a4a4a;
+  --text: var(--uxp-host-text-color, #e8e8e8);
+  --muted: #a9a9a9;
+  --accent: #2f8cff;
+  --accent-text: #ffffff;
+  --good: #3fbf6f;
+  --warn: #f0b429;
+  --bad: #ef5350;
+}
+
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--bg); color: var(--text); font-family: -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; font-size: 12px; }
+#app { padding: 10px; max-width: 520px; margin: 0 auto; }
+.hidden { display: none !important; }
+.muted { color: var(--muted); }
+.small { font-size: 11px; }
+h2 { font-size: 13px; margin: 0 0 8px 0; display: flex; align-items: center; }
+h3 { font-size: 12px; margin: 12px 0 6px 0; }
+.step { display: inline-flex; align-items: center; justify-content: center; width: 18px; height: 18px; border-radius: 9px; background: var(--accent); color: var(--accent-text); font-size: 11px; margin-right: 6px; }
+
+.top { display: flex; justify-content: space-between; align-items: baseline; margin-bottom: 8px; }
+.brand { font-size: 16px; letter-spacing: 0.3px; }
+.card { background: var(--card); border: 1px solid var(--line); border-radius: 6px; padding: 10px; margin-bottom: 10px; }
+.row { display: flex; align-items: center; margin-top: 6px; flex-wrap: wrap; }
+.row > * { margin-right: 6px; }
+.row.gap { margin-top: 8px; }
+
+.btn { background: #4a4a4a; color: var(--text); border: 1px solid #5a5a5a; border-radius: 4px; padding: 6px 10px; font-size: 12px; cursor: pointer; display: inline-block; text-align: center; }
+.btn:hover { background: #555; }
+.btn:disabled { opacity: 0.45; cursor: default; }
+.btn.small { padding: 4px 8px; font-size: 11px; }
+.btn.wide { flex: 1; width: 100%; margin-top: 6px; }
+.btn.primary { background: var(--accent); border-color: var(--accent); color: var(--accent-text); font-weight: 600; }
+.btn.huge { width: 100%; padding: 12px; font-size: 15px; margin-bottom: 4px; }
+label.btn input[type=file] { display: none; }
+
+.presets { display: flex; flex-wrap: wrap; }
+.preset { width: calc(50% - 4px); margin: 0 8px 8px 0; padding: 8px; border: 1px solid var(--line); border-radius: 5px; cursor: pointer; background: #3c3c3c; }
+.preset:nth-child(2n) { margin-right: 0; }
+.preset b { display: block; font-size: 12px; margin-bottom: 2px; }
+.preset span { color: var(--muted); font-size: 10.5px; }
+.preset.on { border-color: var(--accent); background: #24364d; }
+
+.swatches { display: flex; flex-wrap: wrap; }
+.sw { width: 24px; height: 24px; border-radius: 4px; margin: 0 6px 6px 0; border: 2px solid #666; cursor: pointer; }
+.sw.on { border-color: var(--accent); }
+.chip { width: 22px; height: 22px; border-radius: 4px; border: 1px solid #777; display: inline-block; }
+.hex { width: 80px; background: #252525; color: var(--text); border: 1px solid #555; border-radius: 3px; padding: 4px 6px; font-family: Menlo, Consolas, monospace; }
+
+.segmented { display: flex; }
+.segmented .seg { flex: 1; padding: 9px 0; text-align: center; border: 1px solid var(--line); background: #3c3c3c; cursor: pointer; font-size: 14px; font-weight: 600; margin-right: -1px; }
+.segmented .seg:first-child { border-radius: 4px 0 0 4px; }
+.segmented .seg:last-child { border-radius: 0 4px 4px 0; }
+.segmented .seg.on { background: var(--accent); border-color: var(--accent); color: var(--accent-text); }
+#countHint { margin-top: 6px; }
+
+.status { min-height: 16px; margin: 2px 0 10px 0; text-align: center; }
+.status.err { color: var(--bad); }
+
+.result-head { display: flex; justify-content: space-between; align-items: center; }
+.badge { padding: 3px 8px; border-radius: 10px; font-weight: 700; font-size: 11px; }
+.badge.Excellent { background: #1f5133; color: #9ff0bf; }
+.badge.Good { background: #2b4a2b; color: #c7f0a0; }
+.badge.Fair { background: #57471c; color: #ffe08a; }
+.badge.Poor { background: #5a2525; color: #ffb3b3; }
+.preview-wrap { background: repeating-linear-gradient(45deg, #2a2a2a 0 8px, #303030 8px 16px); border-radius: 4px; padding: 6px; text-align: center; margin: 6px 0; }
+#previewImg { max-width: 100%; max-height: 360px; image-rendering: auto; }
+.tabs { display: flex; flex-wrap: wrap; margin-top: 6px; }
+.tab { padding: 3px 7px; border: 1px solid var(--line); border-radius: 10px; margin: 0 4px 4px 0; cursor: pointer; font-size: 11px; }
+.tab.on { border-color: var(--accent); color: #9cc7ff; }
+
+.screens { border-top: 1px solid var(--line); }
+.scr { display: flex; align-items: center; padding: 5px 0; border-bottom: 1px solid var(--line); }
+.scr .n { width: 18px; color: var(--muted); }
+.scr .chip { margin-right: 6px; cursor: pointer; }
+.scr .name { flex: 1; background: transparent; color: var(--text); border: 1px solid transparent; border-radius: 3px; padding: 3px 4px; font-size: 12px; min-width: 60px; }
+.scr .name:focus { border-color: #666; background: #252525; }
+.scr .meta { width: 92px; text-align: right; color: var(--muted); font-size: 10.5px; margin-right: 4px; }
+.scr .ic { width: 22px; height: 22px; padding: 0; margin-left: 2px; font-size: 11px; }
+.scr .ic.on { background: #5a4b1c; border-color: var(--warn); }
+.scr.ub .name { font-style: italic; }
+
+.warnings { padding-left: 16px; margin: 8px 0 0 0; }
+.warnings li { margin-bottom: 4px; }
+.warnings li.warn { color: var(--warn); }
+.warnings li.tip { color: var(--muted); }
+
+.collapsible .toggle { cursor: pointer; margin-bottom: 0; }
+.collapsible .toggle:before { content: "\25B8"; margin-right: 6px; color: var(--muted); }
+.collapsible.open .toggle:before { content: "\25BE"; }
+.collapsible .body { display: none; margin-top: 8px; }
+.collapsible.open .body { display: block; }
+
+.field { display: flex; align-items: center; margin-bottom: 7px; }
+.field > label { width: 112px; color: var(--muted); }
+.field > .ctl { flex: 1; display: flex; align-items: center; }
+.field select, .field input[type=number] { background: #252525; color: var(--text); border: 1px solid #555; border-radius: 3px; padding: 3px; font-size: 12px; }
+.field input[type=range] { flex: 1; }
+.field .val { width: 42px; text-align: right; margin-left: 6px; }
+.field.dim { display: none; }
+.check { display: flex; align-items: center; margin: 6px 0; }
+.check input { margin-right: 6px; }
+select { background: #252525; color: var(--text); border: 1px solid #555; border-radius: 3px; padding: 4px; }
+footer { text-align: center; margin: 10px 0 20px 0; }

@@ -1,0 +1,12 @@
+{
+  "name": "ecko-seps",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Screen printing color separations for Photoshop (UXP plugin)",
+  "license": "UNLICENSED",
+  "scripts": {
+    "build": "node tools/build.js",
+    "test": "node tools/build.js --check && node --test test/*.test.js",
+    "sep": "node tools/sep-cli.js"
+  }
+}

@@ -1,0 +1,28 @@
+{
+  "manifestVersion": 5,
+  "id": "com.ecko.seps",
+  "name": "Ecko Seps",
+  "version": "1.0.0",
+  "main": "index.html",
+  "host": { "app": "PS", "minVersion": "25.0.0" },
+  "entrypoints": [
+    {
+      "type": "panel",
+      "id": "ecko-seps",
+      "label": { "default": "Ecko Seps" },
+      "minimumSize": { "width": 300, "height": 420 },
+      "maximumSize": { "width": 900, "height": 4000 },
+      "preferredDockedSize": { "width": 340, "height": 760 },
+      "preferredFloatingSize": { "width": 380, "height": 800 },
+      "icons": [
+        { "width": 23, "height": 23, "path": "icons/panel.png", "scale": [1, 2], "theme": ["all"], "species": ["chrome"] }
+      ]
+    }
+  ],
+  "icons": [
+    { "width": 24, "height": 24, "path": "icons/plugin.png", "scale": [1, 2], "theme": ["all"], "species": ["pluginList"] }
+  ],
+  "requiredPermissions": {
+    "localFileSystem": "request"
+  }
+}

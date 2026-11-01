@@ -57,6 +57,14 @@ halftone templates like GryzTone.
 See [docs/competitive-research.md](docs/competitive-research.md) for the
 complaints about existing software and how each one is handled here.
 
+## Also in this repo: Ecko Seps (screen printing)
+
+[`photoshop-seps/`](photoshop-seps/README.md) is a Photoshop plug-in for
+screen-print color separations: sim process, index, spot, CMYK and one-color,
+with 2–10 screens or Auto, PMS library mapping, halftone/FM/index film
+output with registration marks, and an on-shirt preview with a match score.
+See its [research notes](photoshop-seps/docs/competitive-research.md).
+
 ## Run it
 
 ```bash
