@@ -52,7 +52,7 @@
     black_point: [0, 0.95], white_point: [0.05, 1], sharpen: [0, 3],
     min_dot: [0, 0.5], max_dot: [0.5, 1], dot_gain: [0, 0.4], roughness: [0, 1],
     misregister_mm: [0, 5], bg_tolerance: [1, 80], seed: [0, 2 ** 31 - 1], choke_mm: [0, 1],
-    threshold_levels: [2, 8], threshold_soft: [0, 0.3], smooth_mm: [0, 3], denoise: [0, 3],
+    threshold_levels: [2, 8], threshold_soft: [0, 0.3], smooth_mm: [0, 3], denoise: [0, 3], border_mm: [1, 120],
   };
   const TEXT_RANGES = { size: [0.02, 1.0], arc: [-340, 340], x: [-2, 2], y: [-2, 2], spacing: [-0.2, 1.0] };
   const TEXT_DEFAULTS = { font: "varsity", size: 0.12, arc: 0.0, x: 0.0, y: -0.7, spacing: 0.05, color: "#000000" };
@@ -69,7 +69,9 @@
     }
     if (o.white_point <= o.black_point + 0.02) throw new OptionError("The white point must be above the black point.");
     const enums = { mode: CATALOG.modes_map, style: STYLES, target: TARGETS, shirt_fit: SHIRT_FITS,
-      underbase: { auto: 1, on: 1, off: 1 }, palette: { image: 1, ...PALETTES }, threshold_colors: { image: 1, ink: 1, palette: 1 } };
+      underbase: { auto: 1, on: 1, off: 1 }, palette: { image: 1, ...PALETTES }, threshold_colors: { image: 1, ink: 1, palette: 1 },
+      border: Object.fromEntries(CATALOG.api.borders.map((b) => [b.id, 1])),
+      border_shape: Object.fromEntries(CATALOG.api.border_shapes.map((b) => [b.id, 1])) };
     for (const [name, table] of Object.entries(enums)) {
       if (!(o[name] in table)) throw new OptionError(`Unknown ${name}: ${JSON.stringify(o[name])}`);
     }
@@ -1257,19 +1259,26 @@
     fit = fit || resolveFit(prep, o);
     const [outW] = outSize(prep, o), xs = grid(x0, gw, step), ys = grid(y0, gh, step);
     const samples = {}, result = [];
+    const [, outH] = outSize(prep, o), border = borderMask(xs, ys, o, outW, outH);
     const gridded = o.mode === "index" || DIFFUSION_STYLES.includes(o.style);
     const igrids = o.mode === "index" ? indexGrids(prep, o, fit, plates) : null;
     for (const p of plates) {
       if (gridded) {
         if (!p.on) { result.push(new Uint8Array(gw * gh)); continue; }
         const G = igrids ? igrids[p.underbase ? "base" : p.src] : diffusionGrid(prep, o, fit, plates, p);
-        result.push(lookupGrid(G, xs, ys, p.shift[0], p.shift[1]));
+        const bm = lookupGrid(G, xs, ys, p.shift[0], p.shift[1]);
+        if (border) for (let k = 0; k < bm.length; k++) bm[k] &= border.keep[k];
+        result.push(bm);
         continue;
       }
       const key = p.shift.join(",");
       if (!samples[key]) {
         const s = sample(prep, x0, y0, gw, gh, step, outW, p.shift[0], p.shift[1]);
-        samples[key] = coverages(s, prep, o, fit).map((c) => shapeDots(c, o));
+        samples[key] = coverages(s, prep, o, fit).map((c) => {
+          shapeDots(c, o);
+          if (border) for (let k = 0; k < c.length; k++) c[k] *= border.soft[k];   // fades shrink the dots
+          return c;
+        });
       }
       if (!p.on) { result.push(new Uint8Array(gw * gh)); continue; }
       const covs = samples[key], cov = p.underbase ? underbaseCov(covs, plates, o) : choke(covs[p.src], p.choke_mm, o);
@@ -1277,7 +1286,7 @@
       // seed by ink, not list position, so adding an underbase never changes the other plates
       const T = threshold(sx, sy, o, p.angle, o.seed * 31 + (p.src >= 0 ? p.src : 97));
       const bm = new Uint8Array(gw * gh);
-      for (let k = 0; k < bm.length; k++) bm[k] = cov[k] > T[k] ? 1 : 0;
+      for (let k = 0; k < bm.length; k++) bm[k] = cov[k] > T[k] && (!border || border.keep[k]) ? 1 : 0;
       result.push(bm);
     }
     if (o.textures.length) {
@@ -1289,11 +1298,73 @@
         const s = sample(prep, x0, y0, gw, gh, step, outW), inks = plates.map((p, i) => (p.underbase || !p.on ? -1 : i)).filter((i) => i >= 0);
         if (inks.length) {
           const top = result[inks[inks.length - 1]];
-          for (let k = 0; k < top.length; k++) if (add[k] && s.a[k] > 0.5 && !remove[k]) top[k] = 1;
+          for (let k = 0; k < top.length; k++) if (add[k] && s.a[k] > 0.5 && !remove[k] && (!border || border.keep[k])) top[k] = 1;
         }
       }
     }
     return result;
+  }
+
+  // ---------------------------------------------------------------- border knockouts
+
+  /** Edge knockout in global print coordinates: {soft (ink multiplier), keep (0/1)}, or null for none.
+   *  Soft fades go through the halftone, so the print stays strictly on/off. */
+  function borderMask(xs, ys, o, outW, outH) {
+    if (o.border === "none") return null;
+    const gw = xs.length, gh = ys.length, n = gw * gh, W = outW, H = outH;
+    const w = Math.max(1, o.border_mm * o.dpi / 25.4), seed = o.seed * 104729 + 7;
+    const d = new Float32Array(n), along = new Float32Array(n);
+    const R = Math.min(W, H) * 0.15;
+    for (let i = 0; i < gh; i++) for (let j = 0; j < gw; j++) {
+      const X = xs[j], Y = ys[i], k = i * gw + j, ax = Math.min(X, W - X), ay = Math.min(Y, H - Y);
+      if (o.border_shape === "oval") {
+        const nx = (X - W / 2) / (W / 2), ny = (Y - H / 2) / (H / 2);
+        d[k] = (1 - Math.hypot(nx, ny)) * Math.min(W, H) / 2;
+        along[k] = Math.atan2(ny, nx) * (W + H) / 4;
+      } else {
+        d[k] = Math.min(ax, ay);
+        if (o.border_shape === "rounded" && ax < R && ay < R) d[k] = R - Math.hypot(R - ax, R - ay);
+        along[k] = ax < ay ? Y : X;
+      }
+    }
+    const soft = new Float32Array(n).fill(1), keep = new Uint8Array(n);
+    const sm = (t) => { const c = Math.max(0, Math.min(1, t)); return c * c * (3 - 2 * c); };
+    for (let k = 0; k < n; k++) keep[k] = d[k] > 0 ? 1 : 0;
+    if (o.border === "fade") {
+      for (let k = 0; k < n; k++) soft[k] = sm(d[k] / w);
+    } else if (o.border === "grunge") {
+      const a = fbm(xs, ys, w * 0.45, seed, 5), b = fbm(xs, ys, Math.max(w * 0.08, 0.8), seed + 1, 3);
+      for (let k = 0; k < n; k++) {
+        const dd = d[k] + w * (0.9 * (a[k] - 0.5) + 0.35 * (b[k] - 0.5));
+        soft[k] = sm((dd - 0.15 * w) / (0.6 * w));
+        if (!(dd > 0.1 * w)) keep[k] = 0;
+      }
+    } else if (o.border === "torn") {
+      const a = fbm(xs, ys, w * 0.3, seed, 5), b = fbm(xs, ys, Math.max(w * 0.04, 0.8), seed + 2, 2);
+      for (let k = 0; k < n; k++) if (!(d[k] + w * 0.5 * (a[k] - 0.5) + w * 0.12 * (b[k] - 0.5) > w * 0.35)) keep[k] = 0;
+    } else if (o.border === "storm") {
+      const a = fbm(xs, ys, w * 0.5, seed, 4, 7), b = fbm(xs, ys, Math.max(w * 0.07, 0.8), seed + 3, 3);
+      const sp = fbm(xs, ys, Math.max(w * 0.03, 0.8), seed + 4, 2);
+      for (let k = 0; k < n; k++) {
+        const dd = d[k] + w * 1.1 * (a[k] - 0.5) + w * 0.3 * (b[k] - 0.5);
+        soft[k] = sm((dd - 0.1 * w) / (0.8 * w));
+        const speck = sp[k] > 1 - 0.18 * Math.max(0, Math.min(1, 1 - d[k] / (1.5 * w)));
+        if (!(dd > 0) || speck) keep[k] = 0;
+      }
+    } else if (o.border === "barbwire") {
+      const t = Math.max(1.5, w * 0.035), c = w * 0.55, amp = w * 0.08, period = w * 0.5, gap = w * 0.9, barb = w * 0.15;
+      for (let k = 0; k < n; k++) {
+        const wave = amp * Math.sin(2 * Math.PI * along[k] / period);
+        const u = (((along[k] % gap) + gap) % gap) - gap / 2, v = d[k] - c;
+        const wire = Math.abs(d[k] - c - wave) < t || Math.abs(d[k] - c + wave) < t ||
+          (Math.hypot(u, v) < barb && (Math.abs(u - v) < t || Math.abs(u + v) < t));
+        if (!(d[k] > c - amp - 3 * t) || wire) keep[k] = 0;
+      }
+    }
+    if (o.border === "grunge" || o.border === "storm") {   // the noise never lets the art's straight edge show
+      for (let k = 0; k < n; k++) { soft[k] *= sm(d[k] / (0.3 * w)); if (!(d[k] > 0.06 * w)) keep[k] = 0; }
+    }
+    return { soft, keep };
   }
 
   // ---------------------------------------------------------------- dither grids (error diffusion, index colour)
@@ -1377,6 +1448,8 @@
       const { outW, cell, GW, GH } = gridGeometry(prep, o);
       const s = sample(prep, 0, 0, GW, GH, cell, outW);
       const covs = coverages(s, prep, o, fit).map((c) => shapeDots(c, o));
+      const bm = borderMask(grid(0, GW, cell), grid(0, GH, cell), o, outW, outSize(prep, o)[1]);
+      if (bm) for (const c of covs) for (let k = 0; k < c.length; k++) c[k] *= bm.soft[k] * bm.keep[k];
       const cov = p.underbase ? underbaseCov(covs, plates, o) : choke(covs[p.src], p.choke_mm, o);
       return { G: errorDiffuse(cov, GW, GH, o.style), cell, GW, GH };
     });
@@ -1388,6 +1461,12 @@
       const { outW, cell, GW, GH } = gridGeometry(prep, o);
       const s = sample(prep, 0, 0, GW, GH, cell, outW), tone = toneFn(o);
       const t = s.rgb.map((v) => tone(v)), shirt = hex(o.garment).map((v) => v / 255);
+      const bm = borderMask(grid(0, GW, cell), grid(0, GH, cell), o, outW, outSize(prep, o)[1]);
+      if (bm) for (let k = 0; k < GW * GH; k++) {   // fade toward the shirt colour; cut where the border knocks out
+        const f = bm.soft[k];
+        for (let c = 0; c < 3; c++) t[k * 3 + c] = t[k * 3 + c] * f + shirt[c] * (1 - f);
+        if (!bm.keep[k]) s.a[k] = 0;
+      }
       const cols = [...fit.spot.map((c) => (c ? c.map((v) => v / 255) : shirt)), shirt];
       const idx = errorDiffusePalette(t, s.a, GW, GH, cols, DIFFUSION_STYLES.includes(o.style) ? o.style : "fs");
       const grids = {}, base = new Uint8Array(GW * GH);

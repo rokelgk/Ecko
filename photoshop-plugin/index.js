@@ -18,6 +18,7 @@ function status(msg, isErr) {
 function labels() {
   $("lpiOut").textContent = $("lpi").value;
   $("angleOut").textContent = `${$("angle").value}°`;
+  $("borderOut").textContent = $("borderMm").value;
 }
 
 function applyPreset() {
@@ -39,6 +40,7 @@ function options(doc, widthPx) {
     ...(p ? p.options : {}),
     style: $("style").value, lpi: parseFloat($("lpi").value), angle: parseFloat($("angle").value),
     target: $("target").value, garment: $("garment").value, shirt_fit: $("fit").value, dpi,
+    border: $("border").value, border_shape: $("borderShape").value, border_mm: parseFloat($("borderMm").value),
     width_in: Math.max(0.5, widthPx / dpi), text: [],
   };
   // Image textures need a file picker; the web page has them. Procedural textures work here.
@@ -96,6 +98,9 @@ fill("style", cat.styles);
 fill("target", cat.targets);
 fill("fit", cat.shirt_fits);
 fill("garment", cat.garments, (g) => g.name, (g) => g.hex);
+fill("border", cat.borders);
+fill("borderShape", cat.border_shapes);
+$("borderMm").addEventListener("input", labels);
 $("preset").addEventListener("change", applyPreset);
 $("lpi").addEventListener("input", labels);
 $("angle").addEventListener("input", labels);

@@ -180,3 +180,23 @@ test("index colour: each pixel one ink; fixed palettes", () => {
   const pal = E.resolveFit(p, E.parseOptions({ ...o, palette: "gameboy" })).palette.map(E.toHex);
   for (const c of pal) assert.ok(E.PALETTES.gameboy.colors.includes(c), c);
 });
+
+// ---------------------------------------------------------------- border knockouts
+
+for (const border of ["fade", "grunge", "torn", "storm", "barbwire"]) for (const shape of ["rect", "oval", "rounded"]) {
+  test(`${border} ${shape} border knocks out the edge`, () => {
+    const w = 300, h = 300, rgba = new Uint8Array(w * h * 4).fill(90);
+    for (let k = 3; k < rgba.length; k += 4) rgba[k] = 255;
+    const o = E.parseOptions({ width_in: 3, dpi: 150, remove_background: false, sharpen: 0, border, border_shape: shape, border_mm: 10 });
+    const p = E.prepare(rgba, w, h, o), r = E.renderFull(p, o, null, true), ink = r.seps[0], W = r.width, H = r.height;
+    let edge = 0, en = 0, mid = 0, mn = 0;
+    for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) {
+      const v = ink[y * W + x];
+      if (x < 3 || y < 3 || x >= W - 3 || y >= H - 3) { edge += v; en++; }
+      if (Math.abs(x - W / 2) < 20 && Math.abs(y - H / 2) < 20) { mid += v; mn++; }
+    }
+    assert.ok(edge / en < 0.05 && mid / mn > 0.45, `${edge / en} ${mid / mn}`);
+    const crop = E.renderPreview(p, o, 900, [5, 7, 150, 90]);
+    for (let y = 0; y < 90; y++) for (let x = 0; x < 600; x++) assert.strictEqual(crop.rgba[y * 600 + x], r.rgba[((y + 7) * W + 5) * 4 + x]);
+  });
+}

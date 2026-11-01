@@ -495,3 +495,44 @@ def test_smooth_and_denoise_are_accepted(logo):
         E.parse_options({"denoise": 9})
     with pytest.raises(ValueError):
         E.parse_options({"palette": "nope"})
+
+
+# ------------------------------------------------------------- border knockouts
+
+
+@pytest.fixture(scope="module")
+def solid_square():
+    return _png(np.full((300, 300, 3), 90, np.uint8))
+
+
+@pytest.mark.parametrize("border", ["fade", "grunge", "torn", "storm", "barbwire"])
+@pytest.mark.parametrize("shape", ["rect", "oval", "rounded"])
+def test_borders_knock_out_the_edge(solid_square, border, shape):
+    o = E.parse_options({"width_in": 3, "dpi": 150, "remove_background": False, "sharpen": 0, "border": border,
+                         "border_shape": shape, "border_mm": 10})
+    prep = E.prepare(solid_square, o)
+    full, _, seps = E.render_full(prep, o, keep_plates=True)
+    ink = seps[0]
+    h, w = ink.shape
+    edge = np.concatenate([ink[:3].ravel(), ink[-3:].ravel(), ink[:, :3].ravel(), ink[:, -3:].ravel()])
+    centre = ink[h // 2 - 20:h // 2 + 20, w // 2 - 20:w // 2 + 20]
+    assert edge.mean() < 0.05 < centre.mean() - 0.4       # bare at the edge, full ink in the middle
+    assert set(np.unique(full[..., 3])) <= {0, 255}
+    crop, _, _ = E.render_preview(prep, o, region=(5, 7, 150, 90))
+    assert np.array_equal(crop, full[7:97, 5:155])
+
+
+def test_fade_border_is_a_halftone_gradient(solid_square):
+    o = E.parse_options({"width_in": 3, "dpi": 150, "remove_background": False, "sharpen": 0, "border": "fade",
+                         "border_mm": 20, "roughness": 0, "min_dot": 0})
+    _, _, seps = E.render_full(E.prepare(solid_square, o), o, keep_plates=True)
+    row = seps[0][:, :]
+    cols = [float(row[150 - 10:150 + 10, x:x + 10].mean()) for x in range(0, 120, 12)]
+    assert all(b >= a - 0.03 for a, b in zip(cols, cols[1:])) and cols[0] < 0.1 < cols[-1] - 0.3
+
+
+def test_border_validation():
+    with pytest.raises(ValueError):
+        E.parse_options({"border": "lightning"})
+    with pytest.raises(ValueError):
+        E.parse_options({"border_mm": 500})

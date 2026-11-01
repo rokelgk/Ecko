@@ -121,6 +121,8 @@ def catalog():
         "targets": [{"id": k, "name": v["label"], "lpi": list(v["lpi"]), "min_dot_mm": v["min_dot_mm"]}
                     for k, v in E.TARGETS.items()],
         "presets": PRESETS,
+        "borders": [{"id": k, "name": v} for k, v in E.BORDERS.items()],
+        "border_shapes": [{"id": k, "name": v} for k, v in E.BORDER_SHAPES.items()],
         "style_groups": [{"name": n, "styles": ids} for n, ids in E.STYLE_GROUPS],
         "palettes": [{"id": k, "name": v["label"], "colors": v["colors"]} for k, v in E.PALETTES.items()],
         "fonts": [{"id": f.id, "name": f.name} for f in E.FONTS.values()],

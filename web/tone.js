@@ -4,9 +4,9 @@
   const $ = (id) => document.getElementById(id);
   const SLIDERS = ["bg_tolerance", "lpi", "grain_mm", "angle", "spot_colors", "spot_softness", "brightness",
     "contrast", "gamma", "black_point", "white_point", "sharpen", "min_dot", "max_dot", "dot_gain",
-    "roughness", "misregister_mm", "choke_mm", "threshold_levels", "threshold_soft", "smooth_mm", "denoise"];
+    "roughness", "misregister_mm", "choke_mm", "threshold_levels", "threshold_soft", "smooth_mm", "denoise", "border_mm"];
   const CHECKS = ["remove_background", "invert", "knockout", "registration_marks", "threshold_stack"];
-  const SELECTS = ["mode", "style", "target", "shirt_fit", "underbase", "threshold_colors", "palette"];
+  const SELECTS = ["mode", "style", "target", "shirt_fit", "underbase", "threshold_colors", "palette", "border_shape"];
   const TONE_KEYS = ["brightness", "contrast", "gamma", "black_point", "white_point", "sharpen", "invert"];
   const STORE_KEY = "ecko-tone-options";
 
@@ -373,6 +373,8 @@
     $("thresholdBox").hidden = !thr;
     $("paletteRow").hidden = !(opts.mode === "spot" || opts.mode === "index" || (thr && opts.threshold_colors === "palette"));
     buildCuts();
+    $("borderOpts").hidden = opts.border === "none";
+    document.querySelectorAll("#borderPicks button").forEach((b) => b.classList.toggle("on", b.dataset.id === opts.border));
     $("bgTolRow").hidden = !opts.remove_background;
     buildInks();
     buildTextures();
@@ -392,6 +394,7 @@
     $("misOut").textContent = `${fmt(opts.misregister_mm)} mm`;
     $("chokeOut").textContent = `${fmt(opts.choke_mm)} mm`;
     $("levelsOut").textContent = opts.threshold_levels;
+    $("borderOut").textContent = `${fmt(opts.border_mm, 0)} mm`;
     $("softOut").textContent = opts.threshold_soft > 0 ? fmt(opts.threshold_soft) : "solid";
     $("smoothOut").textContent = opts.smooth_mm > 0 ? `${fmt(opts.smooth_mm)} mm` : "off";
     $("denoiseOut").textContent = opts.denoise > 0 ? opts.denoise : "off";
@@ -401,6 +404,7 @@
 
   function applyPreset(p) {
     const keep = { remove_background: opts.remove_background, bg_tolerance: opts.bg_tolerance, seed: opts.seed,
+      border: opts.border, border_mm: opts.border_mm, border_shape: opts.border_shape,
       text: opts.text, shirt_fit: opts.shirt_fit, underbase: opts.underbase, choke_mm: opts.choke_mm };
     opts = { ...structuredClone(catalog.defaults), ...keep, ...structuredClone(p.options), _preset: p.id };
     for (const t of Object.values(tex)) t.on = false;
@@ -887,6 +891,16 @@
     $("style").innerHTML = (catalog.style_groups || [{ name: "Patterns", styles: catalog.styles.map((x) => x.id) }])
       .map((g) => `<optgroup label="${g.name}">${g.styles.map((id) => `<option value="${id}">${names[id]}</option>`).join("")}</optgroup>`).join("");
     buildSelect("palette", [{ id: "image", name: "From the picture" }, ...(catalog.palettes || [])]);
+    buildSelect("border_shape", catalog.border_shapes || []);
+    $("borderPicks").innerHTML = "";
+    for (const b of catalog.borders || []) {
+      const btn = document.createElement("button");
+      btn.type = "button";
+      btn.dataset.id = b.id;
+      btn.textContent = b.name;
+      btn.addEventListener("click", () => { opts.border = b.id; opts._preset = null; syncUI(); changed(); });
+      $("borderPicks").appendChild(btn);
+    }
     buildSelect("target", catalog.targets);
     buildSelect("shirt_fit", catalog.shirt_fits);
     buildPresets();

@@ -75,6 +75,9 @@ download a print-ready file.
   cut points, smoothing, and knockout or overlap. Tones can also blend through any pattern.
 - **Dithers** (DitherTone-style): Floyd–Steinberg, Atkinson, Jarvis, Stucki, Burkes, Sierra,
   ordered Bayer and wave lines. Plus **index colour** (one ink per pixel) with built-in palettes.
+- **Border knockouts:** faded edge, grunge, torn, storm or barbed wire, in a rectangle, oval
+  or rounded shape, to melt a square photo into the shirt. Fades go through the halftone dots,
+  so prints stay DTF-safe.
 - **Curved text:** arched or smile text in six fonts, with or without a picture.
 - **On-shirt mockup:** see the print to scale on a T-shirt of the chosen colour.
 - **Batch:** many designs × up to 12 shirt colours in one ZIP. Every colour gets its own

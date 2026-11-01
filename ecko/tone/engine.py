@@ -111,6 +111,16 @@ INK_BLACK = (29, 29, 31)
 FONTS = {f.id: f for f in lettering.FONTS}
 MAX_TEXT_LAYERS = 6
 
+BORDERS = {
+    "none": "No border",
+    "fade": "Faded edge",
+    "grunge": "Grunge",
+    "torn": "Torn edge",
+    "storm": "Storm",
+    "barbwire": "Barbed wire",
+}
+BORDER_SHAPES = {"rect": "Rectangle", "oval": "Oval", "rounded": "Rounded"}
+
 MAX_OUTPUT_PX = 120_000_000
 MAX_SOURCE_SIDE = 5000
 LOUPE_MAX = 800
@@ -180,6 +190,9 @@ class ToneOptions:
     palette: str = "image"           # image or a built-in palette, for spot / index / threshold colours
     smooth_mm: float = 0.0           # simplify shapes before separating
     denoise: int = 0                 # 0-3: remove speckle noise
+    border: str = "none"             # edge knockout: none | fade | grunge | torn | storm | barbwire
+    border_mm: float = 15.0          # how far in from the edge the border reaches
+    border_shape: str = "rect"       # rect | oval | rounded
 
     # Settings that change the prepared source (the slow step).
     def prepare_key(self) -> tuple:
@@ -198,6 +211,7 @@ _RANGES = {
     "min_dot": (0, 0.5), "max_dot": (0.5, 1), "dot_gain": (0, 0.4), "roughness": (0, 1),
     "misregister_mm": (0, 5), "bg_tolerance": (1, 80), "seed": (0, 2**31 - 1), "choke_mm": (0, 1),
     "threshold_levels": (2, 8), "threshold_soft": (0, 0.3), "smooth_mm": (0, 3), "denoise": (0, 3),
+    "border_mm": (1, 120),
 }
 
 
@@ -222,7 +236,8 @@ def parse_options(data: dict | None) -> ToneOptions:
     for name, table in (("mode", MODES), ("style", STYLES), ("target", TARGETS), ("shirt_fit", SHIRT_FITS),
                         ("underbase", {"auto": 1, "on": 1, "off": 1}),
                         ("palette", {"image": 1, **PALETTES}),
-                        ("threshold_colors", {"image": 1, "ink": 1, "palette": 1})):
+                        ("threshold_colors", {"image": 1, "ink": 1, "palette": 1}),
+                        ("border", BORDERS), ("border_shape", BORDER_SHAPES)):
         if getattr(o, name) not in table:
             raise ValueError(f"Unknown {name}: {getattr(o, name)!r}")
     if not isinstance(o.thresholds, list) or len(o.thresholds) > 7:
@@ -1058,6 +1073,7 @@ def render_plates(prep: Prepared, o: ToneOptions, x0: float, y0: float, gw: int,
     ys = y0 + (np.arange(gh) + 0.5) * step
     samples: dict[tuple, list[np.ndarray]] = {}
     result = []
+    b_soft, b_keep = border_mask(xs, ys, o, out_w, prep.out_size(o)[1])
     gridded = o.mode == "index" or o.style in DIFFUSION_STYLES
     index_grids = _index_grids(prep, o, fit, plates) if o.mode == "index" else None
     for i, p in enumerate(plates):
@@ -1067,11 +1083,15 @@ def render_plates(prep: Prepared, o: ToneOptions, x0: float, y0: float, gw: int,
                 continue
             G, cell = (index_grids[p.src if not p.underbase else "base"] if index_grids is not None
                        else _diffusion_grid(prep, o, fit, plates, p))
-            result.append(_lookup(G, cell, xs - p.shift[0], ys - p.shift[1]))
+            bm = _lookup(G, cell, xs - p.shift[0], ys - p.shift[1])
+            result.append(bm & b_keep if b_keep is not None else bm)
             continue
         if p.shift not in samples:
             rgb, a = _sample(prep, x0, y0, gw, gh, step, out_w, *p.shift)
-            samples[p.shift] = [_shape_dots(c, o) for c in _coverages(rgb, a, prep, o, fit)]
+            covs0 = [_shape_dots(c, o) for c in _coverages(rgb, a, prep, o, fit)]
+            if b_soft is not None:   # border fades shrink the dots toward the edge
+                covs0 = [c * b_soft for c in covs0]
+            samples[p.shift] = covs0
         if not p.on:
             result.append(np.zeros((gh, gw), bool))
             continue
@@ -1079,7 +1099,7 @@ def render_plates(prep: Prepared, o: ToneOptions, x0: float, y0: float, gw: int,
         cov = _underbase(covs, plates, o) if p.underbase else _choke(covs[p.src], p.choke_mm, o)
         # seed by ink, not list position, so adding an underbase never changes the other plates
         T = threshold(xs - p.shift[0], ys - p.shift[1], o, p.angle, o.seed * 31 + (p.src if p.src >= 0 else 97))
-        result.append(cov > T)
+        result.append((cov > T) & b_keep if b_keep is not None else cov > T)
     if o.textures:
         remove, add = texture_masks(xs, ys, o, texture_images)
         alpha_any = None
@@ -1091,7 +1111,7 @@ def render_plates(prep: Prepared, o: ToneOptions, x0: float, y0: float, gw: int,
         if alpha_any is not None:
             inks = [i for i, p in enumerate(plates) if not p.underbase and p.on]
             if inks:  # toner specks go on the darkest / black plate (printed last)
-                result[inks[-1]] |= add & alpha_any & ~remove
+                result[inks[-1]] |= add & alpha_any & ~remove & (b_keep if b_keep is not None else True)
     return result
 
 
@@ -1125,6 +1145,71 @@ def _grid_geometry(prep: Prepared, o: ToneOptions):
     return out_w, cell, int(math.ceil(out_w / cell)), int(math.ceil(out_h / cell))
 
 
+def border_mask(xs, ys, o: ToneOptions, out_w: int, out_h: int):
+    """Edge knockout in global print coordinates: (soft 0..1 multiplier for ink, keep bool).
+    Soft fades go through the halftone (dots shrink), so the print stays strictly on/off."""
+    shape = (len(ys), len(xs))
+    if o.border == "none":
+        return None, None
+    X = np.asarray(xs, np.float64)[None, :]
+    Y = np.asarray(ys, np.float64)[:, None]
+    W, H = float(out_w), float(out_h)
+    w = max(1.0, o.border_mm * o.dpi / 25.4)
+    ax = np.minimum(X, W - X) + 0 * Y       # distance to the left/right edges
+    ay = np.minimum(Y, H - Y) + 0 * X       # distance to the top/bottom edges
+    if o.border_shape == "oval":
+        nx, ny = (X - W / 2) / (W / 2), (Y - H / 2) / (H / 2)
+        r = np.sqrt(nx * nx + ny * ny)
+        d = (1 - r) * min(W, H) / 2
+        s_along = np.arctan2(ny, nx) * (W + H) / 4   # position along the edge (for the wire)
+    else:
+        d = np.minimum(ax, ay)
+        if o.border_shape == "rounded":
+            R = min(W, H) * 0.15
+            corner = (ax < R) & (ay < R)
+            d = np.where(corner, R - np.hypot(R - ax, R - ay), d)
+        s_along = np.where(ax < ay, Y + 0 * X, X + 0 * Y)
+    d = d.astype(np.float32)
+    seed = o.seed * 104729 + 7
+    soft = np.ones(shape, np.float32)
+    keep = d > 0
+    sm = lambda t: (lambda c: c * c * (3 - 2 * c))(np.clip(t, 0, 1))  # noqa: E731
+    if o.border == "fade":
+        soft = sm(d / w)
+    elif o.border == "grunge":
+        n = noise.fbm(xs, ys, w * 0.45, seed, 5)
+        n2 = noise.fbm(xs, ys, max(w * 0.08, 0.8), seed + 1, 3)
+        dd = d + w * (0.9 * (n - 0.5) + 0.35 * (n2 - 0.5))
+        soft = sm((dd - 0.15 * w) / (0.6 * w))
+        keep &= dd > 0.1 * w
+    elif o.border == "torn":
+        n = noise.fbm(xs, ys, w * 0.3, seed, 5)
+        n2 = noise.fbm(xs, ys, max(w * 0.04, 0.8), seed + 2, 2)
+        keep &= (d + w * 0.5 * (n - 0.5) + w * 0.12 * (n2 - 0.5)) > w * 0.35
+    elif o.border == "storm":
+        ns = noise.fbm(xs, ys, w * 0.5, seed, 4, stretch=7.0)   # wind streaks
+        nf = noise.fbm(xs, ys, max(w * 0.07, 0.8), seed + 3, 3)
+        dd = d + w * 1.1 * (ns - 0.5) + w * 0.3 * (nf - 0.5)
+        soft = sm((dd - 0.1 * w) / (0.8 * w))
+        specks = noise.fbm(xs, ys, max(w * 0.03, 0.8), seed + 4, 2) > 1 - 0.18 * np.clip(1 - d / (1.5 * w), 0, 1)
+        keep &= (dd > 0) & ~specks
+    elif o.border == "barbwire":
+        t = max(1.5, w * 0.035)              # wire thickness
+        c = w * 0.55                         # wire runs this far in from the edge
+        amp, period, barb_gap, barb = w * 0.08, w * 0.5, w * 0.9, w * 0.15
+        wave = amp * np.sin(2 * np.pi * s_along / period)
+        strand1 = np.abs(d - c - wave) < t
+        strand2 = np.abs(d - c + wave) < t
+        u = np.mod(s_along, barb_gap) - barb_gap / 2
+        v = d - c
+        barbs = (np.hypot(u, v) < barb) & ((np.abs(u - v) < t) | (np.abs(u + v) < t))
+        keep &= (d > c - amp - 3 * t) & ~strand1 & ~strand2 & ~barbs
+    if o.border in ("grunge", "storm"):   # the noise never lets the art's straight edge show through
+        soft = soft * sm(d / (0.3 * w))
+        keep &= d > 0.06 * w
+    return soft.astype(np.float32), keep
+
+
 def _diffusion_grid(prep: Prepared, o: ToneOptions, fit, plates: list, p: Plate):
     """Error diffusion runs once over the whole print on a grid of grain-sized cells, so every view of
     the print (preview, loupe, export strips) reads the same dots."""
@@ -1135,6 +1220,10 @@ def _diffusion_grid(prep: Prepared, o: ToneOptions, fit, plates: list, p: Plate)
         out_w, cell, GW, GH = _grid_geometry(prep, o)
         rgb, a = _sample(prep, 0, 0, GW, GH, cell, out_w)
         covs = [_shape_dots(c, o) for c in _coverages(rgb, a, prep, o, fit)]
+        soft, keep = border_mask((np.arange(GW) + 0.5) * cell, (np.arange(GH) + 0.5) * cell, o, out_w,
+                                 prep.out_size(o)[1])
+        if soft is not None:
+            covs = [c * soft * keep for c in covs]
         cov = _underbase(covs, plates, o) if p.underbase else _choke(covs[p.src], p.choke_mm, o)
         return hybrid.error_diffuse(cov, o.style).astype(bool), cell
     return _cached_grid(key, make)
@@ -1149,6 +1238,11 @@ def _index_grids(prep: Prepared, o: ToneOptions, fit, plates: list) -> dict:
         rgb, a = _sample(prep, 0, 0, GW, GH, cell, out_w)
         t = _tone(rgb, o)
         shirt = np.array(_hex(o.garment), np.float32) / 255
+        soft, keep = border_mask((np.arange(GW) + 0.5) * cell, (np.arange(GH) + 0.5) * cell, o, out_w,
+                                 prep.out_size(o)[1])
+        if soft is not None:   # fade toward the shirt colour, cut where the border knocks out
+            t = t * soft[..., None] + shirt * (1 - soft[..., None])
+            a = a * keep
         cols = [np.array(c, np.float32) / 255 if c is not None else shirt for c in fit.spot] + [shirt]
         style = o.style if o.style in DIFFUSION_STYLES else "fs"
         idx = hybrid.error_diffuse_palette(t, a, np.array(cols), style)
