@@ -10,6 +10,7 @@ const halftone = require('./halftone');
 const tiff = require('./tiff');
 const presets = require('./presets');
 const ops = require('./image-ops');
+const prepare = require('./prepare');
 
 // Per-screen film settings from a preset/global film setting.
 function filmSettingsFor(screen, film) {
@@ -37,6 +38,27 @@ function renderScreenFilm(result, screen, film) {
   return halftone.renderFilm(screen.plate, result.width, result.height, result.dpi, Object.assign({ minDot }, f, { label }));
 }
 
+// Close-up of the print with real film dots: the region around (cx, cy)
+// (0..1 of the design) at film resolution, each screen halftoned with its
+// film settings and stacked on the garment.
+function dotPreview(result, film, cx, cy, size) {
+  const W = size || 360;
+  const screens = result.screens.map((s) => {
+    const f = filmSettingsFor(s, film);
+    const type = f.type === 'continuous' ? 'am' : f.type;
+    const dpi = f.dpi || 720;
+    const scale = dpi / result.dpi;
+    const fullW = result.width * scale, fullH = result.height * scale;
+    const x0 = Math.max(0, Math.min(fullW - W, Math.round(cx * fullW - W / 2)));
+    const y0 = Math.max(0, Math.min(fullH - W, Math.round(cy * fullH - W / 2)));
+    const bm = halftone.renderBitmap(s.plate, result.width, result.height, result.dpi, Object.assign({ minDot: result.options.minDot || 0 }, f, { type, region: { x: x0, y: y0, w: W, h: W } }));
+    return Object.assign({}, s, { plate: bm.data, w: bm.width, h: bm.height });
+  });
+  const w = screens.length ? screens[0].w : W, h = screens.length ? screens[0].h : W;
+  const rgba = sep.composite(screens, { hex: result.garment.hex, rgb: result.garment.rgb, lab: color.rgbToLab(result.garment.rgb) }, w, h, result.options, { binary: true });
+  return { rgba, width: w, height: h };
+}
+
 // Summary rows for UI and job sheets.
 function screenSummary(result, film) {
   return result.screens.map((s) => {
@@ -50,6 +72,6 @@ function screenSummary(result, film) {
 }
 
 module.exports = Object.assign(
-  { separate: sep.separate, DEFAULTS: sep.DEFAULTS, autoScreenCount: sep.autoScreenCount, filmSettingsFor, filmLabel, renderScreenFilm, screenSummary },
+  { separate: sep.separate, DEFAULTS: sep.DEFAULTS, autoScreenCount: sep.autoScreenCount, filmSettingsFor, filmLabel, renderScreenFilm, screenSummary, dotPreview, prepareArt: prepare.prepareArt, artInfo: prepare.artInfo, PREP_DEFAULTS: prepare.PREP_DEFAULTS },
   { color, inks, palette, halftone, tiff, presets, ops },
 );

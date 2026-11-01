@@ -177,3 +177,30 @@ test('the browser/Photoshop bundle exposes the same engine', () => {
   const r = globalThis.EckoEngine.separate(logo, preset('spot'));
   assert.strictEqual(r.screens.length, 3);
 });
+
+test('low-res art is upscaled to the target resolution at the chosen print size', () => {
+  const info = engine.artInfo(art, { printWidthIn: 6, targetPpi: 300 });
+  assert.strictEqual(Math.round(info.sourcePpi), 60);
+  assert.ok(info.upscaled && info.lowRes);
+  const p = engine.prepareArt(art, { printWidthIn: 6, targetPpi: 300 }, 0.25);
+  assert.strictEqual(p.image.width, 450);
+  assert.strictEqual(p.image.dpi, 75);
+});
+
+test('sharpen increases edge contrast; noise clean-up removes lone specks', () => {
+  const edge = (img) => { let s = 0; for (let y = 0; y < img.height; y++) for (let x = 1; x < img.width; x++) s += Math.abs(img.data[(y * img.width + x) * img.channels] - img.data[(y * img.width + x - 1) * img.channels]); return s; };
+  const soft = engine.prepareArt(logo, { printWidthIn: 2, upscale: false }).image;
+  const sharp = engine.prepareArt(logo, { printWidthIn: 2, upscale: false, sharpen: 1.5 }).image;
+  assert.ok(edge(sharp) > edge(soft) * 1.02, `${edge(sharp)} vs ${edge(soft)}`);
+  const noisy = { width: 20, height: 20, channels: 3, dpi: 300, data: new Uint8ClampedArray(1200).fill(200) };
+  noisy.data.set([0, 0, 0], (10 * 20 + 10) * 3);
+  const clean = engine.prepareArt(noisy, { denoise: 1 }).image;
+  assert.strictEqual(clean.data[(10 * 20 + 10) * 3], 200);
+});
+
+test('dot close-up renders the requested window', () => {
+  const r = engine.separate(art, preset('dark-sim', { lutGrid: 17 }));
+  const d = engine.dotPreview(r, engine.presets.getPreset('dark-sim').film, 0.5, 0.5, 200);
+  assert.strictEqual(d.width, 200);
+  assert.strictEqual(d.rgba.length, 200 * 200 * 4);
+});

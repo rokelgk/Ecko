@@ -48,7 +48,10 @@ function thresholdMatrix(shape) {
 function renderBitmap(plate, srcW, srcH, srcDpi, o) {
   const dpi = o.type === 'continuous' ? srcDpi : (o.dpi || 720);
   const scale = dpi / srcDpi;
-  const w = Math.max(1, Math.round(srcW * scale)), h = Math.max(1, Math.round(srcH * scale));
+  // o.region {x, y, w, h} renders only that window of the film (previews).
+  const R = o.region && o.type !== 'continuous' ? o.region : null;
+  const ox = R ? R.x : 0, oy = R ? R.y : 0;
+  const w = R ? R.w : Math.max(1, Math.round(srcW * scale)), h = R ? R.h : Math.max(1, Math.round(srcH * scale));
   const out = new Uint8Array(w * h);
   const inv = 1 / scale;
   if (o.type === 'continuous') {
@@ -57,14 +60,14 @@ function renderBitmap(plate, srcW, srcH, srcDpi, o) {
   }
   if (o.type === 'index') {
     for (let y = 0; y < h; y++) {
-      const sy = Math.min(srcH - 1, Math.floor(y * inv));
-      for (let x = 0; x < w; x++) out[y * w + x] = plate[sy * srcW + Math.min(srcW - 1, Math.floor(x * inv))] >= 128 ? 255 : 0;
+      const sy = Math.min(srcH - 1, Math.floor((y + oy) * inv));
+      for (let x = 0; x < w; x++) out[y * w + x] = plate[sy * srcW + Math.min(srcW - 1, Math.floor((x + ox) * inv))] >= 128 ? 255 : 0;
     }
     return { data: out, width: w, height: h, dpi, bits: 1 };
   }
   if (o.type === 'threshold') {
     for (let y = 0; y < h; y++) {
-      for (let x = 0; x < w; x++) out[y * w + x] = samplePlate(plate, srcW, srcH, (x + 0.5) * inv, (y + 0.5) * inv) >= 0.5 ? 255 : 0;
+      for (let x = 0; x < w; x++) out[y * w + x] = samplePlate(plate, srcW, srcH, (x + ox + 0.5) * inv, (y + oy + 0.5) * inv) >= 0.5 ? 255 : 0;
     }
     return { data: out, width: w, height: h, dpi, bits: 1 };
   }
@@ -79,7 +82,7 @@ function renderBitmap(plate, srcW, srcH, srcDpi, o) {
       const ltr = (gy & 1) === 0;
       for (let k = 0; k < gw; k++) {
         const gx = ltr ? k : gw - 1 - k;
-        const v = samplePlate(plate, srcW, srcH, (gx + 0.5) * dot * inv, (gy + 0.5) * dot * inv) + err[cur + gx + 1];
+        const v = samplePlate(plate, srcW, srcH, ((gx + 0.5) * dot + ox) * inv, ((gy + 0.5) * dot + oy) * inv) + err[cur + gx + 1];
         const on = v >= 0.5 ? 1 : 0;
         bits[gy * gw + gx] = on;
         const q = v - on, d = ltr ? 1 : -1;
@@ -101,10 +104,11 @@ function renderBitmap(plate, srcW, srcH, srcDpi, o) {
   const ca = Math.cos(a) / cell, sa = Math.sin(a) / cell;
   for (let y = 0; y < h; y++) {
     for (let x = 0; x < w; x++) {
-      const u = x * ca + y * sa, v = -x * sa + y * ca;
+      const X = x + ox, Y = y + oy;
+      const u = X * ca + Y * sa, v = -X * sa + Y * ca;
       const fu = u - Math.floor(u), fv = v - Math.floor(v);
       const thr = t[((fv * M) | 0) * M + ((fu * M) | 0)];
-      let c = samplePlate(plate, srcW, srcH, (x + 0.5) * inv, (y + 0.5) * inv);
+      let c = samplePlate(plate, srcW, srcH, (X + 0.5) * inv, (Y + 0.5) * inv);
       if (c < lo) c = c < lo / 2 ? 0 : lo;
       out[y * w + x] = c > thr ? 255 : 0;
     }

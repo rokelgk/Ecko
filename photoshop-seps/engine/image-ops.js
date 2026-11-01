@@ -151,3 +151,116 @@ function samplePlate(plate, width, height, fx, fy) {
 }
 
 module.exports = { resizeImage, erode, dilate, modeFilter, boxBlur3, samplePlate };
+
+// ---------- art preparation helpers ----------
+
+// Catmull-Rom bicubic resize: sharper than bilinear when enlarging art.
+function resizeBicubic(img, width, height) {
+  const { data, channels: c } = img;
+  const sw = img.width, sh = img.height;
+  const out = new Uint8ClampedArray(width * height * c);
+  const sx = sw / width, sy = sh / height;
+  const w = (t) => {
+    t = Math.abs(t);
+    if (t < 1) return 1.5 * t * t * t - 2.5 * t * t + 1;
+    if (t < 2) return -0.5 * t * t * t + 2.5 * t * t - 4 * t + 2;
+    return 0;
+  };
+  const xi = new Int32Array(width * 4), xw = new Float32Array(width * 4);
+  for (let x = 0; x < width; x++) {
+    const fx = (x + 0.5) * sx - 0.5, x0 = Math.floor(fx);
+    for (let k = 0; k < 4; k++) { xi[x * 4 + k] = Math.min(sw - 1, Math.max(0, x0 - 1 + k)); xw[x * 4 + k] = w(fx - (x0 - 1 + k)); }
+  }
+  const acc = new Float32Array(c);
+  for (let y = 0; y < height; y++) {
+    const fy = (y + 0.5) * sy - 0.5, y0 = Math.floor(fy);
+    const yi = [], yw = [];
+    for (let k = 0; k < 4; k++) { yi.push(Math.min(sh - 1, Math.max(0, y0 - 1 + k))); yw.push(w(fy - (y0 - 1 + k))); }
+    for (let x = 0; x < width; x++) {
+      acc.fill(0);
+      for (let j = 0; j < 4; j++) {
+        const row = yi[j] * sw;
+        for (let k = 0; k < 4; k++) {
+          const wt = yw[j] * xw[x * 4 + k];
+          const i = (row + xi[x * 4 + k]) * c;
+          for (let ch = 0; ch < c; ch++) acc[ch] += data[i + ch] * wt;
+        }
+      }
+      const o = (y * width + x) * c;
+      for (let ch = 0; ch < c; ch++) out[o + ch] = acc[ch];
+    }
+  }
+  return { data: out, width, height, channels: c, dpi: img.dpi };
+}
+
+// Separable Gaussian blur of the color channels (alpha untouched).
+function gaussianBlur(img, sigma) {
+  const { width, height, channels: c } = img;
+  const r = Math.max(1, Math.ceil(sigma * 2.5));
+  const k = new Float32Array(r * 2 + 1);
+  let s = 0;
+  for (let i = -r; i <= r; i++) { k[i + r] = Math.exp(-(i * i) / (2 * sigma * sigma)); s += k[i + r]; }
+  for (let i = 0; i < k.length; i++) k[i] /= s;
+  const cc = Math.min(3, c);
+  const tmp = new Float32Array(width * height * cc);
+  for (let y = 0; y < height; y++) {
+    for (let x = 0; x < width; x++) {
+      for (let ch = 0; ch < cc; ch++) {
+        let v = 0;
+        for (let i = -r; i <= r; i++) { const xx = Math.min(width - 1, Math.max(0, x + i)); v += img.data[(y * width + xx) * c + ch] * k[i + r]; }
+        tmp[(y * width + x) * cc + ch] = v;
+      }
+    }
+  }
+  const out = new Float32Array(width * height * cc);
+  for (let y = 0; y < height; y++) {
+    for (let x = 0; x < width; x++) {
+      for (let ch = 0; ch < cc; ch++) {
+        let v = 0;
+        for (let i = -r; i <= r; i++) { const yy = Math.min(height - 1, Math.max(0, y + i)); v += tmp[(yy * width + x) * cc + ch] * k[i + r]; }
+        out[(y * width + x) * cc + ch] = v;
+      }
+    }
+  }
+  return out;
+}
+
+// Unsharp mask: amount 0..3, radius in px, threshold in levels (protects
+// flat areas and noise from being sharpened).
+function unsharpMask(img, amount, radius, threshold) {
+  if (!amount || amount <= 0) return img;
+  const { width, height, channels: c } = img;
+  const blur = gaussianBlur(img, Math.max(0.3, radius));
+  const out = new Uint8ClampedArray(img.data);
+  const cc = Math.min(3, c), th = threshold || 0;
+  for (let p = 0; p < width * height; p++) {
+    for (let ch = 0; ch < cc; ch++) {
+      const v = img.data[p * c + ch], d = v - blur[p * cc + ch];
+      if (Math.abs(d) >= th) out[p * c + ch] = v + d * amount;
+    }
+  }
+  return { data: out, width, height, channels: c, dpi: img.dpi };
+}
+
+// 3x3 median per channel: removes JPEG speckle and scan dust, keeps edges.
+function median3(img) {
+  const { width, height, channels: c } = img;
+  const out = new Uint8ClampedArray(img.data);
+  const v = new Uint8Array(9);
+  for (let y = 1; y < height - 1; y++) {
+    for (let x = 1; x < width - 1; x++) {
+      for (let ch = 0; ch < Math.min(3, c); ch++) {
+        let n = 0;
+        for (let dy = -1; dy <= 1; dy++) for (let dx = -1; dx <= 1; dx++) v[n++] = img.data[((y + dy) * width + x + dx) * c + ch];
+        v.sort();
+        out[(y * width + x) * c + ch] = v[4];
+      }
+    }
+  }
+  return { data: out, width, height, channels: c, dpi: img.dpi };
+}
+
+module.exports.resizeBicubic = resizeBicubic;
+module.exports.gaussianBlur = gaussianBlur;
+module.exports.unsharpMask = unsharpMask;
+module.exports.median3 = median3;

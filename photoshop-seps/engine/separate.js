@@ -21,7 +21,20 @@ const { pickColors } = require('./palette');
 const { nearestInk, makeInk } = require('./inks');
 const ops = require('./image-ops');
 
-const GRID = 33;
+// Lookup-table resolution per axis. 33 for output; the live preview uses a
+// smaller table (lutGrid option) so edits redraw quickly.
+let GRID = 33;
+
+// Recently built lookup tables, so tweaks that keep the same inks (dot
+// limits, choke, film settings) don't rebuild them.
+const lutCache = new Map();
+function cachedLut(key, build) {
+  if (lutCache.has(key)) { const v = lutCache.get(key); lutCache.delete(key); lutCache.set(key, v); return v; }
+  const v = build();
+  lutCache.set(key, v);
+  while (lutCache.size > 6) lutCache.delete(lutCache.keys().next().value);
+  return v;
+}
 
 const DEFAULTS = {
   mode: 'simulated',
@@ -48,6 +61,7 @@ const DEFAULTS = {
   overlap: 'stack', // 'stack' (full color) | 'side' (dots side by side: less ink, softer hand)
   inkOpacity: 0.97,
   bareOpacity: 0.75, // ink opacity on a dark garment without underbase
+  lutGrid: 33,
   seed: 1234,
 };
 
@@ -287,7 +301,8 @@ function lutLookup(lut, N, r, g, b, out) {
 function separateSimulated(img, garment, colors, o, hasUb) {
   const N = colors.length;
   const n = img.width * img.height;
-  const lut = buildSimLut(garment, colors, o.maxInksPerPixel, pressModel(garment, o, hasUb));
+  const key = JSON.stringify(['sim', GRID, garment.hex, colors.map((c) => c.hex), o.maxInksPerPixel, hasUb, o.inkOpacity, o.bareOpacity, o.underbaseStrength]);
+  const lut = cachedLut(key, () => buildSimLut(garment, colors, o.maxInksPerPixel, pressModel(garment, o, hasUb)));
   const plates = colors.map(() => new Uint8Array(n));
   const vis = new Float32Array(N);
   const d = img.data;
@@ -337,7 +352,7 @@ function nearestLabelLut(garment, colors, bits) {
 
 function separateSpot(img, garment, colors, o) {
   const n = img.width * img.height;
-  const L = nearestLabelLut(garment, colors, 6);
+  const L = cachedLut(JSON.stringify(['spot', garment.hex, colors.map((c) => c.hex)]), () => nearestLabelLut(garment, colors, 6));
   let labels = new Int16Array(n);
   const d = img.data;
   for (let p = 0; p < n; p++) {
@@ -494,7 +509,7 @@ function buildCmykLut(colors, garment, o) {
 function separateCmyk(img, o, colors, garment) {
   const n = img.width * img.height;
   const plates = [0, 1, 2, 3].map(() => new Uint8Array(n));
-  const lut = buildCmykLut(colors, garment, o);
+  const lut = cachedLut(JSON.stringify(['cmyk', GRID, garment.hex, colors.map((c) => c.hex), o.gcr, o.totalInk]), () => buildCmykLut(colors, garment, o));
   const v = new Float32Array(4);
   const d = img.data;
   for (let p = 0; p < n; p++) {
@@ -734,6 +749,7 @@ function matchStats(img, preview, mask, lightnessOnly) {
 
 function separate(image, options) {
   const o = Object.assign({}, DEFAULTS, options || {});
+  GRID = o.lutGrid || 33;
   const garment = screen('Garment', o.garment, 'garment');
   let img = flatten(image, garment.rgb);
   let mask = opaqueMask(image);

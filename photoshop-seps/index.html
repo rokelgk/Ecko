@@ -2,98 +2,114 @@
 <html>
 <head>
   <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Ecko Seps</title>
   <link rel="stylesheet" href="styles.css">
 </head>
 <body>
-  <div id="app">
-    <header class="top">
-      <div class="brand">Ecko <b>Seps</b></div>
-      <div id="docInfo" class="muted small">No artwork yet</div>
-    </header>
+  <div id="app" class="layout">
 
-    <div id="browserOnly" class="card hidden">
-      <label class="btn wide" id="openArtLabel">Open artwork…<input id="openArt" type="file" accept="image/png,image/jpeg,image/webp"></label>
-      <div class="muted small">Browser preview of the Photoshop panel. In Photoshop the panel reads the active document.</div>
+    <!-- Left / top: the preview, always visible -->
+    <div id="previewPane" class="pane-preview">
+      <div class="pv-head">
+        <div class="brand">Ecko <b>Seps</b></div>
+        <span id="matchBadge" class="badge hidden"></span>
+      </div>
+      <div id="viewTabs" class="tabs"></div>
+      <div id="stage" class="stage">
+        <img id="previewImg" alt="">
+        <div id="emptyStage" class="empty">
+          <div class="empty-title">Separations preview</div>
+          <div class="muted" id="emptyHint">Open your artwork, pick the job, shirt color and screens, then press Separate.</div>
+          <label class="btn primary" id="openArtLabel">Open artwork…<input id="openArt" type="file" accept="image/png,image/jpeg,image/webp"></label>
+        </div>
+        <div id="busy" class="busy hidden">Updating…</div>
+      </div>
+      <div id="viewHint" class="muted small hint"></div>
+      <div id="delta" class="delta hidden"><span id="deltaText"></span><button id="undo" class="btn small">Undo</button></div>
+      <div id="status" class="status muted small"></div>
     </div>
 
-    <section class="card">
-      <h2><span class="step">1</span>What are you printing?</h2>
-      <div id="presets" class="presets"></div>
-    </section>
+    <!-- Right / bottom: every option -->
+    <div id="optionsPane" class="pane-options">
+      <div id="docInfo" class="muted small docinfo">No artwork yet</div>
 
-    <section class="card">
-      <h2><span class="step">2</span>Shirt color</h2>
-      <div id="garments" class="swatches"></div>
-      <div class="row">
-        <span id="garmentChip" class="chip"></span>
-        <input id="garmentHex" class="hex" value="#111111" maxlength="7" spellcheck="false">
-        <button id="garmentPick" class="btn small">Pick…</button>
-        <button id="garmentFg" class="btn small ps-only">Use foreground</button>
-      </div>
-    </section>
+      <section class="card">
+        <h2><span class="step">1</span>What are you printing?</h2>
+        <div id="presets" class="presets"></div>
+      </section>
 
-    <section class="card">
-      <h2><span class="step">3</span>Screens</h2>
-      <div id="counts" class="segmented"></div>
-      <div id="countHint" class="muted small"></div>
-    </section>
-
-    <button id="separate" class="btn primary huge">Separate</button>
-    <div id="status" class="status muted small"></div>
-
-    <section id="results" class="card hidden">
-      <div class="result-head">
-        <h2>Preview on shirt</h2>
-        <span id="matchBadge" class="badge"></span>
-      </div>
-      <div class="preview-wrap"><img id="previewImg" alt="Preview"></div>
-      <div id="matchText" class="muted small"></div>
-      <div id="viewTabs" class="tabs"></div>
-
-      <h3>Screens in print order</h3>
-      <div id="screens" class="screens"></div>
-      <div class="row gap">
-        <button id="addInk" class="btn small">+ Add ink</button>
-        <button id="reseparate" class="btn small">Re-separate with these inks</button>
-      </div>
-      <ul id="warnings" class="warnings"></ul>
-    </section>
-
-    <section class="card collapsible" id="libraryCard">
-      <h2 class="toggle">PMS / ink library</h2>
-      <div class="body">
+      <section class="card">
+        <h2><span class="step">2</span>Shirt color</h2>
+        <div id="garments" class="swatches"></div>
         <div class="row">
-          <select id="librarySelect"></select>
-          <button id="importLibrary" class="btn small">Import…</button>
-          <input id="importLibraryInput" type="file" class="hidden" accept=".ase,.aco,.csv,.gpl,.txt">
+          <span id="garmentChip" class="chip"></span>
+          <input id="garmentHex" class="hex" value="#111111" maxlength="7" spellcheck="false">
+          <button id="garmentPick" class="btn small">Pick…</button>
+          <button id="garmentFg" class="btn small ps-only">Use foreground</button>
         </div>
-        <label class="check"><input id="matchLibrary" type="checkbox"> Map separations to library inks (PMS names on every screen)</label>
-        <div class="muted small">Import your licensed PMS book or ink maker's chart as .ase, .aco, .csv or .gpl. Matching uses CIEDE2000, and each screen keeps the ink name, so your RIP and mixing room see "PMS 186 C", not "Spot 3".</div>
-      </div>
-    </section>
+      </section>
 
-    <section class="card collapsible" id="tuneCard">
-      <h2 class="toggle">Fine-tune separation</h2>
-      <div class="body" id="tuneBody"></div>
-    </section>
+      <section class="card">
+        <h2><span class="step">3</span>Screens</h2>
+        <div id="counts" class="segmented"></div>
+        <div id="countHint" class="muted small"></div>
+      </section>
 
-    <section class="card collapsible open" id="filmCard">
-      <h2 class="toggle">Halftones, bitmap &amp; films</h2>
-      <div class="body" id="filmBody"></div>
-    </section>
+      <button id="separate" class="btn primary huge">Separate</button>
+      <button id="reload" class="btn wide ps-only hidden">Reload artwork from Photoshop</button>
 
-    <section class="card">
-      <h2><span class="step">4</span>Output</h2>
-      <button id="build" class="btn primary wide" disabled>Build separation document</button>
-      <div class="muted small ps-text">Full-resolution spot channels named after each ink, in print order, on a garment-colored background layer.</div>
-      <div class="row gap">
-        <button id="exportFilms" class="btn wide" disabled>Export films (TIFF)</button>
-        <button id="exportSheet" class="btn wide" disabled>Job sheet</button>
-      </div>
-    </section>
+      <section class="card" id="artCard">
+        <h2>Art size, resolution &amp; sharpness</h2>
+        <div id="artInfo" class="muted small"></div>
+        <div id="artBody"></div>
+      </section>
 
-    <footer class="muted small">Ecko Seps · separations run on your computer, nothing is uploaded.</footer>
+      <section id="screensCard" class="card hidden">
+        <h2>Screens in print order</h2>
+        <div class="muted small">Changes show on the preview right away. Use 👁 to try a screen without deleting it.</div>
+        <div id="screens" class="screens"></div>
+        <div class="row gap">
+          <button id="addInk" class="btn small">+ Add ink</button>
+        </div>
+        <ul id="warnings" class="warnings"></ul>
+      </section>
+
+      <section class="card collapsible open" id="tuneCard">
+        <h2 class="toggle">Fine-tune separation</h2>
+        <div class="body" id="tuneBody"></div>
+      </section>
+
+      <section class="card collapsible" id="filmCard">
+        <h2 class="toggle">Halftones, bitmap &amp; films</h2>
+        <div class="body" id="filmBody"></div>
+      </section>
+
+      <section class="card collapsible" id="libraryCard">
+        <h2 class="toggle">PMS / ink library</h2>
+        <div class="body">
+          <div class="row">
+            <select id="librarySelect"></select>
+            <button id="importLibrary" class="btn small">Import…</button>
+            <input id="importLibraryInput" type="file" class="hidden" accept=".ase,.aco,.csv,.gpl,.txt">
+          </div>
+          <label class="check"><input id="matchLibrary" type="checkbox"> Map separations to library inks (PMS names on every screen)</label>
+          <div class="muted small">Import your licensed PMS book or ink maker's chart as .ase, .aco, .csv or .gpl. Matching uses CIEDE2000, and each screen keeps the ink name, so your RIP and mixing room see "PMS 186 C", not "Spot 3".</div>
+        </div>
+      </section>
+
+      <section class="card" id="outputCard">
+        <h2><span class="step">4</span>Output</h2>
+        <button id="build" class="btn primary wide" disabled>Build separation document</button>
+        <div class="muted small ps-text">Full-resolution spot channels named after each ink, in print order, on a garment-colored background layer.</div>
+        <div class="row gap">
+          <button id="exportFilms" class="btn wide" disabled>Export films (TIFF)</button>
+          <button id="exportSheet" class="btn wide" disabled>Job sheet</button>
+        </div>
+      </section>
+
+      <footer class="muted small">Ecko Seps · separations run on your computer, nothing is uploaded.</footer>
+    </div>
   </div>
 
   <script src="engine.bundle.js"></script>

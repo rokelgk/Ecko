@@ -28,4 +28,17 @@ for (const f of ['engine.bundle.js', 'host-photoshop.js', 'host-browser.js', 'ui
 }
 html = html.replace('<meta charset="utf-8">', '<meta charset="utf-8">\n  <meta name="viewport" content="width=device-width, initial-scale=1">');
 fs.writeFileSync(path.join(dist, 'ecko-seps-try.html'), html);
-console.log('wrote dist/ecko-seps-plugin.zip and dist/ecko-seps-try.html');
+
+// Hosted-page version: hosted pages can't save files, so the output card
+// explains what the plug-in does instead of offering downloads.
+const a = html.indexOf('      <section class="card" id="outputCard">');
+const b = html.indexOf('      <footer');
+const hosted = html.slice(0, a) + `      <section class="card" id="outputCard">
+        <h2><span class="step">4</span>Output</h2>
+        <div class="muted small">This is the try-it preview. In Photoshop the plug-in also builds the separation document (one named spot channel per ink) and exports TIFF films with registration marks and a job sheet.</div>
+        <button id="build" class="hidden"></button><button id="exportFilms" class="hidden"></button><button id="exportSheet" class="hidden"></button>
+      </section>
+
+` + html.slice(b);
+fs.writeFileSync(path.join(dist, 'ecko-seps-hosted.html'), hosted);
+console.log('wrote dist/ecko-seps-plugin.zip, dist/ecko-seps-try.html and dist/ecko-seps-hosted.html');

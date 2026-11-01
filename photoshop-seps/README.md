@@ -27,8 +27,17 @@ Pick the job type, the shirt color and the number of screens, then press
 - **Preview before you burn screens:** an on-shirt preview using the same
   press model as the separation, a ΔE2000 match score in plain words, and
   single-plate film views.
-- **Editable, not a black box:** rename, recolor, lock, reorder, delete or
-  add inks, then re-separate with exactly those inks.
+- **Live editing:** after the first Separate, every change redraws the
+  preview in a fraction of a second. That covers removing, hiding (👁),
+  recoloring, reordering or adding a screen, every fine-tune slider, and art
+  prep. Each ink edit shows how the match changed ("Good ΔE 3.7 → Good ΔE
+  3.9, worse") with Undo.
+- **Art size, resolution and sharpness:** set the print width to see the
+  real ppi. Low-res art is upscaled (bicubic) to 200–360 ppi, with sharpen
+  (amount + radius) and noise clean-up for JPEG speckle or scans.
+- **Split layout:** a large preview on one side and all options on the other.
+  On a phone the preview stays pinned on top. Tap the preview for a
+  real-dot close-up at film resolution with your LPI, angle and dot shape.
 - **Output:** a Photoshop document with one named spot channel per ink in
   print order on a garment-colored background, 1-bit TIFF films, and a job
   sheet (print order, inks, coverage, mesh, flash note).
@@ -99,6 +108,7 @@ npm run build     # rebuild engine.bundle.js after editing engine/*.js
 | `engine/color.js` | sRGB, Lab, Yule-Nielsen space, CIEDE2000, color names |
 | `engine/tiff.js` | 1-bit / 8-bit PackBits TIFF writer for films |
 | `engine/presets.js` | One-click presets and option lists |
+| `engine/prepare.js` | Print size, upscaling, sharpening and noise clean-up |
 | `engine.bundle.js` | Generated single-file engine loaded by the panel |
 | `index.html`, `styles.css`, `ui.js` | The panel (same code in Photoshop and the browser) |
 | `host-photoshop.js` | Photoshop glue: read pixels, preview images, spot channels, files |

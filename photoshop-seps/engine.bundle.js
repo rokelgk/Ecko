@@ -232,7 +232,10 @@ function thresholdMatrix(shape) {
 function renderBitmap(plate, srcW, srcH, srcDpi, o) {
   const dpi = o.type === 'continuous' ? srcDpi : (o.dpi || 720);
   const scale = dpi / srcDpi;
-  const w = Math.max(1, Math.round(srcW * scale)), h = Math.max(1, Math.round(srcH * scale));
+  // o.region {x, y, w, h} renders only that window of the film (previews).
+  const R = o.region && o.type !== 'continuous' ? o.region : null;
+  const ox = R ? R.x : 0, oy = R ? R.y : 0;
+  const w = R ? R.w : Math.max(1, Math.round(srcW * scale)), h = R ? R.h : Math.max(1, Math.round(srcH * scale));
   const out = new Uint8Array(w * h);
   const inv = 1 / scale;
   if (o.type === 'continuous') {
@@ -241,14 +244,14 @@ function renderBitmap(plate, srcW, srcH, srcDpi, o) {
   }
   if (o.type === 'index') {
     for (let y = 0; y < h; y++) {
-      const sy = Math.min(srcH - 1, Math.floor(y * inv));
-      for (let x = 0; x < w; x++) out[y * w + x] = plate[sy * srcW + Math.min(srcW - 1, Math.floor(x * inv))] >= 128 ? 255 : 0;
+      const sy = Math.min(srcH - 1, Math.floor((y + oy) * inv));
+      for (let x = 0; x < w; x++) out[y * w + x] = plate[sy * srcW + Math.min(srcW - 1, Math.floor((x + ox) * inv))] >= 128 ? 255 : 0;
     }
     return { data: out, width: w, height: h, dpi, bits: 1 };
   }
   if (o.type === 'threshold') {
     for (let y = 0; y < h; y++) {
-      for (let x = 0; x < w; x++) out[y * w + x] = samplePlate(plate, srcW, srcH, (x + 0.5) * inv, (y + 0.5) * inv) >= 0.5 ? 255 : 0;
+      for (let x = 0; x < w; x++) out[y * w + x] = samplePlate(plate, srcW, srcH, (x + ox + 0.5) * inv, (y + oy + 0.5) * inv) >= 0.5 ? 255 : 0;
     }
     return { data: out, width: w, height: h, dpi, bits: 1 };
   }
@@ -263,7 +266,7 @@ function renderBitmap(plate, srcW, srcH, srcDpi, o) {
       const ltr = (gy & 1) === 0;
       for (let k = 0; k < gw; k++) {
         const gx = ltr ? k : gw - 1 - k;
-        const v = samplePlate(plate, srcW, srcH, (gx + 0.5) * dot * inv, (gy + 0.5) * dot * inv) + err[cur + gx + 1];
+        const v = samplePlate(plate, srcW, srcH, ((gx + 0.5) * dot + ox) * inv, ((gy + 0.5) * dot + oy) * inv) + err[cur + gx + 1];
         const on = v >= 0.5 ? 1 : 0;
         bits[gy * gw + gx] = on;
         const q = v - on, d = ltr ? 1 : -1;
@@ -285,10 +288,11 @@ function renderBitmap(plate, srcW, srcH, srcDpi, o) {
   const ca = Math.cos(a) / cell, sa = Math.sin(a) / cell;
   for (let y = 0; y < h; y++) {
     for (let x = 0; x < w; x++) {
-      const u = x * ca + y * sa, v = -x * sa + y * ca;
+      const X = x + ox, Y = y + oy;
+      const u = X * ca + Y * sa, v = -X * sa + Y * ca;
       const fu = u - Math.floor(u), fv = v - Math.floor(v);
       const thr = t[((fv * M) | 0) * M + ((fu * M) | 0)];
-      let c = samplePlate(plate, srcW, srcH, (x + 0.5) * inv, (y + 0.5) * inv);
+      let c = samplePlate(plate, srcW, srcH, (X + 0.5) * inv, (Y + 0.5) * inv);
       if (c < lo) c = c < lo / 2 ? 0 : lo;
       out[y * w + x] = c > thr ? 255 : 0;
     }
@@ -559,6 +563,119 @@ function samplePlate(plate, width, height, fx, fy) {
 
 module.exports = { resizeImage, erode, dilate, modeFilter, boxBlur3, samplePlate };
 
+// ---------- art preparation helpers ----------
+
+// Catmull-Rom bicubic resize: sharper than bilinear when enlarging art.
+function resizeBicubic(img, width, height) {
+  const { data, channels: c } = img;
+  const sw = img.width, sh = img.height;
+  const out = new Uint8ClampedArray(width * height * c);
+  const sx = sw / width, sy = sh / height;
+  const w = (t) => {
+    t = Math.abs(t);
+    if (t < 1) return 1.5 * t * t * t - 2.5 * t * t + 1;
+    if (t < 2) return -0.5 * t * t * t + 2.5 * t * t - 4 * t + 2;
+    return 0;
+  };
+  const xi = new Int32Array(width * 4), xw = new Float32Array(width * 4);
+  for (let x = 0; x < width; x++) {
+    const fx = (x + 0.5) * sx - 0.5, x0 = Math.floor(fx);
+    for (let k = 0; k < 4; k++) { xi[x * 4 + k] = Math.min(sw - 1, Math.max(0, x0 - 1 + k)); xw[x * 4 + k] = w(fx - (x0 - 1 + k)); }
+  }
+  const acc = new Float32Array(c);
+  for (let y = 0; y < height; y++) {
+    const fy = (y + 0.5) * sy - 0.5, y0 = Math.floor(fy);
+    const yi = [], yw = [];
+    for (let k = 0; k < 4; k++) { yi.push(Math.min(sh - 1, Math.max(0, y0 - 1 + k))); yw.push(w(fy - (y0 - 1 + k))); }
+    for (let x = 0; x < width; x++) {
+      acc.fill(0);
+      for (let j = 0; j < 4; j++) {
+        const row = yi[j] * sw;
+        for (let k = 0; k < 4; k++) {
+          const wt = yw[j] * xw[x * 4 + k];
+          const i = (row + xi[x * 4 + k]) * c;
+          for (let ch = 0; ch < c; ch++) acc[ch] += data[i + ch] * wt;
+        }
+      }
+      const o = (y * width + x) * c;
+      for (let ch = 0; ch < c; ch++) out[o + ch] = acc[ch];
+    }
+  }
+  return { data: out, width, height, channels: c, dpi: img.dpi };
+}
+
+// Separable Gaussian blur of the color channels (alpha untouched).
+function gaussianBlur(img, sigma) {
+  const { width, height, channels: c } = img;
+  const r = Math.max(1, Math.ceil(sigma * 2.5));
+  const k = new Float32Array(r * 2 + 1);
+  let s = 0;
+  for (let i = -r; i <= r; i++) { k[i + r] = Math.exp(-(i * i) / (2 * sigma * sigma)); s += k[i + r]; }
+  for (let i = 0; i < k.length; i++) k[i] /= s;
+  const cc = Math.min(3, c);
+  const tmp = new Float32Array(width * height * cc);
+  for (let y = 0; y < height; y++) {
+    for (let x = 0; x < width; x++) {
+      for (let ch = 0; ch < cc; ch++) {
+        let v = 0;
+        for (let i = -r; i <= r; i++) { const xx = Math.min(width - 1, Math.max(0, x + i)); v += img.data[(y * width + xx) * c + ch] * k[i + r]; }
+        tmp[(y * width + x) * cc + ch] = v;
+      }
+    }
+  }
+  const out = new Float32Array(width * height * cc);
+  for (let y = 0; y < height; y++) {
+    for (let x = 0; x < width; x++) {
+      for (let ch = 0; ch < cc; ch++) {
+        let v = 0;
+        for (let i = -r; i <= r; i++) { const yy = Math.min(height - 1, Math.max(0, y + i)); v += tmp[(yy * width + x) * cc + ch] * k[i + r]; }
+        out[(y * width + x) * cc + ch] = v;
+      }
+    }
+  }
+  return out;
+}
+
+// Unsharp mask: amount 0..3, radius in px, threshold in levels (protects
+// flat areas and noise from being sharpened).
+function unsharpMask(img, amount, radius, threshold) {
+  if (!amount || amount <= 0) return img;
+  const { width, height, channels: c } = img;
+  const blur = gaussianBlur(img, Math.max(0.3, radius));
+  const out = new Uint8ClampedArray(img.data);
+  const cc = Math.min(3, c), th = threshold || 0;
+  for (let p = 0; p < width * height; p++) {
+    for (let ch = 0; ch < cc; ch++) {
+      const v = img.data[p * c + ch], d = v - blur[p * cc + ch];
+      if (Math.abs(d) >= th) out[p * c + ch] = v + d * amount;
+    }
+  }
+  return { data: out, width, height, channels: c, dpi: img.dpi };
+}
+
+// 3x3 median per channel: removes JPEG speckle and scan dust, keeps edges.
+function median3(img) {
+  const { width, height, channels: c } = img;
+  const out = new Uint8ClampedArray(img.data);
+  const v = new Uint8Array(9);
+  for (let y = 1; y < height - 1; y++) {
+    for (let x = 1; x < width - 1; x++) {
+      for (let ch = 0; ch < Math.min(3, c); ch++) {
+        let n = 0;
+        for (let dy = -1; dy <= 1; dy++) for (let dx = -1; dx <= 1; dx++) v[n++] = img.data[((y + dy) * width + x + dx) * c + ch];
+        v.sort();
+        out[(y * width + x) * c + ch] = v[4];
+      }
+    }
+  }
+  return { data: out, width, height, channels: c, dpi: img.dpi };
+}
+
+module.exports.resizeBicubic = resizeBicubic;
+module.exports.gaussianBlur = gaussianBlur;
+module.exports.unsharpMask = unsharpMask;
+module.exports.median3 = median3;
+
   };
   defs["./index"] = function (module, exports, require) {
 'use strict';
@@ -573,6 +690,7 @@ const halftone = require('./halftone');
 const tiff = require('./tiff');
 const presets = require('./presets');
 const ops = require('./image-ops');
+const prepare = require('./prepare');
 
 // Per-screen film settings from a preset/global film setting.
 function filmSettingsFor(screen, film) {
@@ -600,6 +718,27 @@ function renderScreenFilm(result, screen, film) {
   return halftone.renderFilm(screen.plate, result.width, result.height, result.dpi, Object.assign({ minDot }, f, { label }));
 }
 
+// Close-up of the print with real film dots: the region around (cx, cy)
+// (0..1 of the design) at film resolution, each screen halftoned with its
+// film settings and stacked on the garment.
+function dotPreview(result, film, cx, cy, size) {
+  const W = size || 360;
+  const screens = result.screens.map((s) => {
+    const f = filmSettingsFor(s, film);
+    const type = f.type === 'continuous' ? 'am' : f.type;
+    const dpi = f.dpi || 720;
+    const scale = dpi / result.dpi;
+    const fullW = result.width * scale, fullH = result.height * scale;
+    const x0 = Math.max(0, Math.min(fullW - W, Math.round(cx * fullW - W / 2)));
+    const y0 = Math.max(0, Math.min(fullH - W, Math.round(cy * fullH - W / 2)));
+    const bm = halftone.renderBitmap(s.plate, result.width, result.height, result.dpi, Object.assign({ minDot: result.options.minDot || 0 }, f, { type, region: { x: x0, y: y0, w: W, h: W } }));
+    return Object.assign({}, s, { plate: bm.data, w: bm.width, h: bm.height });
+  });
+  const w = screens.length ? screens[0].w : W, h = screens.length ? screens[0].h : W;
+  const rgba = sep.composite(screens, { hex: result.garment.hex, rgb: result.garment.rgb, lab: color.rgbToLab(result.garment.rgb) }, w, h, result.options, { binary: true });
+  return { rgba, width: w, height: h };
+}
+
 // Summary rows for UI and job sheets.
 function screenSummary(result, film) {
   return result.screens.map((s) => {
@@ -613,7 +752,7 @@ function screenSummary(result, film) {
 }
 
 module.exports = Object.assign(
-  { separate: sep.separate, DEFAULTS: sep.DEFAULTS, autoScreenCount: sep.autoScreenCount, filmSettingsFor, filmLabel, renderScreenFilm, screenSummary },
+  { separate: sep.separate, DEFAULTS: sep.DEFAULTS, autoScreenCount: sep.autoScreenCount, filmSettingsFor, filmLabel, renderScreenFilm, screenSummary, dotPreview, prepareArt: prepare.prepareArt, artInfo: prepare.artInfo, PREP_DEFAULTS: prepare.PREP_DEFAULTS },
   { color, inks, palette, halftone, tiff, presets, ops },
 );
 
@@ -1013,6 +1152,57 @@ function describeLab(lab) {
 module.exports = { pickColors, sampleLab, kmeans, mulberry32, describeLab };
 
   };
+  defs["./prepare"] = function (module, exports, require) {
+'use strict';
+// Gets artwork ready to separate: print size, resolution (upscale low-res
+// art to the target ppi), noise clean-up and sharpening. Separating
+// 72-150 ppi web art straight to 720 dpi film gives soft, jagged edges;
+// this is where that gets fixed.
+
+const ops = require('./image-ops');
+
+const PREP_DEFAULTS = {
+  printWidthIn: 0, // 0 = keep the document's own size
+  targetPpi: 300,
+  upscale: true, // enlarge art below targetPpi
+  denoise: 0, // median passes 0..2
+  sharpen: 0, // unsharp amount 0..3
+  sharpenRadius: 1.0, // px at output resolution
+  sharpenThreshold: 3,
+};
+
+function artInfo(image, prep) {
+  const p = Object.assign({}, PREP_DEFAULTS, prep || {});
+  const widthIn = p.printWidthIn > 0 ? p.printWidthIn : image.width / (image.dpi || 300);
+  const ppi = image.width / widthIn;
+  const upscaled = p.upscale && ppi < p.targetPpi - 1;
+  const outPpi = upscaled ? p.targetPpi : ppi;
+  return {
+    widthIn, heightIn: widthIn * (image.height / image.width), sourcePpi: ppi, outputPpi: outPpi, upscaled,
+    outWidth: Math.round(widthIn * outPpi), outHeight: Math.round(widthIn * outPpi * (image.height / image.width)),
+    lowRes: ppi < 200,
+  };
+}
+
+// scale < 1 prepares a smaller proof with the same look (radius scaled).
+function prepareArt(image, prep, scale) {
+  const p = Object.assign({}, PREP_DEFAULTS, prep || {});
+  const info = artInfo(image, p);
+  const s = scale || 1;
+  const w = Math.max(1, Math.round(info.outWidth * s)), h = Math.max(1, Math.round(info.outHeight * s));
+  let img = image;
+  if (w !== image.width || h !== image.height) {
+    img = w > image.width ? ops.resizeBicubic(image, w, h) : ops.resizeImage(image, w, h);
+  }
+  for (let i = 0; i < (p.denoise | 0); i++) img = ops.median3(img);
+  if (p.sharpen > 0) img = ops.unsharpMask(img, p.sharpen, Math.max(0.35, p.sharpenRadius * s), p.sharpenThreshold);
+  img = Object.assign({}, img, { dpi: info.outputPpi * s });
+  return { image: img, info };
+}
+
+module.exports = { prepareArt, artInfo, PREP_DEFAULTS };
+
+  };
   defs["./presets"] = function (module, exports, require) {
 'use strict';
 // One-click starting points. Every value can be changed afterwards.
@@ -1099,7 +1289,20 @@ const { pickColors } = require('./palette');
 const { nearestInk, makeInk } = require('./inks');
 const ops = require('./image-ops');
 
-const GRID = 33;
+// Lookup-table resolution per axis. 33 for output; the live preview uses a
+// smaller table (lutGrid option) so edits redraw quickly.
+let GRID = 33;
+
+// Recently built lookup tables, so tweaks that keep the same inks (dot
+// limits, choke, film settings) don't rebuild them.
+const lutCache = new Map();
+function cachedLut(key, build) {
+  if (lutCache.has(key)) { const v = lutCache.get(key); lutCache.delete(key); lutCache.set(key, v); return v; }
+  const v = build();
+  lutCache.set(key, v);
+  while (lutCache.size > 6) lutCache.delete(lutCache.keys().next().value);
+  return v;
+}
 
 const DEFAULTS = {
   mode: 'simulated',
@@ -1126,6 +1329,7 @@ const DEFAULTS = {
   overlap: 'stack', // 'stack' (full color) | 'side' (dots side by side: less ink, softer hand)
   inkOpacity: 0.97,
   bareOpacity: 0.75, // ink opacity on a dark garment without underbase
+  lutGrid: 33,
   seed: 1234,
 };
 
@@ -1365,7 +1569,8 @@ function lutLookup(lut, N, r, g, b, out) {
 function separateSimulated(img, garment, colors, o, hasUb) {
   const N = colors.length;
   const n = img.width * img.height;
-  const lut = buildSimLut(garment, colors, o.maxInksPerPixel, pressModel(garment, o, hasUb));
+  const key = JSON.stringify(['sim', GRID, garment.hex, colors.map((c) => c.hex), o.maxInksPerPixel, hasUb, o.inkOpacity, o.bareOpacity, o.underbaseStrength]);
+  const lut = cachedLut(key, () => buildSimLut(garment, colors, o.maxInksPerPixel, pressModel(garment, o, hasUb)));
   const plates = colors.map(() => new Uint8Array(n));
   const vis = new Float32Array(N);
   const d = img.data;
@@ -1415,7 +1620,7 @@ function nearestLabelLut(garment, colors, bits) {
 
 function separateSpot(img, garment, colors, o) {
   const n = img.width * img.height;
-  const L = nearestLabelLut(garment, colors, 6);
+  const L = cachedLut(JSON.stringify(['spot', garment.hex, colors.map((c) => c.hex)]), () => nearestLabelLut(garment, colors, 6));
   let labels = new Int16Array(n);
   const d = img.data;
   for (let p = 0; p < n; p++) {
@@ -1572,7 +1777,7 @@ function buildCmykLut(colors, garment, o) {
 function separateCmyk(img, o, colors, garment) {
   const n = img.width * img.height;
   const plates = [0, 1, 2, 3].map(() => new Uint8Array(n));
-  const lut = buildCmykLut(colors, garment, o);
+  const lut = cachedLut(JSON.stringify(['cmyk', GRID, garment.hex, colors.map((c) => c.hex), o.gcr, o.totalInk]), () => buildCmykLut(colors, garment, o));
   const v = new Float32Array(4);
   const d = img.data;
   for (let p = 0; p < n; p++) {
@@ -1812,6 +2017,7 @@ function matchStats(img, preview, mask, lightnessOnly) {
 
 function separate(image, options) {
   const o = Object.assign({}, DEFAULTS, options || {});
+  GRID = o.lutGrid || 33;
   const garment = screen('Garment', o.garment, 'garment');
   let img = flatten(image, garment.rgb);
   let mask = opaqueMask(image);
