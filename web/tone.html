@@ -8,52 +8,59 @@
   <link rel="stylesheet" href="styles.css">
   <link rel="stylesheet" href="tone.css">
 </head>
-<body>
+<body class="toneApp">
 <header class="top">
   <div class="brand">
-    <svg viewBox="0 0 32 32" width="28" height="28" aria-hidden="true"><circle cx="16" cy="16" r="14" fill="none" stroke="currentColor" stroke-width="2.5"/><circle cx="11" cy="12" r="3" fill="currentColor"/><circle cx="20" cy="12" r="2.2" fill="currentColor"/><circle cx="11" cy="21" r="2.2" fill="currentColor"/><circle cx="20" cy="21" r="1.4" fill="currentColor"/></svg>
+    <svg viewBox="0 0 32 32" width="22" height="22" aria-hidden="true"><circle cx="16" cy="16" r="14" fill="none" stroke="currentColor" stroke-width="2.5"/><circle cx="11" cy="12" r="3" fill="currentColor"/><circle cx="20" cy="12" r="2.2" fill="currentColor"/><circle cx="11" cy="21" r="2.2" fill="currentColor"/><circle cx="20" cy="21" r="1.4" fill="currentColor"/></svg>
     <span>Ecko Tone</span>
   </div>
-  <p class="tagline">Halftones, Xerox and distressed textures, ready to print on shirts.</p>
+  <div class="tabs" role="tablist" aria-label="View">
+    <button role="tab" data-view="print" class="on">Print</button>
+    <button role="tab" data-view="shirt">On shirt</button>
+    <button role="tab" data-view="original">Original</button>
+  </div>
+  <div class="garment" title="Shirt colour">
+    <span>Shirt</span>
+    <span id="garments"></span>
+    <input type="color" id="garment" aria-label="Custom shirt colour">
+    <label class="fitSel">Fit <select id="shirt_fit"></select></label>
+  </div>
+  <div class="viewTools">
+    <button type="button" class="mini" id="zoomOut" title="Zoom out (-)">−</button>
+    <button type="button" class="mini wide" id="zoomFit" title="Fit to screen (0)">Fit</button>
+    <button type="button" class="mini" id="zoomIn" title="Zoom in (+)">+</button>
+    <button type="button" class="mini wide" id="togglePanels" title="Hide or show the side panels (Tab)">Panels</button>
+  </div>
   <nav class="topActions">
     <a class="ghost" href="index.html">Embroidery</a>
-    <a class="ghost on" href="tone.html" aria-current="page">Halftone</a>
   </nav>
 </header>
 
-<main class="layout">
-  <aside class="panel" aria-label="Settings">
-    <section class="step">
-      <h2><span class="num">1</span> Your art</h2>
+<main class="psLayout">
+  <aside class="psSide psLeft" aria-label="Settings">
+    <details class="step" open>
+      <summary><h2>Art</h2></summary>
       <label class="drop" id="drop">
         <input type="file" id="file" accept="image/png,image/jpeg,image/webp,image/gif,image/bmp,image/tiff" hidden>
         <img id="thumb" alt="" hidden>
-        <span id="dropText"><strong>Drop a photo or design</strong><br>or click to choose (PNG, JPG, WebP)</span>
+        <span id="dropText"><strong>Drop a photo or design</strong><br>or click to choose</span>
       </label>
       <label class="check"><input type="checkbox" id="remove_background" checked> Remove flat background</label>
       <label id="bgTolRow">Background tolerance <input type="range" id="bg_tolerance" min="4" max="60" step="1"></label>
       <button type="button" class="link" id="clearPicture" hidden>Remove picture</button>
-    </section>
+    </details>
 
-    <section class="step">
-      <h2><span class="num">2</span> Text <span class="hint">(optional)</span></h2>
-      <div id="textLayers" class="layers"></div>
-      <button type="button" class="ghost" id="addText">+ Add text</button>
-      <p class="hint">Curve bends a line into an arch (right) or a smile (left). Works with or without a picture.</p>
-    </section>
-
-    <section class="step">
-      <h2><span class="num">3</span> Pick a look</h2>
+    <details class="step" open>
+      <summary><h2>Look</h2></summary>
       <div class="presets" id="presets"></div>
-      <p class="hint">A preset is a starting point. Everything below stays editable.</p>
-    </section>
+    </details>
 
-    <section class="step">
-      <h2><span class="num">4</span> Screen</h2>
+    <details class="step" open>
+      <summary><h2>Screen</h2></summary>
       <label>Colour <select id="mode"></select></label>
       <label>Pattern <select id="style"></select></label>
       <div id="amRow">
-        <label>Lines per inch (LPI) <output id="lpiOut"></output>
+        <label>Lines per inch <output id="lpiOut"></output>
           <input type="range" id="lpi" min="5" max="150" step="1">
           <span class="scale"><span>Big bold dots</span><span>Fine detail</span></span></label>
       </div>
@@ -69,12 +76,29 @@
       <div id="spotBox">
         <label>Spot inks <output id="spotOut"></output> <input type="range" id="spot_colors" min="2" max="8" step="1"></label>
         <label>Blend between inks <input type="range" id="spot_softness" min="2" max="40" step="1">
-          <span class="scale"><span>Hard edges</span><span>Soft halftone blends</span></span></label>
+          <span class="scale"><span>Hard edges</span><span>Soft blends</span></span></label>
       </div>
-    </section>
+      <div class="underbaseBox">
+        <label>White underbase <span class="hint">(for dark shirts)</span>
+          <select id="underbase">
+            <option value="auto">Auto: screen print on dark shirts</option>
+            <option value="on">On</option>
+            <option value="off">Off</option>
+          </select></label>
+        <label>Underbase choke <output id="chokeOut"></output> <input type="range" id="choke_mm" min="0" max="0.5" step="0.01">
+          <span class="scale"><span>Full size</span><span>Shrunk under the colours</span></span></label>
+      </div>
+    </details>
 
-    <section class="step">
-      <h2><span class="num">5</span> Tone</h2>
+    <details class="step" open>
+      <summary><h2>Text</h2></summary>
+      <div id="textLayers" class="layers"></div>
+      <button type="button" class="ghost" id="addText">+ Add text</button>
+      <p class="hint">Curve bends a line into an arch (right) or a smile (left).</p>
+    </details>
+
+    <details class="step">
+      <summary><h2>Tone</h2></summary>
       <label>Brightness <input type="range" id="brightness" min="-1" max="1" step="0.02"></label>
       <label>Contrast <input type="range" id="contrast" min="-1" max="1" step="0.02"></label>
       <label>Midtones (gamma) <input type="range" id="gamma" min="0.3" max="3" step="0.02"></label>
@@ -83,107 +107,91 @@
         <label>White point <input type="range" id="white_point" min="0.4" max="1" step="0.01"></label>
       </div>
       <label>Sharpen <input type="range" id="sharpen" min="0" max="3" step="0.05"></label>
-      <label class="check"><input type="checkbox" id="invert"> Invert (light ink on a dark shirt)</label>
+      <label class="check"><input type="checkbox" id="invert"> Invert</label>
       <button type="button" class="link" id="resetTone">Reset tone</button>
-    </section>
+    </details>
 
-    <section class="step">
-      <h2><span class="num">6</span> Texture</h2>
+    <details class="step">
+      <summary><h2>Texture</h2></summary>
       <div id="textures" class="texList"></div>
       <div class="row">
         <button type="button" class="ghost" id="reseed" title="New random variation of every texture">Shuffle</button>
         <label class="ghost fileBtn">Use my texture…<input type="file" id="texFile" accept="image/*" hidden></label>
       </div>
       <p class="hint">Dark parts of your own texture wear the print away.</p>
-    </section>
+    </details>
 
-    <section class="step">
-      <h2><span class="num">7</span> Print</h2>
+    <details class="step" open>
+      <summary><h2>Print size</h2></summary>
       <label>Printing on <select id="target"></select></label>
       <div class="row">
         <label>Width <input type="number" id="width" min="0.5" step="0.1" value="10"></label>
-        <label>Units <select id="units"><option value="in">inches</option><option value="cm">cm</option></select></label>
+        <label>Units <select id="units"><option value="in">in</option><option value="cm">cm</option></select></label>
         <label>DPI <select id="dpi"><option>150</option><option>200</option><option selected>300</option><option>360</option><option>600</option></select></label>
       </div>
       <p class="hint" id="sizeHint"></p>
-      <details class="adv">
-        <summary>Press control</summary>
-        <label>Smallest dot <output id="minOut"></output> <input type="range" id="min_dot" min="0" max="0.3" step="0.01"></label>
-        <label>Largest dot before solid <output id="maxOut"></output> <input type="range" id="max_dot" min="0.6" max="1" step="0.01"></label>
-        <label>Dot gain compensation <output id="gainOut"></output> <input type="range" id="dot_gain" min="0" max="0.35" step="0.01"></label>
-        <label>Rough dot edges <input type="range" id="roughness" min="0" max="1" step="0.02"></label>
-        <label>Misregistration <output id="misOut"></output> <input type="range" id="misregister_mm" min="0" max="2" step="0.05"></label>
-        <label>White underbase (screen print films)
-          <select id="underbase"><option value="auto">Automatic for dark shirts</option><option value="on">Always</option><option value="off">Never</option></select></label>
-        <label>Underbase choke <output id="chokeOut"></output> <input type="range" id="choke_mm" min="0" max="0.5" step="0.01"></label>
-        <label class="check"><input type="checkbox" id="knockout"> Knock out the garment colour</label>
-        <label class="check"><input type="checkbox" id="registration_marks" checked> Registration marks on films</label>
-      </details>
-    </section>
-    <p class="error" id="error" role="alert" hidden></p>
+    </details>
+
+    <details class="step">
+      <summary><h2>Press control</h2></summary>
+      <label>Smallest dot <output id="minOut"></output> <input type="range" id="min_dot" min="0" max="0.3" step="0.01"></label>
+      <label>Largest dot before solid <output id="maxOut"></output> <input type="range" id="max_dot" min="0.6" max="1" step="0.01"></label>
+      <label>Dot gain compensation <output id="gainOut"></output> <input type="range" id="dot_gain" min="0" max="0.35" step="0.01"></label>
+      <label>Rough dot edges <input type="range" id="roughness" min="0" max="1" step="0.02"></label>
+      <label>Misregistration <output id="misOut"></output> <input type="range" id="misregister_mm" min="0" max="2" step="0.05"></label>
+      <label class="check"><input type="checkbox" id="knockout"> Knock out the shirt colour</label>
+      <label class="check"><input type="checkbox" id="registration_marks" checked> Registration marks on films</label>
+    </details>
   </aside>
 
-  <section class="stage" aria-label="Preview">
-    <div class="toolbar">
-      <div class="tabs" role="tablist">
-        <button role="tab" data-view="print" class="on">Print</button>
-        <button role="tab" data-view="shirt">On shirt</button>
-        <button role="tab" data-view="original">Original</button>
-      </div>
-      <div class="garment" title="Garment colour">
-        <span>Garment</span>
-        <span id="garments"></span>
-        <input type="color" id="garment" aria-label="Custom garment colour">
-        <label class="fitSel">Fit to shirt <select id="shirt_fit"></select></label>
-      </div>
-    </div>
+  <section class="psCenter" aria-label="Preview">
     <p class="fitNotes" id="fitNotes" hidden></p>
     <div class="toneStage" id="stage">
       <div class="empty" id="empty"><p><strong>Drop a picture to start</strong>, or add some text.<br>Photos, logos, illustrations: anything.</p></div>
-      <img id="preview" alt="Halftone preview" hidden>
-      <img id="original" alt="Original" hidden>
-      <img id="mockup" alt="The print on a shirt, to scale" hidden>
-      <div class="loupe" id="loupe" hidden><img id="loupeImg" alt="Actual print pixels"><span>1:1 print pixels · click elsewhere to move · Esc to close</span></div>
+      <img id="preview" alt="Halftone preview" draggable="false" hidden>
+      <img id="original" alt="Original" draggable="false" hidden>
+      <img id="mockup" alt="The print on a shirt, to scale" draggable="false" hidden>
+      <div class="loupe" id="loupe" hidden><img id="loupeImg" alt="Actual print pixels"><span>1:1 print pixels · click to close</span></div>
       <div class="busy" id="busy" hidden><div><div class="spinner"></div></div></div>
-      <p class="canvasHint" id="stageHint" hidden>Click anywhere to see the real print pixels</p>
+      <p class="canvasHint" id="stageHint" hidden>Scroll to zoom · drag to move · click for real print pixels</p>
+      <span class="zoomBadge" id="zoomBadge"></span>
     </div>
+    <p class="error" id="error" role="alert" hidden></p>
+  </section>
 
-    <div class="results" id="results" hidden>
-      <div class="card">
-        <h3>Print check</h3>
+  <aside class="psSide psRight" aria-label="Inks and output">
+    <p class="hint sideEmpty" id="rightEmpty">Inks, print check and downloads show up here once there's a design.</p>
+    <div id="results" hidden>
+      <details class="step" open>
+        <summary><h2>Inks</h2></summary>
+        <ol class="inkPanel" id="inkList"></ol>
+        <p class="hint">Eye: print this ink or not. Slider: <b>choke</b> (right) shrinks the dots, <b>spread</b> (left) grows them.</p>
+      </details>
+      <details class="step" open>
+        <summary><h2>Download</h2></summary>
+        <label>File name <input type="text" id="name" value="ecko-tone"></label>
+        <button type="button" class="primary" id="dlPng">Print PNG (DTF / DTG)</button>
+        <button type="button" class="ghost block" id="dlZip">Separations ZIP (screen print)</button>
+        <p class="hint">Made for the shirt colour you picked. Real <span id="dpiNote">300</span> DPI, pure on/off transparency. The ZIP adds one 1-bit film per ink.</p>
+      </details>
+      <details class="step" open>
+        <summary><h2>Print check</h2></summary>
         <ul class="stats" id="stats"></ul>
         <ul class="warnings" id="warnings"></ul>
-      </div>
-      <div class="card">
-        <h3>Inks</h3>
-        <ol class="threads" id="inkList"></ol>
-      </div>
-      <div class="card download">
-        <h3>Download</h3>
-        <label>File name <input type="text" id="name" value="ecko-tone"></label>
-        <div class="row">
-          <button type="button" class="primary" id="dlPng">Print PNG (DTF / DTG)</button>
-          <button type="button" class="ghost" id="dlZip">Separations ZIP (screen print)</button>
-        </div>
-        <p class="hint">Fit to shirt is on, so the file is made for the shirt colour you picked. The PNG has real <span id="dpiNote">300</span> DPI and pure on/off transparency, so RIP software never gets half-transparent pixels that print as faint white haze. The ZIP adds one 1-bit film per ink.</p>
-      </div>
-      <div class="card download" id="batchCard">
-        <h3>Batch: many designs × many shirt colours</h3>
-        <p class="hint">Uses the settings above. The current design is included. With Fit to shirt, every colour gets its own adapted print.</p>
-        <div class="row">
-          <label class="ghost fileBtn">Add more designs…<input type="file" id="batchFiles" multiple accept="image/*" hidden></label>
-        </div>
+      </details>
+      <details class="step" id="batchCard">
+        <summary><h2>Batch</h2></summary>
+        <p class="hint">Many designs × many shirt colours, same settings. The current design is included.</p>
+        <label class="ghost fileBtn">Add more designs…<input type="file" id="batchFiles" multiple accept="image/*" hidden></label>
         <ul class="batchList" id="batchList"></ul>
         <label>Shirt colours</label>
         <div class="batchShirts" id="batchShirts"></div>
-        <label class="check"><input type="checkbox" id="batchMockups" checked> Include shirt mockups (JPEG) for listings</label>
-        <div class="row">
-          <button type="button" class="primary" id="dlBatch">Download batch ZIP</button>
-        </div>
+        <label class="check"><input type="checkbox" id="batchMockups" checked> Include shirt mockups</label>
+        <button type="button" class="primary" id="dlBatch">Download batch ZIP</button>
         <p class="hint" id="batchHint"></p>
-      </div>
+      </details>
     </div>
-  </section>
+  </aside>
 </main>
 <script src="tone.js"></script>
 </body>

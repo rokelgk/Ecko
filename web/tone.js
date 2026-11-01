@@ -387,13 +387,17 @@
       $("preview").hidden = $("mockup").hidden = true;
       $("empty").hidden = false;
       $("results").hidden = true;
+      $("rightEmpty").hidden = false;
       return;
     }
     const my = ++seq;
     $("busy").hidden = false;
     showError("");
     try {
-      const maxPx = Math.round(Math.min(1600, Math.max(400, $("stage").clientWidth * (window.devicePixelRatio || 1))));
+      const st = $("stage");
+      const maxPx = Math.round(Math.min(1600, Math.max(400, Math.max(st.clientWidth, st.clientHeight) *
+        (window.devicePixelRatio || 1) * Math.min(view_.zoom, 2))));
+      view_.renderedPx = maxPx;
       const r = await postWithReupload("/api/tone/preview",
         () => ({ image_id: file ? imageId : null, options: serverOpts(), max_px: maxPx }));
       if (my !== seq) return;
@@ -464,6 +468,7 @@
 
   function showReport() {
     $("results").hidden = false;
+    $("rightEmpty").hidden = true;
     const r = report;
     const stats = [
       ["Print size", `${r.inches[0]} × ${r.inches[1]} in (${r.cm[0]} × ${r.cm[1]} cm)`],
@@ -477,8 +482,9 @@
     $("sizeHint").textContent = `${r.inches[0]} × ${r.inches[1]} in, ${r.megapixels} MP`;
     const fit = r.fit || { notes: [] };
     const modeName = { recolor: "recolouring the ink", tones: "matching the picture's tones", off: "off" }[fit.mode];
-    const notes = opts.shirt_fit === "off" ? [] : [`Fit to shirt: ${modeName}${opts.shirt_fit === "auto"
-      ? (fit.photo_like ? " (looks like a photo)" : " (looks like a logo or text)") : ""}.`, ...fit.notes];
+    const recolours = opts.mode === "mono" || opts.mode === "duotone" || opts.mode === "spot";
+    const notes = opts.shirt_fit === "off" ? [] : [...(recolours ? [`Fit to shirt: ${modeName}${opts.shirt_fit === "auto"
+      ? (fit.photo_like ? " (looks like a photo)" : " (looks like a logo or text)") : ""}.`] : []), ...fit.notes];
     $("fitNotes").textContent = notes.join(" ");
     $("fitNotes").hidden = !notes.length;
     batchHint();
@@ -505,14 +511,41 @@
 
     const ol = $("inkList");
     ol.innerHTML = "";
-    r.inks.forEach((ink, i) => {
+    let colourIndex = 0;
+    r.inks.forEach((ink) => {
       const li = document.createElement("li");
+      const idx = ink.underbase ? -1 : colourIndex++;
+      const on = ink.on !== false;
       const editable = opts.mode !== "cmyk" && !ink.underbase;
-      li.innerHTML = `${editable ? `<input type="color" value="${ink.hex}" aria-label="${ink.name} colour">`
-        : `<span class="inkSwatch" style="background:${ink.hex}"></span>`}
-        <span class="tname"><b>${ink.name}</b><small>${ink.underbase ? "films only, under the colours" : `${ink.hex} · ${ink.angle}°`}</small></span>
-        <span class="meta">${ink.coverage}% cover</span>`;
-      const inp = li.querySelector("input");
+      li.className = on ? "" : "off";
+      const chokeVal = ink.underbase ? opts.choke_mm : (ink.choke_mm || 0);
+      li.innerHTML = `
+        <div class="inkHead">
+          <button type="button" class="eye" aria-pressed="${on}" title="${on ? "Printing: click to switch this ink off" : "Off: click to print this ink"}">${on ? "👁" : "–"}</button>
+          ${editable ? `<input type="color" value="${ink.hex}" aria-label="${ink.name} colour">`
+            : `<span class="inkSwatch" style="background:${ink.hex}"></span>`}
+          <span class="tname"><b>${ink.name}</b><small>${ink.underbase ? "white base under the colours" : `${ink.hex} · ${ink.angle}°`} · ${ink.coverage}%</small></span>
+        </div>
+        <div class="chokeRow">
+          <span>${ink.underbase ? "Size" : "Spread"}</span>
+          <input type="range" aria-label="${ink.name} choke" min="${ink.underbase ? 0 : -0.3}" max="${ink.underbase ? 0.5 : 0.3}" step="0.01" value="${chokeVal}">
+          <span>Choke</span>
+          <output>${chokeLabel(chokeVal)}</output>
+        </div>`;
+      const edit = () => (opts.ink_edits[ink.name] = opts.ink_edits[ink.name] || { on: true, choke_mm: 0 });
+      li.querySelector(".eye").addEventListener("click", () => {
+        edit().on = !on;
+        changed();
+      });
+      const slider = li.querySelector(".chokeRow input"), out = li.querySelector(".chokeRow output");
+      slider.addEventListener("input", () => {
+        const v = parseFloat(slider.value);
+        out.textContent = chokeLabel(v);
+        if (ink.underbase) { opts.choke_mm = v; $("choke_mm").value = v; }
+        else edit().choke_mm = v;
+        changed();
+      });
+      const inp = li.querySelector("input[type=color]");
       if (inp) inp.addEventListener("input", () => {
         if (opts.mode === "spot") {
           // the ink list skips the underbase and inks the shirt supplies; map back by spot number
@@ -520,13 +553,19 @@
           spotInks = (spotInks || palette).slice();
           spotInks[n] = inp.value;
         } else {
-          opts.inks[i] = inp.value;
+          opts.inks[idx] = inp.value;
           buildInks();
         }
         changed();
       });
       ol.appendChild(li);
     });
+  }
+
+  function chokeLabel(v) {
+    v = Number(v) || 0;
+    if (Math.abs(v) < 0.005) return "none";
+    return `${v > 0 ? "choke" : "spread"} ${Math.abs(v).toFixed(2)} mm`;
   }
 
   function applyFix(fix) {
@@ -560,6 +599,90 @@
       btn.disabled = false;
       btn.textContent = old;
     }
+  }
+
+  // ---------------------------------------------------------------- zoom, pan, panels (Photoshop-style)
+
+  const view_ = { zoom: 1, x: 0, y: 0, renderedPx: 0 };
+
+  function applyView() {
+    const t = `translate(${view_.x}px, ${view_.y}px) scale(${view_.zoom})`;
+    for (const id of ["preview", "original", "mockup"]) $(id).style.transform = t;
+    $("zoomBadge").textContent = Math.abs(view_.zoom - 1) < 0.01 ? "" : `${Math.round(view_.zoom * 100)}%`;
+    // sharper preview when zoomed in (re-render at higher resolution, up to the limit)
+    const st = $("stage"), want = Math.min(1600, Math.max(st.clientWidth, st.clientHeight) * (window.devicePixelRatio || 1) * Math.min(view_.zoom, 2));
+    if (view === "print" && hasDesign() && want > view_.renderedPx * 1.15) { clearTimeout(timer); timer = setTimeout(render, 250); }
+  }
+
+  function zoomAt(factor, cx = 0, cy = 0) {   // cx, cy: point relative to the stage centre
+    const z2 = Math.min(16, Math.max(0.2, view_.zoom * factor));
+    view_.x = cx - (cx - view_.x) * (z2 / view_.zoom);
+    view_.y = cy - (cy - view_.y) * (z2 / view_.zoom);
+    view_.zoom = z2;
+    applyView();
+  }
+
+  function fitView() { view_.zoom = 1; view_.x = 0; view_.y = 0; applyView(); }
+
+  function drawnRect(img) {   // where object-fit: contain actually drew the picture
+    const r = img.getBoundingClientRect(), nw = img.naturalWidth || 1, nh = img.naturalHeight || 1;
+    const s = Math.min(r.width / nw, r.height / nh), w = nw * s, h = nh * s;
+    return { left: r.left + (r.width - w) / 2, top: r.top + (r.height - h) / 2, width: w, height: h };
+  }
+
+  function togglePanels() {
+    document.body.classList.toggle("panelsHidden");
+    $("togglePanels").classList.toggle("on", document.body.classList.contains("panelsHidden"));
+  }
+
+  function bindViewTools() {
+    const st = $("stage");
+    st.addEventListener("wheel", (e) => {
+      if (!hasDesign()) return;
+      e.preventDefault();
+      const r = st.getBoundingClientRect();
+      zoomAt(Math.exp(-e.deltaY * 0.0015), e.clientX - r.left - r.width / 2, e.clientY - r.top - r.height / 2);
+    }, { passive: false });
+    let drag = null;
+    st.addEventListener("pointerdown", (e) => {
+      if (e.button !== 0 || e.target.closest(".loupe")) return;
+      drag = { x: e.clientX, y: e.clientY, vx: view_.x, vy: view_.y, moved: false };
+      st.setPointerCapture(e.pointerId);
+    });
+    st.addEventListener("pointermove", (e) => {
+      if (!drag) return;
+      const dx = e.clientX - drag.x, dy = e.clientY - drag.y;
+      if (!drag.moved && Math.hypot(dx, dy) < 4) return;
+      drag.moved = true;
+      st.classList.add("dragging");
+      view_.x = drag.vx + dx; view_.y = drag.vy + dy;
+      applyView();
+    });
+    st.addEventListener("pointerup", (e) => {
+      st.classList.remove("dragging");
+      const d = drag;
+      drag = null;
+      if (!d || d.moved || view !== "print" || $("preview").hidden) return;
+      const r = drawnRect($("preview"));
+      const fx = (e.clientX - r.left) / r.width, fy = (e.clientY - r.top) / r.height;
+      if (fx < 0 || fy < 0 || fx > 1 || fy > 1) return;
+      loupeAt = { fx, fy };   // a click (not a drag) shows the real print pixels there
+      $("stageHint").hidden = true;
+      renderLoupe();
+    });
+    st.addEventListener("dblclick", fitView);
+    $("zoomIn").addEventListener("click", () => zoomAt(1.5));
+    $("zoomOut").addEventListener("click", () => zoomAt(1 / 1.5));
+    $("zoomFit").addEventListener("click", fitView);
+    $("togglePanels").addEventListener("click", togglePanels);
+    window.addEventListener("resize", applyView);
+    document.addEventListener("keydown", (e) => {
+      if (e.target.closest("input, select, textarea") || e.metaKey || e.ctrlKey || e.altKey) return;
+      if (e.key === "Tab") { e.preventDefault(); togglePanels(); }
+      else if (e.key === "+" || e.key === "=") zoomAt(1.5);
+      else if (e.key === "-") zoomAt(1 / 1.5);
+      else if (e.key === "0") fitView();
+    });
   }
 
   // ---------------------------------------------------------------- events
@@ -618,6 +741,7 @@
     });
     for (const k of SELECTS) $(k).addEventListener("change", () => {
       opts[k] = $(k).value;
+      if (k === "mode") opts.ink_edits = {};   // ink names change with the colour mode
       opts._preset = null;
       if (k === "target") {
         const t = catalog.targets.find((x) => x.id === opts.target);
@@ -654,13 +778,8 @@
       changed();
     });
     document.querySelectorAll(".tabs button").forEach((b) => b.addEventListener("click", () => showView(b.dataset.view)));
-    $("preview").addEventListener("click", (e) => {
-      const rect = $("preview").getBoundingClientRect();
-      loupeAt = { fx: (e.clientX - rect.left) / rect.width, fy: (e.clientY - rect.top) / rect.height };
-      $("stageHint").hidden = true;
-      renderLoupe();
-    });
     $("loupe").addEventListener("click", () => { loupeAt = null; $("loupe").hidden = true; });
+    bindViewTools();
     document.addEventListener("keydown", (e) => {
       if (e.key === "Escape") { loupeAt = null; $("loupe").hidden = true; }
     });

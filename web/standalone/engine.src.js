@@ -84,7 +84,24 @@
       return { type: t.type, strength, scale, image_id: t.image_id || null };
     });
     o.text = parseText(o.text);
+    o.ink_edits = parseInkEdits(o.ink_edits);
     return o;
+  }
+
+  function parseInkEdits(edits) {   // per ink: switch it off, or choke (> 0) / spread (< 0) its dots in mm
+    if (!edits || typeof edits !== "object" || Array.isArray(edits) || Object.keys(edits).length > 16) {
+      throw new OptionError("ink_edits must map up to 16 ink names to settings.");
+    }
+    const out = {};
+    for (const [name, e] of Object.entries(edits)) {
+      if (name.length > 40 || !e || typeof e !== "object") throw new OptionError("Each ink edit is {ink name: {on, choke_mm}}.");
+      const unknown = Object.keys(e).filter((k) => k !== "on" && k !== "choke_mm");
+      if (unknown.length) throw new OptionError(`Unknown ink settings: ${unknown.sort().join(", ")}`);
+      const choke = Number(e.choke_mm ?? 0);
+      if (!Number.isFinite(choke) || choke < -0.5 || choke > 0.5) throw new OptionError("Ink choke must be between -0.5 and 0.5 mm.");
+      out[name] = { on: e.on === undefined ? true : !!e.on, choke_mm: Math.round(choke * 1e4) / 1e4 };
+    }
+    return out;
   }
 
   function parseText(layers) {
@@ -716,7 +733,7 @@
     fit.underbase = o.underbase === "on" || (o.underbase === "auto" && o.target === "screen" && lg < 0.6 &&
       printed.some((c) => lum(c) < 0.85));
     if (fit.underbase && o.underbase === "auto") {
-      fit.notes.push("Dark shirt: a choked white underbase film is added so the colours stay bright.");
+      fit.notes.push("Dark shirt: a choked white underbase is added under the colours so they stay bright.");
     }
     return fit;
   }
@@ -724,7 +741,7 @@
   function plateSpecs(prep, o, fit) {
     fit = fit || resolveFit(prep, o);
     let plates, blend;
-    const P = (name, rgb, angle, src = 0, underbase = false) => ({ name, rgb, angle, shift: [0, 0], src, underbase });
+    const P = (name, rgb, angle, src = 0, underbase = false) => ({ name, rgb, angle, shift: [0, 0], src, underbase, on: true, choke_mm: 0 });
     if (o.mode === "mono") { plates = [P("Ink", fit.inks[0], o.angle)]; blend = "opaque"; }
     else if (o.mode === "duotone") {
       plates = [P("Shadow ink", fit.inks[0], o.angle, 0), P("Second ink", fit.inks[1], o.angle + 30, 1)]; blend = "multiply";
@@ -735,7 +752,13 @@
       fit.spot.forEach((c, i) => { if (c) plates.push(P(`Spot ${i + 1}`, c, o.angle + 30 * i, i)); });
       blend = "opaque";
     }
-    if (fit.underbase) plates.unshift(P("White underbase", [255, 255, 255], o.angle + 7.5, -1, true));
+    if (fit.underbase) plates.unshift(Object.assign(P("White underbase", [255, 255, 255], o.angle + 7.5, -1, true), { choke_mm: o.choke_mm }));
+    for (const p of plates) {
+      const e = o.ink_edits[p.name];
+      if (!e) continue;
+      p.on = e.on;
+      if (!p.underbase) p.choke_mm = e.choke_mm;
+    }
     return { plates, blend, fit };
   }
 
@@ -800,15 +823,23 @@
   function underbaseCov(covs, plates, o) {
     let m = null;
     for (const p of plates) {
-      if (p.underbase) continue;
+      if (p.underbase || !p.on) continue;
       const c = covs[p.src];
       if (!m) m = c.slice(); else for (let k = 0; k < m.length; k++) m[k] = Math.max(m[k], c[k]);
     }
     if (!m) return new Float32Array(covs[0] ? covs[0].length : 0);
+    return choke(m, o.choke_mm, o);
+  }
+
+  /** Shrink (mm > 0) or spread (mm < 0) every dot by about mm at its edge. */
+  function choke(c, mm, o) {
+    if (!mm) return c;
     const cell = AM_STYLES.includes(o.style) ? o.dpi / o.lpi : 2 * o.grain_mm * o.dpi / 25.4;
-    const k = (o.choke_mm * o.dpi / 25.4) / (cell * 0.5642);
-    for (let i = 0; i < m.length; i++) m[i] = Math.max(0, Math.min(1, Math.sqrt(m[i]) - k)) ** 2;
-    return m;
+    const k = (mm * o.dpi / 25.4) / (cell * 0.5642), out = new Float32Array(c.length);
+    for (let i = 0; i < c.length; i++) {   // spreading never adds ink where there was none
+      out[i] = c[i] > 0 ? Math.max(0, Math.min(1, Math.sqrt(Math.min(1, c[i])) - k)) ** 2 : 0;
+    }
+    return out;
   }
 
   // ================================================================ screens
@@ -951,7 +982,8 @@
         const s = sample(prep, x0, y0, gw, gh, step, outW, p.shift[0], p.shift[1]);
         samples[key] = coverages(s, prep, o, fit).map((c) => shapeDots(c, o));
       }
-      const covs = samples[key], cov = p.underbase ? underbaseCov(covs, plates, o) : covs[p.src];
+      if (!p.on) { result.push(new Uint8Array(gw * gh)); continue; }
+      const covs = samples[key], cov = p.underbase ? underbaseCov(covs, plates, o) : choke(covs[p.src], p.choke_mm, o);
       const sx = p.shift[0] ? xs.map((v) => v - p.shift[0]) : xs, sy = p.shift[1] ? ys.map((v) => v - p.shift[1]) : ys;
       // seed by ink, not list position, so adding an underbase never changes the other plates
       const T = threshold(sx, sy, o, p.angle, o.seed * 31 + (p.src >= 0 ? p.src : 97));
@@ -965,7 +997,7 @@
       for (let k = 0; k < add.length; k++) if (add[k]) { anyAdd = true; break; }
       for (const bm of result) for (let k = 0; k < bm.length; k++) if (remove[k]) bm[k] = 0;
       if (anyAdd) {
-        const s = sample(prep, x0, y0, gw, gh, step, outW), inks = plates.map((p, i) => (p.underbase ? -1 : i)).filter((i) => i >= 0);
+        const s = sample(prep, x0, y0, gw, gh, step, outW), inks = plates.map((p, i) => (p.underbase || !p.on ? -1 : i)).filter((i) => i >= 0);
         if (inks.length) {
           const top = result[inks[inks.length - 1]];
           for (let k = 0; k < top.length; k++) if (add[k] && s.a[k] > 0.5 && !remove[k]) top[k] = 1;
@@ -981,11 +1013,12 @@
     if (blend === "multiply") rgb.fill(1);
     bitmaps.forEach((b, i) => {
       const p = plates[i];
-      if (p.underbase) return;
-      const c = p.rgb.map((v) => v / 255);
+      if (!p.on) return;
+      const c = p.rgb.map((v) => v / 255), white = p.underbase && blend === "multiply";   // base shows white where no colour covers it
       for (let k = 0; k < n; k++) {
         if (!b[k]) continue;
         alpha[k] = 1;
+        if (white) continue;
         if (blend === "multiply") { rgb[k * 3] *= c[0]; rgb[k * 3 + 1] *= c[1]; rgb[k * 3 + 2] *= c[2]; }
         else { rgb[k * 3] = c[0]; rgb[k * 3 + 1] = c[1]; rgb[k * 3 + 2] = c[2]; }
       }
@@ -1135,7 +1168,7 @@
       let on = 0;
       for (let k = 0; k < b.length; k++) if (b[k]) { on++; if (!p.underbase) any[k] = 1; }
       inks.push({ name: p.name, hex: toHex(p.rgb), angle: r1(((p.angle % 180) + 180) % 180), coverage: r1(on / b.length * 100),
-        underbase: p.underbase });
+        underbase: p.underbase, on: p.on, choke_mm: p.choke_mm });
     });
     let anyOn = 0;
     if (any) for (let k = 0; k < any.length; k++) anyOn += any[k];
@@ -1161,6 +1194,10 @@
         warnings.push({ level: "warn", text: `${Math.round(lost * 100)}% of the picture is darker than this shirt, so it ` +
           "blends into the shirt. Recolor prints it as ink instead.", fix: { shirt_fit: "recolor" } });
       }
+    }
+    if (["cmyk", "spot", "duotone"].includes(o.mode) && lum(garment) < 0.6 && !fit.underbase && o.underbase !== "off") {
+      warnings.push({ level: "warn", text: "Colours print dull and dark straight onto a dark shirt. " +
+        "A white underbase underneath keeps them bright.", fix: { underbase: "on" } });
     }
     info.inks = inks;
     info.warnings = warnings;

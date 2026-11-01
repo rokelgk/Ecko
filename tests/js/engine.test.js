@@ -75,14 +75,29 @@ test("fit to shirt swaps ink that would vanish", () => {
   assert.deepStrictEqual(E.plateSpecs(p, E.parseOptions({ width_in: 3 })).plates[0].rgb, E.hex("#1d1d1f"));
 });
 
-test("underbase is films-only and never changes the ink plates", () => {
+test("underbase shows white and never changes the ink plates", () => {
   const { rgba, w, h } = box();
   const base = { mode: "cmyk", width_in: 2, garment: "#141414", target: "screen" };
   const p = E.prepare(rgba, w, h, E.parseOptions(base));
   const a = E.renderFull(p, E.parseOptions(base), null, true);
-  const b = E.renderFull(p, E.parseOptions({ ...base, underbase: "off" }));
+  const b = E.renderFull(p, E.parseOptions({ ...base, underbase: "off" }), null, true);
   assert.ok(a.plates[0].underbase);
-  assert.deepStrictEqual(Buffer.from(a.rgba), Buffer.from(b.rgba));
+  for (let i = 0; i < 4; i++) assert.deepStrictEqual(Buffer.from(a.seps[i + 1]), Buffer.from(b.seps[i]));
+  let white = 0;
+  for (let k = 0; k < a.rgba.length; k += 4) if (a.rgba[k + 3] && a.rgba[k] === 255 && a.rgba[k + 1] === 255 && a.rgba[k + 2] === 255) white++;
+  assert.ok(white > 0);
+});
+
+test("ink switch and choke", () => {
+  const { rgba, w, h } = ramp();
+  const base = { mode: "cmyk", width_in: 3, remove_background: false };
+  const p = E.prepare(rgba, w, h, E.parseOptions(base));
+  const cover = (o, i) => { const r = E.renderFull(p, E.parseOptions(o), null, true); let n = 0; for (const v of r.seps[i]) n += v; return n; };
+  assert.strictEqual(cover({ ...base, ink_edits: { Black: { on: false } } }, 3), 0);
+  const plain = cover(base, 3);
+  assert.ok(cover({ ...base, ink_edits: { Black: { choke_mm: 0.15 } } }, 3) < plain);
+  assert.ok(cover({ ...base, ink_edits: { Black: { choke_mm: -0.15 } } }, 3) > plain);
+  assert.throws(() => E.parseOptions({ ink_edits: { Black: { choke_mm: 3 } } }));
 });
 
 test("bad options are rejected", () => {

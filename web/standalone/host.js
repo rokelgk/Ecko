@@ -140,12 +140,14 @@
     return new Blob(parts, { type: "image/png" });
   }
   async function zipBlob(files) {   // [{name, blob}] -> stored (uncompressed) ZIP; PNG/JPEG are already compressed
-    const enc = new TextEncoder(), local = [], central = [];
+    const enc = new TextEncoder(), local = [], central = [], now = new Date();
+    const dosTime = (now.getHours() << 11) | (now.getMinutes() << 5) | (now.getSeconds() >> 1);
+    const dosDate = ((now.getFullYear() - 1980) << 9) | ((now.getMonth() + 1) << 5) | now.getDate();
     let offset = 0;
     for (const f of files) {
       const data = new Uint8Array(await f.blob.arrayBuffer()), name = enc.encode(f.name), crc = (crc32(data) ^ 0xFFFFFFFF) >>> 0;
       const le16 = (v) => [v & 255, (v >>> 8) & 255], le32 = (v) => [v & 255, (v >>> 8) & 255, (v >>> 16) & 255, (v >>> 24) & 255];
-      const common = [...le16(20), ...le16(0x0800), ...le16(0), ...le16(0), ...le16(0x21), ...le32(crc), ...le32(data.length), ...le32(data.length), ...le16(name.length)];
+      const common = [...le16(20), ...le16(0x0800), ...le16(0), ...le16(dosTime), ...le16(dosDate), ...le32(crc), ...le32(data.length), ...le32(data.length), ...le16(name.length)];
       const lh = new Uint8Array([...le32(0x04034b50), ...common, ...le16(0)]);
       local.push(lh, name, data);
       central.push(new Uint8Array([...le32(0x02014b50), ...le16(20), ...common, ...le16(0), ...le16(0), ...le16(0), ...le16(0), ...le32(0), ...le32(offset)]), name);
@@ -315,16 +317,17 @@
     const rep = E.report(prep, o, r.plates, r.seps);
     const files = [{ name: `${name}-composite.png`, blob: png }];
     const grain = E.GRAIN_STYLES.includes(o.style);
-    const lines = [`${name}: ${r.plates.length} separation(s)`, "",
+    const kept = r.plates.map((p, i) => [p, r.seps[i]]).filter(([p]) => p.on);   // inks switched off get no film
+    const lines = [`${name}: ${kept.length} separation(s)`, "",
       `Print size: ${rep.inches[0]} x ${rep.inches[1]} in (${rep.cm[0]} x ${rep.cm[1]} cm) at ${o.dpi} DPI`,
       `Screen: ${E.STYLES[o.style]}` + (grain ? `, grain ${o.grain_mm} mm` : `, ${o.lpi} LPI`), ""];
-    for (let i = 0; i < r.plates.length; i++) {
-      const p = r.plates[i], f = film(r.seps[i], r.width, r.height, o), n = String(i + 1).padStart(2, "0");
+    for (let i = 0; i < kept.length; i++) {
+      const [p, sep] = kept[i], f = film(sep, r.width, r.height, o), n = String(i + 1).padStart(2, "0");
       files.push({ name: `${name}-${n}-${p.name.replace(/[^A-Za-z0-9]/g, "-")}.png`, blob: await encodePNG(f.w, f.h, f.data, o.dpi, true) });
       let on = 0;
-      for (const v of r.seps[i]) on += v;
+      for (const v of sep) on += v;
       lines.push(`${n} ${p.name.padEnd(16)} ${E.toHex(p.rgb)}  angle ${(((p.angle % 180) + 180) % 180).toFixed(1).padStart(5)}  ` +
-        `coverage ${(on / r.seps[i].length * 100).toFixed(1)}%`);
+        `coverage ${(on / sep.length * 100).toFixed(1)}%`);
     }
     lines.push("", o.registration_marks ? "Films are black = ink, 1-bit, with registration marks in a 0.5 in margin."
       : "Films are black = ink, 1-bit.", "Print order: as numbered (light inks first).");

@@ -248,20 +248,50 @@ def test_fit_drops_spot_ink_matching_shirt(logo):
     assert len(plates) == 2 and all(E.to_hex(p.rgb) != pal[0] for p in plates)
 
 
-def test_underbase_only_for_screen_print_on_dark_shirts(logo):
+def test_underbase_for_dark_shirts(logo):
     base = {"mode": "cmyk", "width_in": 3, "garment": "#141414"}
     prep = E.prepare(logo, E.parse_options(base))
     plates, _ = E.plate_specs(prep, E.parse_options({**base, "target": "screen"}))
-    assert plates[0].underbase and len(plates) == 5
-    assert not any(p.underbase for p in E.plate_specs(prep, E.parse_options(base))[0])  # DTF: the RIP adds white
+    assert plates[0].underbase and len(plates) == 5          # auto: screen print on a dark shirt
+    assert not any(p.underbase for p in E.plate_specs(prep, E.parse_options(base))[0])  # DTF auto: RIP adds white
+    assert E.plate_specs(prep, E.parse_options({**base, "underbase": "on"}))[0][0].underbase  # your choice wins
     o = E.parse_options({**base, "target": "screen"})
     rgba, plates, seps = E.render_full(prep, o, keep_plates=True)
     ub, inks = seps[0], np.logical_or.reduce(seps[1:])
     assert ub.any() and ub.mean() < inks.mean()  # choked: smaller than the ink it sits under
-    # the print PNG never contains the white base
-    o_no = E.parse_options({**base, "target": "screen", "underbase": "off"})
-    rgba2, _, _ = E.render_full(prep, o_no)
-    assert np.array_equal(rgba, rgba2)
+    rgba2, _, seps2 = E.render_full(prep, E.parse_options({**base, "target": "screen", "underbase": "off"}), keep_plates=True)
+    for a, b in zip(seps[1:], seps2):
+        assert np.array_equal(a, b)  # adding the white base never changes the colour plates
+    # the base shows in the PNG as white where no colour covers it
+    white = (rgba[..., 3] == 255) & (rgba[..., :3].min(axis=2) == 255)
+    assert white.any() and (rgba[..., 3] > 0).sum() >= (rgba2[..., 3] > 0).sum()
+    more_choke = E.render_full(prep, E.parse_options({**base, "target": "screen", "choke_mm": 0.3}), keep_plates=True)[2]
+    assert more_choke[0].mean() < ub.mean()
+
+
+def test_ink_switch_and_choke(logo):
+    base = {"mode": "cmyk", "width_in": 3}
+    prep = E.prepare(logo, E.parse_options(base))
+    _, _, seps = E.render_full(prep, E.parse_options(base), keep_plates=True)
+    rgba, plates, seps_off = E.render_full(prep, E.parse_options({**base, "ink_edits": {"Magenta": {"on": False}}}),
+                                           keep_plates=True)
+    assert not plates[1].on and not seps_off[1].any() and np.array_equal(seps_off[0], seps[0])
+    choked = E.render_full(prep, E.parse_options({**base, "ink_edits": {"Cyan": {"choke_mm": 0.15}}}), keep_plates=True)[2]
+    spread = E.render_full(prep, E.parse_options({**base, "ink_edits": {"Cyan": {"choke_mm": -0.15}}}), keep_plates=True)[2]
+    assert choked[0].mean() < seps[0].mean() < spread[0].mean()
+    assert np.array_equal(choked[3], seps[3])  # other inks untouched
+    with pytest.raises(ValueError):
+        E.parse_options({"ink_edits": {"Cyan": {"choke_mm": 2}}})
+    with pytest.raises(ValueError):
+        E.parse_options({"ink_edits": {"Cyan": {"bogus": 1}}})
+
+
+def test_switched_off_ink_has_no_film(logo):
+    iid = _upload(logo)
+    r = client.post("/api/tone/export", json={"image_id": iid, "format": "zip", "options": {
+        "width_in": 2, "mode": "cmyk", "registration_marks": False, "ink_edits": {"Yellow": {"on": False}}}})
+    names = zipfile.ZipFile(io.BytesIO(r.content)).namelist()
+    assert not any("Yellow" in n for n in names) and sum(n.endswith(".png") for n in names) == 4
 
 
 # ------------------------------------------------------------- text
@@ -344,3 +374,14 @@ def test_catalog_lists_fonts_fits_and_garments():
     assert {f["id"] for f in body["fonts"]} >= {"varsity", "script"}
     assert [f["id"] for f in body["shirt_fits"]][0] == "auto"
     assert any(g["name"] == "Black" for g in body["garments"])
+
+
+def test_dark_shirt_cmyk_suggests_underbase(logo):
+    o = E.parse_options({"mode": "cmyk", "width_in": 2, "garment": "#141414"})  # DTF: auto leaves it to the RIP
+    prep = E.prepare(logo, o)
+    rgba, plates, bm = E.render_preview(prep, o, 300)
+    fixes = [w.get("fix") for w in E.report(prep, o, plates, bm)["warnings"]]
+    assert {"underbase": "on"} in fixes
+    o2 = E.parse_options({"mode": "cmyk", "width_in": 2, "garment": "#141414", "underbase": "on"})
+    rgba, plates, bm = E.render_preview(prep, o2, 300)
+    assert {"underbase": "on"} not in [w.get("fix") for w in E.report(prep, o2, plates, bm)["warnings"]]

@@ -42,14 +42,15 @@ def separations_zip(rgba: np.ndarray, seps: list[np.ndarray], plates, o: ToneOpt
     buf = io.BytesIO()
     with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as z:
         z.writestr(f"{name}-composite.png", png_bytes(rgba, o.dpi))
-        lines = [f"{name}: {len(plates)} separation(s)", "",
+        lines = [f"{name}: {sum(p.on for p in plates)} separation(s)", "",
                  f"Print size: {report['inches'][0]} x {report['inches'][1]} in "
                  f"({report['cm'][0]} x {report['cm'][1]} cm) at {o.dpi} DPI",
                  f"Screen: {STYLES[o.style]}" + (f", {o.lpi:g} LPI" if o.style not in ("fm", "xerox", "mezzotint")
                                                   else f", grain {o.grain_mm:g} mm"), ""]
-        for i, (b, p) in enumerate(zip(seps, plates), 1):
+        kept = [(b, p) for b, p in zip(seps, plates) if p.on]  # inks switched off get no film
+        for i, (b, p) in enumerate(kept, 1):
             safe = "".join(ch if ch.isalnum() else "-" for ch in p.name)
-            label = f"{name} | {i}/{len(plates)} {p.name} {to_hex(p.rgb)} | {o.lpi:g} LPI @ {p.angle % 180:.1f} deg"
+            label = f"{name} | {i}/{len(kept)} {p.name} {to_hex(p.rgb)} | {o.lpi:g} LPI @ {p.angle % 180:.1f} deg"
             fbuf = io.BytesIO()
             _film(b, o, label).save(fbuf, "PNG", dpi=(o.dpi, o.dpi))
             z.writestr(f"{name}-{i:02d}-{safe}.png", fbuf.getvalue())

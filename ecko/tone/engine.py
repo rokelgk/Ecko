@@ -149,6 +149,7 @@ class ToneOptions:
     underbase: str = "auto"
     choke_mm: float = 0.1
     text: list = field(default_factory=list)
+    ink_edits: dict = field(default_factory=dict)  # {"Cyan": {"on": False, "choke_mm": 0.05}, ...}
 
     # Settings that change the prepared source (the slow step).
     def prepare_key(self) -> tuple:
@@ -213,7 +214,29 @@ def parse_options(data: dict | None) -> ToneOptions:
                       "image_id": t.get("image_id")})
     o.textures = clean
     o.text = _parse_text(o.text)
+    o.ink_edits = _parse_ink_edits(o.ink_edits)
     return o
+
+
+def _parse_ink_edits(edits) -> dict:
+    """Per-ink switches: turn an ink off, or choke (> 0) / spread (< 0) its dots in mm."""
+    if not isinstance(edits, dict) or len(edits) > 16:
+        raise ValueError("ink_edits must map up to 16 ink names to settings.")
+    out = {}
+    for name, e in edits.items():
+        if not isinstance(name, str) or len(name) > 40 or not isinstance(e, dict):
+            raise ValueError("Each ink edit is {ink name: {on, choke_mm}}.")
+        unknown = set(e) - {"on", "choke_mm"}
+        if unknown:
+            raise ValueError(f"Unknown ink settings: {', '.join(sorted(unknown))}")
+        try:
+            choke = float(e.get("choke_mm", 0.0))
+        except (TypeError, ValueError) as exc:
+            raise ValueError("Ink choke must be a number.") from exc
+        if not (math.isfinite(choke) and -0.5 <= choke <= 0.5):
+            raise ValueError("Ink choke must be between -0.5 and 0.5 mm.")
+        out[name] = {"on": bool(e.get("on", True)), "choke_mm": round(choke, 4)}
+    return out
 
 
 _TEXT_RANGES = {"size": (0.02, 1.0), "arc": (-340, 340), "x": (-2, 2), "y": (-2, 2), "spacing": (-0.2, 1.0)}
@@ -501,7 +524,9 @@ class Plate:
     angle: float
     shift: tuple = (0.0, 0.0)
     src: int = 0              # which coverage channel feeds this plate
-    underbase: bool = False   # white base for dark shirts: films only, not the DTF/DTG PNG
+    underbase: bool = False   # white base printed first, under the colours on dark shirts
+    on: bool = True           # switched off: not printed, not in files
+    choke_mm: float = 0.0     # > 0 shrinks this ink's dots, < 0 spreads them
 
 
 def _lum(rgb) -> float:
@@ -564,7 +589,7 @@ def resolve_fit(prep: Prepared, o: ToneOptions) -> Fit:
     fit.underbase = o.underbase == "on" or (
         o.underbase == "auto" and o.target == "screen" and lg < 0.6 and any(_lum(c) < 0.85 for c in printed))
     if fit.underbase and o.underbase == "auto":
-        fit.notes.append("Dark shirt: a choked white underbase film is added so the colours stay bright.")
+        fit.notes.append("Dark shirt: a choked white underbase is added under the colours so they stay bright.")
     return fit
 
 
@@ -582,7 +607,14 @@ def plate_specs(prep: Prepared, o: ToneOptions, fit: Fit | None = None) -> tuple
         plates = [Plate(f"Spot {i + 1}", c, o.angle + 30 * i, src=i) for i, c in enumerate(fit.spot) if c is not None]
         blend = "opaque"
     if fit.underbase:
-        plates.insert(0, Plate("White underbase", (255, 255, 255), o.angle + 7.5, src=-1, underbase=True))
+        plates.insert(0, Plate("White underbase", (255, 255, 255), o.angle + 7.5, src=-1, underbase=True,
+                               choke_mm=o.choke_mm))
+    for p in plates:
+        e = o.ink_edits.get(p.name)
+        if e:
+            p.on = e["on"]
+            if not p.underbase:
+                p.choke_mm = e["choke_mm"]
     return plates, blend
 
 
@@ -637,13 +669,21 @@ def _underbase(covs: list[np.ndarray], plates: list[Plate], o: ToneOptions) -> n
     """White base under every ink, shrunk ("choked") so it never peeks out past the colour."""
     m = None
     for p in plates:
-        if not p.underbase:
+        if not p.underbase and p.on:
             m = covs[p.src] if m is None else np.maximum(m, covs[p.src])
     if m is None:
-        return np.zeros(1, np.float32)
+        return np.zeros_like(covs[0]) if covs else np.zeros(1, np.float32)
+    return _choke(m, o.choke_mm, o)
+
+
+def _choke(c: np.ndarray, mm: float, o: ToneOptions) -> np.ndarray:
+    """Shrink (mm > 0) or spread (mm < 0) every dot by about ``mm`` at its edge."""
+    if not mm:
+        return c
     cell = o.dpi / o.lpi if o.style in AM_STYLES else 2 * o.grain_mm * o.dpi / 25.4
-    k = (o.choke_mm * o.dpi / 25.4) / (cell * 0.5642)  # radius shrink as a fraction of the cell
-    return np.clip(np.sqrt(m) - k, 0, 1) ** 2
+    k = (mm * o.dpi / 25.4) / (cell * 0.5642)  # radius change as a fraction of the cell
+    out = np.clip(np.sqrt(np.clip(c, 0, 1)) - k, 0, 1) ** 2
+    return np.where(c > 0, out, 0).astype(np.float32)  # spreading never adds ink where there was none
 
 
 # ----------------------------------------------------------------- screens
@@ -775,8 +815,11 @@ def render_plates(prep: Prepared, o: ToneOptions, x0: float, y0: float, gw: int,
         if p.shift not in samples:
             rgb, a = _sample(prep, x0, y0, gw, gh, step, out_w, *p.shift)
             samples[p.shift] = [_shape_dots(c, o) for c in _coverages(rgb, a, prep, o, fit)]
+        if not p.on:
+            result.append(np.zeros((gh, gw), bool))
+            continue
         covs = samples[p.shift]
-        cov = _underbase(covs, plates, o) if p.underbase else covs[p.src]
+        cov = _underbase(covs, plates, o) if p.underbase else _choke(covs[p.src], p.choke_mm, o)
         # seed by ink, not list position, so adding an underbase never changes the other plates
         T = threshold(xs - p.shift[0], ys - p.shift[1], o, p.angle, o.seed * 31 + (p.src if p.src >= 0 else 97))
         result.append(cov > T)
@@ -789,7 +832,7 @@ def render_plates(prep: Prepared, o: ToneOptions, x0: float, y0: float, gw: int,
         for i in range(len(result)):
             result[i] &= ~remove
         if alpha_any is not None:
-            inks = [i for i, p in enumerate(plates) if not p.underbase]
+            inks = [i for i, p in enumerate(plates) if not p.underbase and p.on]
             if inks:  # toner specks go on the darkest / black plate (printed last)
                 result[inks[-1]] |= add & alpha_any & ~remove
     return result
@@ -803,14 +846,15 @@ def composite(bitmaps: list[np.ndarray], plates: list[Plate], blend: str, o: Ton
     if blend == "multiply":
         rgb = np.ones((h, w, 3), np.float32)
         for b, p in zip(bitmaps, plates):
-            if p.underbase:
+            if not p.on:
                 continue
-            rgb[b] *= np.array(p.rgb, np.float32) / 255.0
+            if not p.underbase:  # the underbase is white: it shows where no colour covers it
+                rgb[b] *= np.array(p.rgb, np.float32) / 255.0
             alpha |= b
     else:
         rgb = np.zeros((h, w, 3), np.float32)
         for b, p in zip(bitmaps, plates):
-            if p.underbase:
+            if not p.on:
                 continue
             rgb[b] = np.array(p.rgb, np.float32) / 255.0
             alpha |= b
@@ -939,7 +983,8 @@ def report(prep: Prepared, o: ToneOptions, plates: list[Plate], bitmaps: list[np
     inks = []
     for p, b in zip(plates, bitmaps):
         inks.append({"name": p.name, "hex": to_hex(p.rgb), "angle": round(p.angle % 180, 1),
-                     "coverage": round(float(b.mean()) * 100, 1), "underbase": p.underbase})
+                     "coverage": round(float(b.mean()) * 100, 1), "underbase": p.underbase,
+                     "on": p.on, "choke_mm": p.choke_mm})
         if not p.underbase:
             any_ink |= b
     info["ink_area_pct"] = round(float(any_ink.mean()) * 100, 1) if any_ink is not None else 0
@@ -962,6 +1007,10 @@ def report(prep: Prepared, o: ToneOptions, plates: list[Plate], bitmaps: list[np
             warnings.append({"level": "warn", "text": f"{round(lost * 100)}% of the picture is darker than this "
                              "shirt, so it blends into the shirt. Recolor prints it as ink instead.",
                              "fix": {"shirt_fit": "recolor"}})
+    if (o.mode in ("cmyk", "spot", "duotone") and _lum(garment) < 0.6 and not fit.underbase
+            and o.underbase != "off"):
+        warnings.append({"level": "warn", "text": "Colours print dull and dark straight onto a dark shirt. "
+                         "A white underbase underneath keeps them bright.", "fix": {"underbase": "on"}})
     info["inks"] = inks
     info["warnings"] = warnings
     return info
