@@ -126,6 +126,7 @@
   }
   /** RGBA (colorType 6) or 1-bit film (bits: 1 = ink, written black). Real DPI goes in pHYs. */
   async function encodePNG(w, h, data, dpi, oneBit = false) {
+    if (typeof CompressionStream === "undefined") return encodePNGCanvas(w, h, data, dpi, oneBit);
     const stride = oneBit ? Math.ceil(w / 8) : w * 4, raw = new Uint8Array((stride + 1) * h);
     for (let y = 0; y < h; y++) {
       const o = y * (stride + 1) + 1;
@@ -139,6 +140,23 @@
     parts.push(chunk("IDAT", await zlib(raw)), chunk("IEND", new Uint8Array(0)));
     return new Blob(parts, { type: "image/png" });
   }
+  /** Fallback for browsers without CompressionStream (older Safari): let the canvas write the PNG,
+   *  then add the DPI chunk ourselves. Films come out as black-and-white RGBA rather than 1-bit. */
+  async function encodePNGCanvas(w, h, data, dpi, oneBit) {
+    let rgba = data;
+    if (oneBit) {
+      rgba = new Uint8ClampedArray(w * h * 4);
+      for (let k = 0; k < w * h; k++) { const v = data[k] ? 0 : 255; rgba[k * 4] = rgba[k * 4 + 1] = rgba[k * 4 + 2] = v; rgba[k * 4 + 3] = 255; }
+    }
+    const c = makeCanvas(w, h);
+    c.getContext("2d").putImageData(new ImageData(new Uint8ClampedArray(rgba.buffer, rgba.byteOffset, w * h * 4), w, h), 0, 0);
+    const blob = c.convertToBlob ? await c.convertToBlob({ type: "image/png" }) : await new Promise((r) => c.toBlob(r, "image/png"));
+    if (!dpi) return blob;
+    const bytes = new Uint8Array(await blob.arrayBuffer()), ppm = Math.round(dpi / 0.0254);
+    const phys = chunk("pHYs", new Uint8Array([...be32(ppm), ...be32(ppm), 1]));
+    return new Blob([bytes.subarray(0, 33), phys, bytes.subarray(33)], { type: "image/png" });   // right after IHDR
+  }
+
   async function zipBlob(files) {   // [{name, blob}] -> stored (uncompressed) ZIP; PNG/JPEG are already compressed
     const enc = new TextEncoder(), local = [], central = [], now = new Date();
     const dosTime = (now.getHours() << 11) | (now.getMinutes() << 5) | (now.getSeconds() >> 1);
@@ -288,6 +306,13 @@
     return { id, width: img.w, height: img.h };
   }
 
+  function uploadRGBA({ rgba, w, h, origW, origH }) {   // already decoded by the page
+    const id = Array.from(crypto.getRandomValues(new Uint8Array(16)), (b) => b.toString(16).padStart(2, "0")).join("");
+    images.set(id, { rgba: new Uint8ClampedArray(rgba), w, h });
+    while (images.size > 48) images.delete(images.keys().next().value);
+    return { id, width: origW || w, height: origH || h };
+  }
+
   async function preview(body) {
     const o = options(body.options), prep = getPrepared(body.image_id ?? null, o);
     const region = body.region;
@@ -392,6 +417,7 @@
     switch (cmd) {
       case "init": return { fonts: await loadFonts(args.fonts), canDraw: canDraw() };
       case "upload": return upload(args);
+      case "uploadRGBA": return uploadRGBA(args);
       case "preview": return preview(args);
       case "mockup": return mockup(args);
       case "export": return exportFile(args);

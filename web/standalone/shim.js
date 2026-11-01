@@ -68,6 +68,42 @@
     return call(cmd, args);
   }
 
+  /** Decode a picture with the page's own image loader (works for anything the browser can display),
+   *  shrinking huge photos so the canvas stays inside every browser's limits (Safari: ~16 MP). */
+  async function decodeInPage(file) {
+    const unreadable = () => Object.assign(new Error("That file isn't an image we can read. Try PNG or JPG."), { status: 422 });
+    let src = null, w = 0, h = 0, url = null;
+    try {
+      src = await createImageBitmap(file);
+      w = src.width; h = src.height;
+    } catch (e) {
+      url = URL.createObjectURL(file);
+      src = await new Promise((resolve, reject) => {
+        const im = new Image();
+        im.onload = () => resolve(im);
+        im.onerror = () => reject(unreadable());
+        im.src = url;
+      });
+      w = src.naturalWidth; h = src.naturalHeight;
+    }
+    try {
+      if (!w || !h) throw unreadable();
+      if (w < 16 || h < 16) throw Object.assign(new Error("The image is too small. Upload at least 200 x 200 pixels."), { status: 422 });
+      const s = Math.min(1, 5000 / Math.max(w, h), Math.sqrt(16e6 / (w * h)));
+      const cw = Math.max(1, Math.round(w * s)), ch = Math.max(1, Math.round(h * s));
+      const c = document.createElement("canvas");
+      c.width = cw; c.height = ch;
+      const ctx = c.getContext("2d");
+      ctx.imageSmoothingQuality = "high";
+      ctx.drawImage(src, 0, 0, cw, ch);
+      const data = ctx.getImageData(0, 0, cw, ch).data;
+      return { rgba: data.buffer, w: cw, h: ch, origW: w, origH: h };
+    } finally {
+      if (url) URL.revokeObjectURL(url);
+      if (src && src.close) src.close();
+    }
+  }
+
   const json = (obj, status = 200) => new Response(JSON.stringify(obj), { status, headers: { "Content-Type": "application/json" } });
   const fileResponse = (blob, filename) => new Response(blob, {
     headers: { "Content-Type": blob.type || "application/octet-stream",
@@ -89,8 +125,9 @@
       if (route === "catalog") return json(window.EckoToneEngine.CATALOG.api);
       await ready;
       if (route === "images") {
-        const file = init.body.get("file"), bytes = await file.arrayBuffer();
-        return json(await call("upload", { bytes }, [bytes]));
+        const file = init.body.get("file");
+        const img = await decodeInPage(file);   // the same way the page shows the thumbnail
+        return json(await call("uploadRGBA", img, [img.rgba]));
       }
       const body = init.body ? JSON.parse(init.body) : {};
       if (route === "preview") {
