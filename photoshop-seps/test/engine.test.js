@@ -204,3 +204,51 @@ test('dot close-up renders the requested window', () => {
   assert.strictEqual(d.width, 200);
   assert.strictEqual(d.rgba.length, 200 * 200 * 4);
 });
+
+test('per-color amount and levels change only that screen', () => {
+  const first = engine.separate(art, preset('dark-sim', { screens: 6 }));
+  const inks = first.screens.map((s) => ({ name: s.name, hex: s.hex, role: s.role }));
+  const base = engine.separate(art, preset('dark-sim', { inks }));
+  inks[2].adjust = { amount: 0.5 };
+  const half = engine.separate(art, preset('dark-sim', { inks }));
+  assert.ok(avgPlate(half.screens[2].plate) < avgPlate(base.screens[2].plate) * 0.65);
+  assert.ok(Math.abs(avgPlate(half.screens[3].plate) - avgPlate(base.screens[3].plate)) < 0.002);
+  inks[2].adjust = { levels: { outWhite: 0.6 } };
+  const capped = engine.separate(art, preset('dark-sim', { inks, minDot: 0, maxDot: 1, dotGain: 0 }));
+  assert.ok(capped.screens[2].plate.reduce((m, v) => (v > m ? v : m), 0) <= 154);
+  assert.strictEqual(capped.screens[2].histogram.length, 64);
+});
+
+test('CMYK on a black shirt prints over a white underbase', () => {
+  const r = engine.separate(art, preset('cmyk-dark'));
+  assert.deepStrictEqual(r.screens.map((s) => s.role), ['underbase', 'process', 'process', 'process', 'process', 'highlight']);
+  assert.ok(r.report.match.avgDeltaE < 3, JSON.stringify(r.report.match));
+});
+
+test('accuracy pass improves the match and keeps small accents', () => {
+  const before = engine.separate(art, preset('dark-sim', { screens: 8, refine: false }));
+  const after = engine.separate(art, preset('dark-sim', { screens: 8 }));
+  assert.ok(after.report.match.avgDeltaE <= before.report.match.avgDeltaE);
+  assert.ok(after.screens.some((s) => s.lab[1] > 50 && s.lab[0] < 60), 'red accent kept');
+  const names = after.screens.map((s) => s.name);
+  assert.strictEqual(new Set(names).size, names.length, 'unique names');
+});
+
+test('art levels and saturation are applied before separating', () => {
+  const gray = engine.prepareArt(logo, { printWidthIn: 2, upscale: false, saturation: 0 }).image;
+  const i = (20 * gray.width + 60) * gray.channels;
+  assert.ok(Math.abs(gray.data[i] - gray.data[i + 2]) <= 1);
+});
+
+test('registration adds marks, crop marks and ink names around every plate', () => {
+  const r = engine.separate(logo, preset('spot'));
+  const reg = engine.applyRegistration(r, engine.presets.getPreset('spot').film, { marks: true, crops: true, center: true, names: true, marginIn: 0.5 });
+  const m = Math.round(0.5 * r.dpi);
+  assert.strictEqual(reg.width, r.width + 2 * m);
+  const pl = reg.screens[0].plate;
+  let marginInk = 0;
+  for (let x = 0; x < reg.width; x++) for (let y = 0; y < m; y++) if (pl[y * reg.width + x]) marginInk++;
+  assert.ok(marginInk > 20, 'marks drawn in the margin');
+  const none = engine.applyRegistration(r, {}, { marks: false, crops: false, center: false, names: false });
+  assert.strictEqual(none, r);
+});

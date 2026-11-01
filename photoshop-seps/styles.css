@@ -134,3 +134,35 @@ label.btn input[type=file] { display: none; }
 .check input { margin-right: 6px; }
 select { background: #252525; color: var(--text); border: 1px solid #555; border-radius: 3px; padding: 4px; }
 footer { text-align: center; margin: 10px 0 20px 0; }
+
+/* Workflow checklist */
+.steps { margin-top: 6px; }
+.stp { display: flex; align-items: center; padding: 5px 4px; border-radius: 4px; cursor: pointer; }
+.stp:hover { background: #3d3d3d; }
+.stp .ico { width: 20px; height: 20px; border-radius: 10px; display: inline-flex; align-items: center; justify-content: center; font-size: 11px; margin-right: 8px; flex-shrink: 0; background: #4a4a4a; color: #ddd; }
+.stp.ok .ico { background: #1f5133; color: #9ff0bf; }
+.stp.warn .ico { background: #5a4b1c; color: #ffe08a; }
+.stp.todo .ico { background: #24364d; color: #9cc7ff; }
+.stp .t { flex: 1; }
+.stp .t b { font-weight: 600; }
+.stp .s { color: var(--muted); font-size: 11px; text-align: right; margin-left: 6px; }
+.card.flash { border-color: var(--accent); }
+.step.inv { background: #ffffff; color: var(--accent); }
+
+.banner { border-radius: 5px; padding: 7px 8px; margin-bottom: 8px; font-size: 11.5px; display: flex; align-items: center; justify-content: space-between; }
+.banner.warn { background: #4a3a17; border: 1px solid #7a6020; }
+.banner.ok { background: #1f3b2a; border: 1px solid #2f6b44; }
+.banner .btn { margin-left: 8px; flex-shrink: 0; }
+.sub { border-top: 1px solid var(--line); margin-top: 8px; padding-top: 8px; }
+
+.toggles { display: flex; flex-wrap: wrap; }
+.tog { padding: 6px 10px; border: 1px solid var(--line); border-radius: 14px; margin: 0 6px 6px 0; cursor: pointer; background: #3c3c3c; font-size: 11.5px; }
+.tog.on { background: var(--accent); border-color: var(--accent); color: var(--accent-text); }
+
+/* Per-ink panel */
+.inkpanel { background: #2d2d2d; border: 1px solid var(--line); border-radius: 5px; padding: 8px; margin: 4px 0 8px 0; }
+.inkpanel h4 { margin: 8px 0 4px 0; font-size: 11.5px; color: #cfcfcf; }
+.hist { display: flex; align-items: flex-end; height: 44px; background: #1f1f1f; border-radius: 3px; padding: 2px; margin-bottom: 6px; }
+.hist div { flex: 1; background: #8a8a8a; margin-right: 1px; min-height: 1px; }
+.scr .ic.gear.on { background: #24364d; border-color: var(--accent); }
+.picking .stage img { cursor: copy; }

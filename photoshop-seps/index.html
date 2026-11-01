@@ -34,13 +34,28 @@
     <div id="optionsPane" class="pane-options">
       <div id="docInfo" class="muted small docinfo">No artwork yet</div>
 
-      <section class="card">
-        <h2><span class="step">1</span>What are you printing?</h2>
+      <section class="card" id="workflow">
+        <h2>Workflow</h2>
+        <div class="muted small">Each step shows what's done (✓), what needs a look (!) and what's next. Tap a step to jump to it.</div>
+        <div id="steps" class="steps"></div>
+      </section>
+
+      <section class="card" id="artCard">
+        <h2><span class="step">1</span>Art check: size, resolution &amp; sharpness</h2>
+        <div id="dpiBanner" class="banner hidden"></div>
+        <div id="artInfo" class="muted small"></div>
+        <div id="artBody"></div>
+        <button id="artLevelsBtn" class="btn small">Levels &amp; color…</button>
+        <div id="artLevels" class="sub hidden"></div>
+      </section>
+
+      <section class="card" id="presetCard">
+        <h2><span class="step">2</span>What are you printing?</h2>
         <div id="presets" class="presets"></div>
       </section>
 
-      <section class="card">
-        <h2><span class="step">2</span>Shirt color</h2>
+      <section class="card" id="garmentCard">
+        <h2><span class="step">3</span>Shirt color</h2>
         <div id="garments" class="swatches"></div>
         <div class="row">
           <span id="garmentChip" class="chip"></span>
@@ -50,39 +65,42 @@
         </div>
       </section>
 
-      <section class="card">
-        <h2><span class="step">3</span>Screens</h2>
+      <section class="card" id="countCard">
+        <h2><span class="step">4</span>Screens</h2>
         <div id="counts" class="segmented"></div>
         <div id="countHint" class="muted small"></div>
       </section>
 
-      <button id="separate" class="btn primary huge">Separate</button>
+      <button id="separate" class="btn primary huge"><span class="step inv">5</span>Separate</button>
       <button id="reload" class="btn wide ps-only hidden">Reload artwork from Photoshop</button>
 
-      <section class="card" id="artCard">
-        <h2>Art size, resolution &amp; sharpness</h2>
-        <div id="artInfo" class="muted small"></div>
-        <div id="artBody"></div>
-      </section>
 
       <section id="screensCard" class="card hidden">
-        <h2>Screens in print order</h2>
-        <div class="muted small">Changes show on the preview right away. Use 👁 to try a screen without deleting it.</div>
+        <h2><span class="step">6</span>Colors &amp; print order</h2>
+        <div class="muted small">Changes show on the preview right away. 👁 tries the print without a screen, ⚙ opens amount, levels and advanced settings for that color.</div>
         <div id="screens" class="screens"></div>
         <div class="row gap">
+          <button id="pickSpot" class="btn small">🎯 Add spot color from art</button>
           <button id="addInk" class="btn small">+ Add ink</button>
         </div>
         <ul id="warnings" class="warnings"></ul>
       </section>
 
       <section class="card collapsible open" id="tuneCard">
-        <h2 class="toggle">Fine-tune separation</h2>
+        <h2 class="toggle"><span class="step">7</span>Underbase &amp; fine-tune</h2>
         <div class="body" id="tuneBody"></div>
       </section>
 
       <section class="card collapsible" id="filmCard">
-        <h2 class="toggle">Halftones, bitmap &amp; films</h2>
+        <h2 class="toggle"><span class="step">8</span>Halftones, bitmap &amp; films</h2>
         <div class="body" id="filmBody"></div>
+      </section>
+
+      <section class="card" id="regCard">
+        <h2><span class="step">9</span>Registration &amp; pre-registration</h2>
+        <div id="regToggles" class="toggles"></div>
+        <div id="regBody"></div>
+        <div class="muted small">Shown on the screen (plate) views, printed on films, and added to the Photoshop document.</div>
       </section>
 
       <section class="card collapsible" id="libraryCard">
@@ -99,7 +117,7 @@
       </section>
 
       <section class="card" id="outputCard">
-        <h2><span class="step">4</span>Output</h2>
+        <h2><span class="step">10</span>Output</h2>
         <button id="build" class="btn primary wide" disabled>Build separation document</button>
         <div class="muted small ps-text">Full-resolution spot channels named after each ink, in print order, on a garment-colored background layer.</div>
         <div class="row gap">

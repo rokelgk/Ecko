@@ -27,6 +27,11 @@
     screens: saved.screens || 8,
     tune: saved.tune || {},
     film: saved.film || null,
+    reg: Object.assign({}, E.REG_DEFAULTS, saved.reg || {}),
+    regInDoc: saved.regInDoc !== false,
+    openInk: -1,
+    dragging: false,
+    picking: false,
     prep: Object.assign({}, E.PREP_DEFAULTS, saved.prep || {}),
     libraryId: saved.libraryId || 'builtin',
     matchLibrary: !!saved.matchLibrary,
@@ -54,7 +59,7 @@
   function save() {
     host.storage.set('ecko-seps-settings', JSON.stringify({
       presetId: state.presetId, garment: state.garment, screens: state.screens, tune: state.tune, film: state.film,
-      prep: state.prep, libraryId: state.libraryId, matchLibrary: state.matchLibrary, bake: state.bake,
+      prep: state.prep, reg: state.reg, regInDoc: state.regInDoc, libraryId: state.libraryId, matchLibrary: state.matchLibrary, bake: state.bake,
     }));
     host.storage.set('ecko-seps-libraries', JSON.stringify(state.libraries));
   }
@@ -112,7 +117,8 @@
       }
       state.full = null;
       renderResults();
-      showDelta(note, prev, r.report.match);
+      showDelta(note, note && state.dragBase ? state.dragBase : prev, r.report.match);
+      if (note) state.dragBase = null;
       const ms = Date.now() - t0;
       if (fresh && state.screens === 'auto' && MODES_WITH_COUNT.includes(mode())) status(`Auto picked ${r.screens.length} screens · ${ms} ms`);
       else status(`Updated in ${ms} ms`);
@@ -249,8 +255,8 @@
       r.type = 'range'; r.min = def.min; r.max = def.max; r.step = def.step; r.value = value;
       const val = document.createElement('span');
       val.className = 'val'; val.textContent = def.fmt(Number(value));
-      r.addEventListener('input', () => { val.textContent = def.fmt(Number(r.value)); onChange(Number(r.value), true); });
-      r.addEventListener('change', () => onChange(Number(r.value)));
+      r.addEventListener('input', () => { state.dragging = true; val.textContent = def.fmt(Number(r.value)); onChange(Number(r.value), true); });
+      r.addEventListener('change', () => { state.dragging = false; onChange(Number(r.value)); });
       ctl.appendChild(r); ctl.appendChild(val);
     } else if (def.type === 'number') {
       const n = document.createElement('input');
@@ -293,7 +299,166 @@
     renderArtInfo();
   }
 
+  // Automatic resolution fix: art under 300 ppi at its print size gets
+  // upscaled (bicubic) with light sharpening; the banner says what happened.
+  function autoFixResolution() {
+    const i = E.artInfo(state.art.original, Object.assign({}, state.prep, { upscale: false }));
+    if (i.sourcePpi < 295) {
+      state.prep.upscale = true;
+      state.prep.targetPpi = 300;
+      if (!state.prep.sharpen) state.prep.sharpen = i.sourcePpi < 150 ? 0.7 : 0.45;
+      if (i.sourcePpi < 120 && !state.prep.denoise) state.prep.denoise = 1;
+      state.autoFixed = Math.round(i.sourcePpi);
+    } else state.autoFixed = 0;
+  }
+
+  function renderBanner() {
+    const b = $('dpiBanner');
+    if (!state.art) { b.classList.add('hidden'); return; }
+    const raw = E.artInfo(state.art.original, Object.assign({}, state.prep, { upscale: false }));
+    const i = E.artInfo(state.art.original, state.prep);
+    b.innerHTML = '';
+    const text = document.createElement('span');
+    const btn = document.createElement('button');
+    btn.className = 'btn small';
+    if (raw.sourcePpi >= 295) { b.classList.add('hidden'); return; }
+    b.classList.remove('hidden');
+    if (i.upscaled) {
+      b.className = 'banner ok';
+      text.textContent = `✓ High-res: ${Math.round(raw.sourcePpi)} ppi art is rendered at ${Math.round(i.outputPpi)} ppi (${i.outWidth}×${i.outHeight}px) with sharpening${state.prep.denoise ? ' and noise clean-up' : ''}.`;
+      btn.textContent = 'Undo';
+      btn.addEventListener('click', () => { state.prep.upscale = false; state.prep.sharpen = 0; state.prep.denoise = 0; renderArt(); schedule('prep', 'Turned off high-res'); });
+    } else {
+      b.className = 'banner warn';
+      text.textContent = `! Art is only ${Math.round(raw.sourcePpi)} ppi at ${raw.widthIn.toFixed(1)} in wide. Screen printing needs 300 ppi for clean edges and dots.`;
+      btn.textContent = 'Make high-res (300 ppi)';
+      btn.addEventListener('click', () => { autoFixResolution(); renderArt(); schedule('prep', 'Made art high-res'); });
+    }
+    b.appendChild(text); b.appendChild(btn);
+  }
+
+  function renderArtLevels() {
+    const box = $('artLevels');
+    box.innerHTML = '';
+    const lv = Object.assign({ black: 0, white: 255, gamma: 1 }, state.prep.levels || {});
+    const set = (k) => (v) => { state.prep.levels = Object.assign({}, lv, state.prep.levels || {}, { [k]: v }); schedule('prep'); };
+    box.appendChild(fieldEl({ label: 'Black point', type: 'range', min: 0, max: 128, step: 1, fmt: (v) => String(v) }, lv.black, set('black')));
+    box.appendChild(fieldEl({ label: 'Midtones', type: 'range', min: 0.3, max: 3, step: 0.05, fmt: (v) => v.toFixed(2) }, lv.gamma, set('gamma')));
+    box.appendChild(fieldEl({ label: 'White point', type: 'range', min: 128, max: 255, step: 1, fmt: (v) => String(v) }, lv.white, set('white')));
+    box.appendChild(fieldEl({ label: 'Saturation', type: 'range', min: 0, max: 2, step: 0.05, fmt: pct }, state.prep.saturation == null ? 1 : state.prep.saturation, (v) => { state.prep.saturation = v; schedule('prep'); }));
+    const reset = document.createElement('button'); reset.className = 'btn small'; reset.textContent = 'Reset levels';
+    reset.addEventListener('click', () => { state.prep.levels = null; state.prep.saturation = 1; renderArtLevels(); schedule('prep', 'Reset art levels'); });
+    box.appendChild(reset);
+  }
+
+  const REG_TOGGLES = [['marks', 'Registration marks'], ['crops', 'Crop marks'], ['center', 'Center marks'], ['names', 'Ink names'], ['details', 'LPI / mesh on label']];
+  function renderReg() {
+    const box = $('regToggles');
+    box.innerHTML = '';
+    for (const [k, label] of REG_TOGGLES) {
+      const t = document.createElement('span');
+      t.className = 'tog' + (state.reg[k] ? ' on' : '');
+      t.textContent = (state.reg[k] ? '✓ ' : '+ ') + label;
+      t.addEventListener('click', () => { state.reg[k] = !state.reg[k]; save(); renderReg(); afterRegChange(); });
+      box.appendChild(t);
+    }
+    const body = $('regBody');
+    body.innerHTML = '';
+    body.appendChild(fieldEl({ label: 'Margin', type: 'select', opts: [[0.25, '0.25 in'], [0.5, '0.5 in'], [0.75, '0.75 in'], [1, '1 in']] }, state.reg.marginIn, (v) => { state.reg.marginIn = v; save(); afterRegChange(); }));
+    if (host.name === 'photoshop') body.appendChild(fieldEl({ label: 'Add to document', type: 'check' }, state.regInDoc, (v) => { state.regInDoc = v; save(); }));
+  }
+
+  function afterRegChange() {
+    state.full = null;
+    renderSteps();
+    if (state.result) {
+      if (typeof state.view !== 'number') state.view = state.result.screens.length > 1 ? 1 : 0;
+      renderTabs(); renderView();
+    }
+  }
+
+  function pickSpotAt(fx, fy) {
+    state.picking = false;
+    $('app').classList.remove('picking');
+    const src = proofImage().image;
+    const x = Math.min(src.width - 1, Math.floor(fx * src.width)), y = Math.min(src.height - 1, Math.floor(fy * src.height));
+    const acc = [0, 0, 0];
+    let n = 0;
+    for (let dy = -1; dy <= 1; dy++) for (let dx = -1; dx <= 1; dx++) {
+      const xx = Math.min(src.width - 1, Math.max(0, x + dx)), yy = Math.min(src.height - 1, Math.max(0, y + dy));
+      const i = (yy * src.width + xx) * src.channels;
+      if (src.channels === 4 && src.data[i + 3] < 128) continue;
+      acc[0] += src.data[i]; acc[1] += src.data[i + 1]; acc[2] += src.data[i + 2]; n++;
+    }
+    if (!n) { status('That spot is transparent. Tap on the art.', true); return; }
+    let hex = E.color.toHex(acc.map((v) => v / n));
+    const lab = E.color.rgbToLab(E.color.parseHex(hex));
+    let name = E.color.colorName(lab);
+    if (state.matchLibrary) { const m = E.inks.nearestInk(lab, library()); if (m) { name = m.ink.name; hex = m.ink.hex; } }
+    editInks(`Added spot ${name}`, () => {
+      const hl = state.inks.findIndex((q) => q.role === 'highlight');
+      const ink = { name, hex, role: 'color', locked: true, hidden: false };
+      if (hl >= 0) state.inks.splice(hl, 0, ink); else state.inks.push(ink);
+    });
+  }
+
+  // ---------- workflow checklist ----------
+  const CARD = { art: 'artCard', job: 'presetCard', shirt: 'garmentCard', screens: 'countCard', sep: 'separate', colors: 'screensCard', ub: 'tuneCard', film: 'filmCard', reg: 'regCard', out: 'outputCard' };
+  function renderSteps() {
+    const box = $('steps');
+    if (!box) return;
+    const r = state.result;
+    const steps = [];
+    if (!state.art) steps.push(['art', 'todo', 'Art check', 'Open your artwork']);
+    else {
+      const raw = E.artInfo(state.art.original, Object.assign({}, state.prep, { upscale: false }));
+      const i = E.artInfo(state.art.original, state.prep);
+      if (raw.sourcePpi >= 295) steps.push(['art', 'ok', 'Art check', `${Math.round(raw.sourcePpi)} ppi at ${i.widthIn.toFixed(1)} in`]);
+      else if (i.upscaled) steps.push(['art', 'ok', 'Art check', `${Math.round(raw.sourcePpi)} → ${Math.round(i.outputPpi)} ppi (fixed)`]);
+      else steps.push(['art', 'warn', 'Art check', `Only ${Math.round(raw.sourcePpi)} ppi: make it high-res`]);
+    }
+    steps.push(['job', 'ok', 'Job type', preset().label]);
+    const g = GARMENTS.find((x) => x[1] === state.garment);
+    steps.push(['shirt', 'ok', 'Shirt color', g ? g[0] : state.garment]);
+    steps.push(['screens', 'ok', 'Screens', MODES_WITH_COUNT.includes(mode()) ? (state.screens === 'auto' ? 'Auto' : `${state.screens}`) : 'set by mode']);
+    if (!r) steps.push(['sep', state.art ? 'todo' : '', 'Separate', 'Press Separate']);
+    else steps.push(['sep', r.report.match.rating === 'Poor' || r.report.match.rating === 'Fair' ? 'warn' : 'ok', 'Separate', `${r.screens.length} screens · ${r.report.match.rating} (ΔE ${r.report.match.avgDeltaE})`]);
+    if (r) {
+      const adjusted = (state.inks || []).filter((x) => x.adjust || x.film).length;
+      const hidden = (state.inks || []).filter((x) => x.hidden).length;
+      steps.push(['colors', 'ok', 'Colors & order', `${adjusted ? `${adjusted} adjusted` : 'optional tweaks'}${hidden ? ` · ${hidden} hidden` : ''}`]);
+      const ub = r.screens.find((x) => x.role === 'underbase');
+      const choke = state.tune.choke != null ? state.tune.choke : (preset().options.choke != null ? preset().options.choke : E.DEFAULTS.choke);
+      steps.push(['ub', 'ok', 'Underbase & fine-tune', ub ? `underbase ${(ub.coverage * 100).toFixed(0)}% · choke ${choke}px` : 'no underbase needed']);
+    } else {
+      steps.push(['colors', '', 'Colors & order', 'after separating']);
+      steps.push(['ub', '', 'Underbase & fine-tune', 'after separating']);
+    }
+    const f = state.film;
+    steps.push(['film', 'ok', 'Halftones & films', f.type === 'am' ? `${f.lpi} lpi · ${f.angle != null ? f.angle + '°' : 'CMYK angles'} · ${f.dot} · ${f.dpi} dpi` : f.type === 'continuous' ? 'RIP halftones' : `${f.type} · ${f.dpi} dpi`]);
+    const on = REG_TOGGLES.filter(([k]) => state.reg[k]).map(([, l]) => l.split(' ')[0].toLowerCase());
+    steps.push(['reg', on.length ? 'ok' : 'warn', 'Registration', on.length ? on.join(', ') : 'no marks: films are hard to line up']);
+    steps.push(['out', r ? 'todo' : '', 'Output', r ? (host.name === 'photoshop' ? 'Build document or export films' : 'Ready (Photoshop plug-in exports)') : 'after separating']);
+    box.innerHTML = '';
+    steps.forEach(([key, st, title, sub], idx) => {
+      const d = document.createElement('div');
+      d.className = 'stp ' + st;
+      d.innerHTML = `<span class="ico">${st === 'ok' ? '✓' : st === 'warn' ? '!' : idx + 1}</span><span class="t"><b>${idx + 1}. ${esc(title)}</b></span><span class="s">${esc(sub)}</span>`;
+      d.addEventListener('click', () => {
+        const el = $(CARD[key]);
+        if (!el) return;
+        if (el.classList.contains('collapsible')) el.classList.add('open');
+        el.scrollIntoView({ behavior: 'smooth', block: 'start' });
+        el.classList.add('flash');
+        setTimeout(() => el.classList.remove('flash'), 900);
+      });
+      box.appendChild(d);
+    });
+  }
+
   function renderArtInfo() {
+    renderBanner();
+    renderSteps();
     const el = $('artInfo');
     if (!state.art) { el.textContent = 'Open artwork to see its print resolution.'; return; }
     const a = state.art.original;
@@ -334,8 +499,6 @@
     { k: 'fmDot', label: 'FM dot size', when: (f) => f.type === 'fm', type: 'range', min: 2, max: 8, step: 1, fmt: (v) => `${v} px` },
     { k: 'dpi', label: 'Film resolution', when: (f) => f.type !== 'continuous', type: 'select', opts: E.presets.DPI_CHOICES.map((v) => [v, `${v} dpi`]) },
     { k: 'mirror', label: 'Mirror (emulsion)', type: 'check' },
-    { k: 'marks', label: 'Registration marks', type: 'check', dflt: true },
-    { k: 'label', label: 'Film labels', type: 'check', dflt: true },
   ];
 
   function renderTune() {
@@ -426,7 +589,13 @@
     state.art = { original: art, name: art.name || 'Artwork' };
     state.proof = null;
     state.full = null;
-    if (!sameSize) state.prep.printWidthIn = +(art.width / (art.dpi || 300)).toFixed(2);
+    if (!sameSize) {
+      // Photoshop knows the document's print size. A browser image has no
+      // reliable size, so assume a standard 11 in front print.
+      state.prep.printWidthIn = art.fromBrowser ? +Math.max(1, Math.min(11, art.width / 300 > 11 ? art.width / 300 : 11)).toFixed(2) : +(art.width / (art.dpi || 300)).toFixed(2);
+      state.prep.levels = null; state.prep.saturation = 1; state.prep.sharpen = 0; state.prep.denoise = 0;
+      autoFixResolution();
+    }
     $('docInfo').textContent = `${state.art.name} · ${art.width}×${art.height}px · ${Math.round(art.dpi || 300)} ppi`;
     $('emptyStage').classList.add('hidden');
     renderArt();
@@ -537,9 +706,11 @@
       const inches = (320 / (f.dpi || 720)).toFixed(2);
       hint = `Close-up, ${inches} in wide at ${f.dpi || 720} dpi with your film settings. Tap to go back.`;
     } else {
-      const s = r.screens[state.view];
-      rgba = new Uint8ClampedArray(w * h * 4);
-      for (let p = 0; p < w * h; p++) { const v = 255 - s.plate[p]; rgba[p * 4] = v; rgba[p * 4 + 1] = v; rgba[p * 4 + 2] = v; rgba[p * 4 + 3] = 255; }
+      const reg = E.applyRegistration(r, state.film, state.reg);
+      const s = reg.screens[state.view];
+      ww = reg.width; hh = reg.height;
+      rgba = new Uint8ClampedArray(ww * hh * 4);
+      for (let p = 0; p < ww * hh; p++) { const v = 255 - s.plate[p]; rgba[p * 4] = v; rgba[p * 4 + 1] = v; rgba[p * 4 + 2] = v; rgba[p * 4 + 3] = 255; }
       hint = `Screen ${s.order}: ${s.name}. Black prints. ${(s.coverage * 100).toFixed(1)}% coverage.`;
     }
     host.showImage(img, rgba, ww, hh);
@@ -550,6 +721,8 @@
   function renderScreens() {
     const r = state.result;
     if (!r || !state.inks) return;
+    renderSteps();
+    if (state.dragging && state.openInk >= 0) { updateInkPanelLive(); return; }
     const box = $('screens');
     box.innerHTML = '';
     const summary = E.screenSummary(r, state.film);
@@ -570,12 +743,87 @@
       const btn = (txt, title, fn, on) => { const b = document.createElement('button'); b.className = 'btn ic' + (on ? ' on' : ''); b.textContent = txt; b.title = title; b.addEventListener('click', fn); row.appendChild(b); };
       btn(ink.hidden ? '◌' : '👁', ink.hidden ? 'Show this screen again' : 'Hide this screen (see the print without it)',
         () => editInks(`${ink.hidden ? 'Showed' : 'Hid'} ${ink.name}`, () => { ink.hidden = !ink.hidden; }), ink.hidden);
+      btn('⚙', 'Amount, levels and advanced settings for this color', () => { state.openInk = state.openInk === i ? -1 : i; renderScreens(); }, state.openInk === i);
+      row.lastChild.classList.add('gear');
       if (ink.role !== 'underbase') btn(ink.locked ? '🔒' : '🔓', 'Lock this ink (kept when you start over with new inks)', () => { ink.locked = !ink.locked; renderScreens(); }, ink.locked);
       btn('↑', 'Print earlier', () => move(i, -1));
       btn('↓', 'Print later', () => move(i, 1));
-      btn('✕', 'Remove this screen', () => editInks(`Removed ${ink.name}`, () => { state.inks.splice(i, 1); }));
+      btn('✕', 'Remove this screen', () => editInks(`Removed ${ink.name}`, () => { state.inks.splice(i, 1); if (state.openInk === i) state.openInk = -1; }));
       box.appendChild(row);
+      if (state.openInk === i) box.appendChild(inkPanel(ink, s));
     });
+  }
+
+  // ---------- per-color panel: amount, levels, advanced ----------
+  let liveHist = null;
+  function updateInkPanelLive() {
+    // While a slider is held, only refresh the histogram, not the controls.
+    if (!liveHist || !state.result) return;
+    const vis = visibleInks();
+    const ink = state.inks[state.openInk];
+    const idx = vis.indexOf(ink);
+    const scr = state.result.screens[idx];
+    if (scr) drawHist(liveHist, scr.histogram);
+  }
+
+  function drawHist(el, bins) {
+    el.innerHTML = '';
+    const max = Math.max(1, ...(bins || [0]));
+    for (const b of bins || []) { const d = document.createElement('div'); d.style.height = `${Math.max(1, Math.round((b / max) * 40))}px`; el.appendChild(d); }
+  }
+
+  function setAdjust(ink, fn, note, dragging) {
+    // Remember the match before a drag starts, so the note compares the
+    // final setting with where you started.
+    if (!state.dragBase && state.result) state.dragBase = state.result.report.match;
+    if (!dragging && !state._adjUndo) {
+      state.undo.push(JSON.parse(JSON.stringify(state.inks)));
+      if (state.undo.length > 30) state.undo.shift();
+    }
+    state._adjUndo = !!dragging;
+    ink.adjust = ink.adjust || {};
+    fn(ink.adjust);
+    schedule('inks', dragging ? null : note);
+  }
+
+  function inkPanel(ink, s) {
+    const box = document.createElement('div');
+    box.className = 'inkpanel';
+    const adj = ink.adjust || {};
+    const lv = Object.assign({ inBlack: 0, inWhite: 1, gamma: 1, outBlack: 0, outWhite: 1 }, adj.levels || {});
+    const h = (t) => { const e = document.createElement('h4'); e.textContent = t; box.appendChild(e); };
+    const note = `Adjusted ${ink.name}`;
+    h('How much of this color');
+    box.appendChild(fieldEl({ label: 'Amount', type: 'range', min: 0, max: 2, step: 0.05, fmt: pct, tip: 'Scales this screen: under 100% prints less of the color, over 100% more.' },
+      adj.amount == null ? 1 : adj.amount, (v, d) => setAdjust(ink, (a) => { a.amount = v; }, note, d)));
+    h('Levels (this screen)');
+    const hist = document.createElement('div');
+    hist.className = 'hist';
+    drawHist(hist, s && s.histogram);
+    liveHist = hist;
+    box.appendChild(hist);
+    const lvSet = (k) => (v, d) => setAdjust(ink, (a) => { a.levels = Object.assign({}, lv, a.levels || {}, { [k]: v }); }, note, d);
+    box.appendChild(fieldEl({ label: 'Input shadows', type: 'range', min: 0, max: 0.9, step: 0.01, fmt: pct, tip: 'Tones lighter than this drop out of the screen.' }, lv.inBlack, lvSet('inBlack')));
+    box.appendChild(fieldEl({ label: 'Midtones', type: 'range', min: 0.3, max: 3, step: 0.05, fmt: (v) => v.toFixed(2), tip: 'Above 1 makes the screen heavier in the midtones, below 1 lighter.' }, lv.gamma, lvSet('gamma')));
+    box.appendChild(fieldEl({ label: 'Input highlights', type: 'range', min: 0.1, max: 1, step: 0.01, fmt: pct, tip: 'Tones at or above this print solid.' }, lv.inWhite, lvSet('inWhite')));
+    box.appendChild(fieldEl({ label: 'Output min', type: 'range', min: 0, max: 0.5, step: 0.01, fmt: pct, tip: 'Lightest dot this screen will print where it has ink.' }, lv.outBlack, lvSet('outBlack')));
+    box.appendChild(fieldEl({ label: 'Output max', type: 'range', min: 0.5, max: 1, step: 0.01, fmt: pct, tip: 'Heaviest dot this screen will print.' }, lv.outWhite, lvSet('outWhite')));
+    h('Advanced');
+    box.appendChild(fieldEl({ label: 'Choke / spread', type: 'range', min: -4, max: 4, step: 1, fmt: (v) => (v < 0 ? `choke ${-v} px` : v > 0 ? `spread ${v} px` : 'none') },
+      adj.spread || 0, (v, d) => setAdjust(ink, (a) => { a.spread = v; }, note, d)));
+    const filmSet = (k) => (v) => { ink.film = Object.assign({}, ink.film || {}); if (v === 'default') delete ink.film[k]; else ink.film[k] = v; state.full = null; schedule('inks', `Changed ${ink.name} film`); };
+    const f = ink.film || {};
+    box.appendChild(fieldEl({ label: 'Print as', type: 'select', opts: [['default', 'Same as other screens'], ['am', 'Halftone dots'], ['threshold', 'Solid (no halftone)'], ['fm', 'Stochastic (FM)']] }, f.type || 'default', filmSet('type')));
+    box.appendChild(fieldEl({ label: 'Screen angle', type: 'select', opts: [['default', 'Same as other screens']].concat([0, 7.5, 15, 22.5, 25, 37.5, 45, 52.5, 67.5, 75, 82.5].map((a) => [a, `${a}°`])) }, f.angle != null ? f.angle : 'default', filmSet('angle')));
+    box.appendChild(fieldEl({ label: 'Frequency', type: 'select', opts: [['default', 'Same as other screens']].concat(E.presets.LPI_CHOICES.map((v) => [v, `${v} lpi`])) }, f.lpi != null ? f.lpi : 'default', filmSet('lpi')));
+    const row = document.createElement('div'); row.className = 'row';
+    const reset = document.createElement('button'); reset.className = 'btn small'; reset.textContent = 'Reset this color';
+    reset.addEventListener('click', () => editInks(`Reset ${ink.name}`, () => { delete ink.adjust; delete ink.film; }));
+    const view = document.createElement('button'); view.className = 'btn small'; view.textContent = 'Show this screen';
+    view.addEventListener('click', () => { const idx = visibleInks().indexOf(ink); if (idx >= 0) { state.view = idx; renderTabs(); renderView(); } });
+    row.appendChild(view); row.appendChild(reset);
+    box.appendChild(row);
+    return box;
   }
 
   function move(i, d) {
@@ -637,7 +885,7 @@
       const r = await fullResult();
       status('Building document…');
       await tick();
-      await host.buildDocument(r, Object.assign({}, state.film), { bake: state.bake, name: `${state.art.name} – seps` });
+      await host.buildDocument(state.regInDoc ? E.applyRegistration(r, state.film, state.reg) : r, Object.assign({}, state.film), { bake: state.bake, name: `${state.art.name} – seps` });
       status(`Built ${r.screens.length} screens at ${r.width}×${r.height}px.`);
     } catch (e) { console.error(e); status('Build failed: ' + e.message, true); }
   }
@@ -649,7 +897,7 @@
       for (const s of r.screens) {
         status(`Rendering film ${s.order} of ${r.screens.length}…`);
         await tick();
-        const film = E.renderScreenFilm(r, s, state.film);
+        const film = E.renderScreenFilm(r, s, state.film, state.reg);
         files.push({ name: `${String(s.order).padStart(2, '0')}-${s.name.replace(/[^a-z0-9]+/gi, '_')}.tif`, data: E.tiff.writeTiff(film) });
       }
       files.push({ name: 'job-sheet.txt', data: new TextEncoder().encode(jobSheet(r)) });
@@ -706,6 +954,9 @@
   }
 
   function renderAll() {
+    renderReg();
+    renderArtLevels();
+    renderSteps();
     renderPresets();
     renderGarment();
     renderCounts();
@@ -719,7 +970,7 @@
 
   $('previewImg').addEventListener('click', (ev) => {
     if (!state.result) return;
-    if (state.view === 'dots') { state.view = 'preview'; renderTabs(); renderView(); return; }
+    if (state.view === 'dots' && !state.picking) { state.view = 'preview'; renderTabs(); renderView(); return; }
     // The picture is letterboxed inside the element (object-fit: contain).
     const rect = $('previewImg').getBoundingClientRect();
     const iw = state.result.width, ih = state.result.height;
@@ -727,6 +978,8 @@
     const dx = (rect.width - iw * k) / 2, dy = (rect.height - ih * k) / 2;
     const fx = (ev.clientX - rect.left - dx) / (iw * k), fy = (ev.clientY - rect.top - dy) / (ih * k);
     if (fx < 0 || fy < 0 || fx > 1 || fy > 1) return;
+    if (state.picking) { pickSpotAt(fx, fy); return; }
+    if (typeof state.view === 'number') return; // plate views include margins
     state.zoom = { x: fx, y: fy };
     state.view = 'dots';
     renderTabs();
@@ -739,6 +992,13 @@
   $('separate').addEventListener('click', () => separateFresh(host.name === 'photoshop' && !state.result));
   $('reload').addEventListener('click', () => separateFresh(true));
   $('addInk').addEventListener('click', addInk);
+  $('pickSpot').addEventListener('click', () => {
+    state.picking = !state.picking;
+    $('app').classList.toggle('picking', state.picking);
+    if (state.picking) { if (typeof state.view === 'number' || state.view === 'dots') { state.view = 'art'; renderTabs(); renderView(); } status('Tap the color in the picture to add it as a spot color.'); }
+    else status('');
+  });
+  $('artLevelsBtn').addEventListener('click', () => $('artLevels').classList.toggle('hidden'));
   $('undo').addEventListener('click', undo);
   $('librarySelect').addEventListener('change', () => { state.libraryId = $('librarySelect').value; schedule('fresh'); });
   $('matchLibrary').addEventListener('change', () => { state.matchLibrary = $('matchLibrary').checked; schedule('fresh'); });

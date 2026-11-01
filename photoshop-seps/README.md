@@ -4,8 +4,22 @@ A Photoshop panel (UXP plug-in) that separates artwork for screen printing.
 Pick the job type, the shirt color and the number of screens, then press
 **Separate**.
 
-- **Seven one-click presets:** Sim Process on dark or light shirts, Index on
-  dark or light shirts, Spot Color (vector/logo), CMYK Process, and One Color.
+- **Eight one-click presets:** Sim Process on dark or light shirts, Index on
+  dark or light shirts, Spot Color (vector/logo), CMYK Process on white or
+  **dark shirts (white underbase + highlight white)**, and One Color.
+- **Step-by-step workflow:** a 10-step checklist (art check, job, shirt,
+  screens, separate, colors, underbase, halftones, registration, output) shows
+  what's done, what needs a look, and jumps to each step.
+- **Per-color controls (⚙):** an Amount slider, Levels with a histogram
+  (input shadows, midtones, highlights, output min/max), choke/spread, and
+  print-as / angle / LPI overrides for each screen.
+- **Add spot colors by clicking** on the art (🎯), matched to your library if
+  you like.
+- **Pre-registration:** one-tap registration marks, crop marks, center
+  marks, ink names and LPI/mesh labels on plates, films and the document.
+- **Automatic high-res:** art under 300 ppi at its print size is upscaled
+  and sharpened automatically, with one-tap undo. Art Levels and saturation
+  are also available.
 - **2, 4, 6, 8 or 10 screens, or Auto.** The count is the total number of
   screens, underbase and highlight white included, so it equals your press
   heads. Auto finds the fewest screens that still match the art.

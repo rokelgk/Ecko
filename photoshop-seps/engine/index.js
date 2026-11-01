@@ -21,8 +21,15 @@ function filmSettingsFor(screen, film) {
   return f;
 }
 
-function filmLabel(result, screen, f) {
+// Pre-registration options shared by films, the Photoshop document and the
+// plate previews: { marks, crops, center, names, details, marginIn }.
+const REG_DEFAULTS = { marks: true, crops: true, center: false, names: true, details: true, marginIn: 0.5 };
+
+function filmLabel(result, screen, f, reg) {
+  const r = Object.assign({}, REG_DEFAULTS, reg || {});
+  if (!r.names) return '';
   const parts = [`${screen.order}/${result.screens.length}`, screen.name];
+  if (!r.details) return parts.join('  ');
   if (f.type === 'am') parts.push(`${f.lpi} LPI`, `${f.angle}°`, f.dot);
   else if (f.type === 'fm') parts.push('FM');
   else if (f.type === 'index') parts.push('INDEX');
@@ -31,11 +38,36 @@ function filmLabel(result, screen, f) {
   return parts.join('  ');
 }
 
-function renderScreenFilm(result, screen, film) {
+function regFor(film, reg) {
+  const r = Object.assign({}, REG_DEFAULTS, reg || {});
+  if (film && film.marks === false) r.marks = false;
+  if (film && film.label === false) r.names = false;
+  return r;
+}
+
+function renderScreenFilm(result, screen, film, reg) {
   const f = filmSettingsFor(screen, film);
-  const label = film.label === false ? '' : filmLabel(result, screen, f);
+  const r = regFor(film, reg);
+  const label = filmLabel(result, screen, f, r);
   const minDot = result.options && result.options.minDot ? result.options.minDot : 0;
-  return halftone.renderFilm(screen.plate, result.width, result.height, result.dpi, Object.assign({ minDot }, f, { label }));
+  return halftone.renderFilm(screen.plate, result.width, result.height, result.dpi, Object.assign({ minDot }, f, { label, marks: r.marks, crops: r.crops, center: r.center, marginIn: r.marginIn }));
+}
+
+// The same separation with marks and ink names drawn into every plate,
+// on a canvas grown by the margin: used for the Photoshop document and the
+// plate previews. Returns a new result; the original is untouched.
+function applyRegistration(result, film, reg) {
+  const r = regFor(film, reg);
+  if (!r.marks && !r.crops && !r.center && !r.names) return result;
+  let w = result.width, h = result.height;
+  const screens = result.screens.map((s) => {
+    const f = filmSettingsFor(s, film);
+    const out = halftone.addMarks({ data: s.plate, width: result.width, height: result.height, dpi: result.dpi, bits: 8 },
+      { marks: r.marks, crops: r.crops, center: r.center, marginIn: r.marginIn, label: filmLabel(result, s, f, r) });
+    w = out.width; h = out.height;
+    return Object.assign({}, s, { plate: out.data });
+  });
+  return Object.assign({}, result, { width: w, height: h, screens, registered: true });
 }
 
 // Close-up of the print with real film dots: the region around (cx, cy)
@@ -65,6 +97,7 @@ function screenSummary(result, film) {
     const f = filmSettingsFor(s, film);
     const mesh = halftone.recommendMesh(s, f);
     return {
+      histogram: s.histogram, adjust: s.adjust || null,
       id: s.id, order: s.order, name: s.name, hex: s.hex, role: s.role, code: s.code, library: s.library,
       coverage: s.coverage, mesh: mesh.mesh, meshRange: mesh.range, film: f, matchDeltaE: s.matchDeltaE,
     };
@@ -72,6 +105,6 @@ function screenSummary(result, film) {
 }
 
 module.exports = Object.assign(
-  { separate: sep.separate, DEFAULTS: sep.DEFAULTS, autoScreenCount: sep.autoScreenCount, filmSettingsFor, filmLabel, renderScreenFilm, screenSummary, dotPreview, prepareArt: prepare.prepareArt, artInfo: prepare.artInfo, PREP_DEFAULTS: prepare.PREP_DEFAULTS },
+  { separate: sep.separate, DEFAULTS: sep.DEFAULTS, autoScreenCount: sep.autoScreenCount, filmSettingsFor, filmLabel, renderScreenFilm, applyRegistration, REG_DEFAULTS, screenSummary, dotPreview, prepareArt: prepare.prepareArt, artInfo: prepare.artInfo, PREP_DEFAULTS: prepare.PREP_DEFAULTS },
   { color, inks, palette, halftone, tiff, presets, ops },
 );

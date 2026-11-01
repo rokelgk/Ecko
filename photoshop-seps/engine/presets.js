@@ -5,13 +5,13 @@ const PRESETS = [
   {
     id: 'dark-sim', label: 'Sim Process · Dark Shirt',
     blurb: 'Photo-real art on black or colored shirts. Underbase + highlight white.',
-    options: { mode: 'simulated', garment: '#111111', screens: 8, underbase: 'auto', choke: 1, dotGain: 0.1, minDot: 0.05, maxDot: 0.95 },
+    options: { mode: 'simulated', garment: '#111111', screens: 8, underbase: 'auto', choke: 1, maxInksPerPixel: 4, dotGain: 0.1, minDot: 0.05, maxDot: 0.95 },
     film: { type: 'am', lpi: 55, angle: 22.5, dot: 'ellipse', dpi: 720 },
   },
   {
     id: 'light-sim', label: 'Sim Process · Light Shirt',
     blurb: 'Photo-real art on white or light shirts. No underbase.',
-    options: { mode: 'simulated', garment: '#ffffff', screens: 6, underbase: false, dotGain: 0.12, minDot: 0.04, maxDot: 0.96 },
+    options: { mode: 'simulated', garment: '#ffffff', screens: 6, underbase: false, maxInksPerPixel: 4, dotGain: 0.12, minDot: 0.04, maxDot: 0.96 },
     film: { type: 'am', lpi: 55, angle: 22.5, dot: 'ellipse', dpi: 720 },
   },
   {
@@ -37,6 +37,12 @@ const PRESETS = [
     blurb: 'Four-color process with GCR. Best on white garments.',
     options: { mode: 'cmyk', garment: '#ffffff', underbase: false, gcr: 0.7, totalInk: 2.8, dotGain: 0.15, minDot: 0.04, maxDot: 0.96 },
     film: { type: 'am', lpi: 65, dot: 'round', dpi: 720, angles: { 'Process Cyan': 15, 'Process Magenta': 75, 'Process Yellow': 0, 'Process Black': 45 } },
+  },
+  {
+    id: 'cmyk-dark', label: 'CMYK Process · Dark Shirt',
+    blurb: 'Four-color process over a white underbase, plus highlight white.',
+    options: { mode: 'cmyk', garment: '#111111', underbase: 'auto', choke: 1, gcr: 0.6, totalInk: 2.6, dotGain: 0.15, minDot: 0.04, maxDot: 0.96 },
+    film: { type: 'am', lpi: 55, dot: 'round', dpi: 720, angles: { 'Underbase White': 22.5, 'Process Cyan': 15, 'Process Magenta': 75, 'Process Yellow': 0, 'Process Black': 45, 'Highlight White': 22.5 } },
   },
   {
     id: 'one-color', label: 'One Color · Grayscale',

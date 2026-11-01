@@ -62,6 +62,7 @@ const DEFAULTS = {
   inkOpacity: 0.97,
   bareOpacity: 0.75, // ink opacity on a dark garment without underbase
   lutGrid: 33,
+  refine: true, // accuracy pass on fresh sim/index separations
   seed: 1234,
 };
 
@@ -125,7 +126,7 @@ function planInks(img, o, garment) {
   const dark = isDark(garment.lab);
   const wantUb = o.underbase === 'auto' ? dark : !!o.underbase;
   if (o.inks && o.inks.length) {
-    const colors = o.inks.filter((i) => i.role !== 'underbase').map((i) => screen(i.name, i.hex, i.role || 'color', { code: i.code || '', library: i.library || '', locked: !!i.locked }));
+    const colors = o.inks.filter((i) => i.role !== 'underbase').map((i) => screen(i.name, i.hex, i.role || 'color', { code: i.code || '', library: i.library || '', locked: !!i.locked, adjust: i.adjust || null, film: i.film || null }));
     return { colors, wantUb: o.inks.some((i) => i.role === 'underbase') || (o.underbase === true), dark };
   }
   if (o.mode === 'cmyk') {
@@ -158,7 +159,7 @@ function planInks(img, o, garment) {
   }
   if (total > 0) {
     const flat = o.mode === 'spot';
-    const picked = pickColors(img, total, fixed, { seed: o.seed, skipEdges: true, mergeDeltaE: flat ? 8 : 0, strongFrom: o.mode === 'simulated' || o.mode === 'index' ? garment.lab : null, strongFraction: o.mode === 'index' ? 0.5 : 0.3 });
+    const picked = pickColors(img, total, fixed, { seed: o.seed, skipEdges: true, mergeDeltaE: flat ? 8 : 0, strongFrom: o.mode === 'simulated' || o.mode === 'index' ? garment.lab : null, strongFraction: o.strongFraction || (o.mode === 'index' ? 0.5 : 0.1) });
     picked.forEach((p) => colors.push(screen(C.colorName(p.lab), C.toHex(C.labToRgb(p.lab)), 'color', { share: p.share })));
   }
   if (o.matchLibrary && o.library && o.library.length) {
@@ -176,11 +177,15 @@ function planInks(img, o, garment) {
 }
 
 function uniqueNames(colors) {
-  const seen = new Map();
+  const base = (n) => n.replace(/ \d+$/, '');
+  const total = new Map(), seen = new Map();
+  for (const c of colors) if (!c.locked) total.set(base(c.name), (total.get(base(c.name)) || 0) + 1);
   for (const c of colors) {
-    const n = (seen.get(c.name) || 0) + 1;
-    seen.set(c.name, n);
-    if (n > 1) c.name = `${c.name} ${n}`;
+    if (c.locked) continue;
+    const b = base(c.name);
+    const k = (seen.get(b) || 0) + 1;
+    seen.set(b, k);
+    c.name = total.get(b) > 1 && k > 1 ? `${b} ${k}` : b;
   }
 }
 
@@ -650,6 +655,8 @@ function composite(screens, garment, w, h, o, opts) {
   const inkY = screens.map((s) => C.rgbToYn(s.rgb));
   const inkLin = screens.map((s) => s.rgb.map((v) => C.srgbToLinear(v)));
   const side = o.mode === 'simulated' && o.overlap === 'side';
+  // Transparent process inks show the whole underbase beneath them.
+  const hasProcess = screens.some((x) => x.role === 'process');
   // Continuous plates get press dot gain (they were compensated for it).
   const gain = gainCurve(opts && opts.binary ? 0 : o.dotGain);
   // Ink appearance by how much of it sits on underbase, 0..1 in 64 steps.
@@ -677,7 +684,7 @@ function composite(screens, garment, w, h, o, opts) {
     const ub = ubIdx >= 0 ? a[ubIdx] : 0;
     // Same angle and frequency on every screen, so underbase dots sit under
     // the color dots; only underbase beyond the color coverage shows.
-    const ubShow = ub > union ? ub - union : 0;
+    const ubShow = hasProcess ? ub : ub > union ? ub - union : 0;
     const q = (union > 1e-4 ? Math.min(1, ub / union) * Q + 0.5 : 0) | 0;
     c0 = gY[0] + (ubY[0] - gY[0]) * ubShow;
     c1 = gY[1] + (ubY[1] - gY[1]) * ubShow;
@@ -745,6 +752,183 @@ function matchStats(img, preview, mask, lightnessOnly) {
   return { avg, p95: ds[Math.floor(ds.length * 0.95)] || 0, max: ds[ds.length - 1] || 0 };
 }
 
+// ---------- per-screen adjustments ----------
+//
+// adjust = { amount: 0..2 (how much of this ink), levels: { inBlack, inWhite,
+// gamma, outBlack, outWhite } (0..1, like Photoshop Levels on the plate),
+// spread: -4..4 px (negative chokes, positive spreads) }.
+
+function adjustLut(adj) {
+  const lv = Object.assign({ inBlack: 0, inWhite: 1, gamma: 1, outBlack: 0, outWhite: 1 }, adj.levels || {});
+  const amount = adj.amount == null ? 1 : adj.amount;
+  const lut = new Uint8Array(256);
+  for (let i = 0; i < 256; i++) {
+    let v = i / 255;
+    if (i === 0) { lut[i] = Math.round(Math.max(0, lv.outBlack) * 255 * (lv.inBlack <= 0 ? 1 : 0)); continue; }
+    v = Math.max(0, Math.min(1, (v - lv.inBlack) / Math.max(1e-3, lv.inWhite - lv.inBlack)));
+    v = Math.pow(v, 1 / Math.max(0.1, lv.gamma));
+    v = lv.outBlack + v * (lv.outWhite - lv.outBlack);
+    v = Math.max(0, Math.min(1, v * amount));
+    lut[i] = Math.round(v * 255);
+  }
+  lut[0] = 0; // never add ink where the plate has none
+  return lut;
+}
+
+function isIdentity(adj) {
+  if (!adj) return true;
+  const lv = adj.levels || {};
+  return (adj.amount == null || adj.amount === 1) && !adj.spread &&
+    (lv.inBlack || 0) === 0 && (lv.inWhite == null || lv.inWhite === 1) && (lv.gamma == null || lv.gamma === 1) &&
+    (lv.outBlack || 0) === 0 && (lv.outWhite == null || lv.outWhite === 1);
+}
+
+function applyAdjust(plate, adj, w, h, binary) {
+  if (isIdentity(adj)) return plate;
+  let out = plate;
+  if (!binary) {
+    const lut = adjustLut(adj);
+    out = new Uint8Array(plate.length);
+    for (let p = 0; p < plate.length; p++) out[p] = lut[plate[p]];
+  } else if (adj.amount != null && adj.amount < 0.5) {
+    out = new Uint8Array(plate.length); // index: "amount" under 50% drops the ink
+  }
+  if (adj.spread > 0) out = ops.dilate(out, w, h, Math.round(adj.spread));
+  else if (adj.spread < 0) out = ops.erode(out, w, h, Math.round(-adj.spread));
+  return out;
+}
+
+// Histogram of a plate (64 bins, ink pixels only) for the Levels UI.
+function plateHistogram(plate) {
+  const bins = new Array(64).fill(0);
+  const step = Math.max(1, Math.floor(plate.length / 200000));
+  for (let p = 0; p < plate.length; p += step) if (plate[p]) bins[plate[p] >> 2]++;
+  return bins;
+}
+
+// ---------- CMYK on dark garments ----------
+// A white underbase goes down where the art needs to be lighter or more
+// colorful than the shirt; the process inks then filter that white. Each
+// pixel's target is divided by its base (white over underbase, shirt
+// elsewhere) before looking up CMYK, so partial underbase tones stay true.
+
+function separateCmykDark(img, o, colors, garment) {
+  const n = img.width * img.height, w = img.width, h = img.height;
+  // Same press model as the preview: underbase is a halftone mixed with the
+  // shirt in YN space, then the transparent process inks filter that base.
+  const pm = pressModel(garment, o, true);
+  const white = Object.assign({}, garment, { hex: '#ffffff', rgb: [255, 255, 255] });
+  const lut = cachedLut(JSON.stringify(['cmyk', GRID, white.hex, colors.slice(0, 4).map((c) => c.hex), o.gcr, o.totalInk]), () => buildCmykLut(colors, white, o));
+  const inkLin = colors.slice(0, 4).map((c) => c.rgb.map((x) => C.srgbToLinear(x)));
+  const v = new Float32Array(4);
+  const d = img.data;
+  const baseFor = (u) => [0, 1, 2].map((k) => { const y = pm.gY[k] + (pm.ubY[k] - pm.gY[k]) * u; return y * y; });
+  const filterFor = (T, base) => [0, 1, 2].map((k) => C.linearToSrgb(Math.min(1, T[k] / Math.max(1e-5, base[k]))));
+
+  // Pass 1: best underbase per color (tried at 17 levels; ties go to less white).
+  const uCache = new Map();
+  const uField = new Uint8Array(n);
+  for (let p = 0; p < n; p++) {
+    const key = ((d[p * 3] >> 2) << 12) | ((d[p * 3 + 1] >> 2) << 6) | (d[p * 3 + 2] >> 2);
+    let u = uCache.get(key);
+    if (u === undefined) {
+      const lab = C.rgbToLab([d[p * 3], d[p * 3 + 1], d[p * 3 + 2]]);
+      const T = [0, 1, 2].map((k) => C.SRGB_TO_LINEAR[d[p * 3 + k]]);
+      let bestErr = Infinity;
+      u = 0;
+      for (let step = 0; step <= 16; step++) {
+        const uu = step / 16;
+        const base = baseFor(uu);
+        const f = filterFor(T, base);
+        lutLookup(lut, 4, f[0], f[1], f[2], v);
+        const out = base.slice();
+        for (let i = 0; i < 4; i++) for (let k = 0; k < 3; k++) out[k] *= 1 - v[i] + v[i] * inkLin[i][k];
+        const err = C.deltaE2000(lab, C.linearRgbToLab(out[0], out[1], out[2])) + uu * 0.3;
+        if (err < bestErr - 1e-6) { bestErr = err; u = uu; }
+      }
+      uCache.set(key, u);
+    }
+    uField[p] = Math.round(Math.min(1, u * o.underbaseStrength) * 255);
+  }
+  // Smooth the underbase so neighbouring pixels can't flip between two
+  // equally good answers (that shows up as thin streaks): a 5x5 max then
+  // 5x5 mean keeps base under every color and removes the seams.
+  const ub = ops.boxBlur3(ops.boxBlur3(ops.dilate(uField, w, h, 2), w, h), w, h);
+
+  // Pass 2: process inks for each pixel over its (smoothed) base.
+  const plates = [0, 1, 2, 3].map(() => new Uint8Array(n));
+  const hl = new Uint8Array(n);
+  for (let p = 0; p < n; p++) {
+    const u = ub[p] / 255;
+    const T = [0, 1, 2].map((k) => C.SRGB_TO_LINEAR[d[p * 3 + k]]);
+    const f = filterFor(T, baseFor(u));
+    lutLookup(lut, 4, f[0], f[1], f[2], v);
+    for (let i = 0; i < 4; i++) plates[i][p] = Math.round(Math.max(0, Math.min(1, v[i])) * 255);
+    const Y = T[0] * 0.2126 + T[1] * 0.7152 + T[2] * 0.0722;
+    hl[p] = Math.round(Math.max(0, Math.min(1, (Y - 0.72) / 0.25)) * 255);
+  }
+  return { plates: plates.concat(colors.length > 4 ? [hl] : []), ub };
+}
+
+// ---------- accuracy pass ----------
+// After the first ink pick, look at where the print matches the art worst
+// and try giving that color its own ink (in place of the least useful
+// one). Each trial is a quick low-res separation; a swap is kept only if
+// the whole print matches better.
+
+function refineInks(image, o, colors) {
+  const scale = Math.min(1, 150 / Math.max(image.width, image.height));
+  const small = ops.resizeImage(image, Math.max(1, Math.round(image.width * scale)), Math.max(1, Math.round(image.height * scale)));
+  small.dpi = (image.dpi || 300) * scale;
+  const trialOpts = (inks) => Object.assign({}, o, { inks, screens: inks.length, lutGrid: 13, refine: false, minDot: 0, maxDot: 1, despeckle: false, matchLibrary: false });
+  const asInks = (cs, ub) => (ub ? [{ name: 'Underbase White', hex: '#f4f4f0', role: 'underbase' }] : []).concat(cs.map((c) => ({ name: c.name, hex: c.hex, role: c.role, locked: c.locked })));
+  const hasUb = o._wantUb;
+  let best = separate(small, trialOpts(asInks(colors, hasUb)));
+  let cur = colors.slice();
+  for (let round = 0; round < 3; round++) {
+    const flat = flatten(small, C.parseHex(o.garment));
+    const errs = [];
+    const n = small.width * small.height;
+    for (let p = 0; p < n; p++) {
+      if (small.channels === 4 && small.data[p * 4 + 3] < 128) continue;
+      const a = C.rgbToLab([flat.data[p * 3], flat.data[p * 3 + 1], flat.data[p * 3 + 2]]);
+      const b = C.rgbToLab([best.preview[p * 4], best.preview[p * 4 + 1], best.preview[p * 4 + 2]]);
+      errs.push([C.deltaE76(a, b), a]);
+    }
+    errs.sort((x, y) => y[0] - x[0]);
+    const worst = errs.slice(0, Math.max(10, Math.round(errs.length * 0.04)));
+    if (!worst.length || worst[0][0] < 8) break;
+    // Strongest-chroma half of the worst pixels: the color that's missing.
+    worst.sort((x, y) => C.chroma(y[1]) - C.chroma(x[1]));
+    const take = worst.slice(0, Math.max(5, Math.round(worst.length / 2)));
+    const m = [0, 0, 0];
+    for (const [, lab] of take) { m[0] += lab[0]; m[1] += lab[1]; m[2] += lab[2]; }
+    const want = m.map((x) => x / take.length);
+    if (cur.some((c) => C.deltaE2000(c.lab, want) < 6)) break;
+    // Only inks with a close neighbour can go: a distinct, saturated accent
+    // (the red eye, a logo dot) is kept even if it covers very little.
+    const swappable = cur.map((c, i) => [c, i]).filter(([c]) => {
+      if (c.locked || c.role !== 'color') return false;
+      const near = Math.min(...cur.filter((x) => x !== c && x.role === 'color').map((x) => C.deltaE2000(x.lab, c.lab)));
+      return near < 22 || C.chroma(c.lab) < 20;
+    });
+    if (!swappable.length) break;
+    let improved = false;
+    // Try replacing each of the two least-used inks.
+    const usage = best.screens.filter((s) => s.role !== 'underbase');
+    swappable.sort((a, b) => (usage[a[1]] ? usage[a[1]].coverage : 0) - (usage[b[1]] ? usage[b[1]].coverage : 0));
+    for (const [, i] of swappable.slice(0, 2)) {
+      const trial = cur.slice();
+      trial[i] = screen(C.colorName(want), C.toHex(C.labToRgb(want)), 'color');
+      const r = separate(small, trialOpts(asInks(orderColors(trial), hasUb)));
+      if (r.report.match.avgDeltaE < best.report.match.avgDeltaE * 0.97) { best = r; cur = trial; improved = true; break; }
+    }
+    if (!improved) break;
+  }
+  uniqueNames(cur);
+  return cur;
+}
+
 // ---------- main ----------
 
 function separate(image, options) {
@@ -766,13 +950,32 @@ function separate(image, options) {
   }
   const plan = planInks(img, o, garment);
   // An ink list from the user keeps the user's print order.
-  const colors = o.inks && o.inks.length ? plan.colors : orderColors(plan.colors);
-  let platesRaw, binary = false;
+  let colors = o.inks && o.inks.length ? plan.colors : orderColors(plan.colors);
+  if (o.refine && !(o.inks && o.inks.length) && (o.mode === 'simulated' || o.mode === 'index') && colors.length > 1) {
+    colors = orderColors(refineInks(image, Object.assign({}, o, { _wantUb: plan.wantUb }), colors));
+    GRID = o.lutGrid || 33; // trials ran with a smaller table
+    if (o.matchLibrary && o.library && o.library.length) {
+      const used = new Set(colors.filter((c) => c.locked).map((c) => c.name));
+      for (const c of colors) {
+        if (c.locked || c.role !== 'color' || c.matchDeltaE != null) continue;
+        const m = nearestInk(c.lab, o.library, used);
+        if (!m) continue;
+        used.add(m.ink.name);
+        Object.assign(c, { name: m.ink.name, hex: m.ink.hex, rgb: m.ink.rgb, lab: m.ink.lab, code: m.ink.code, library: m.ink.library, matchDeltaE: m.deltaE });
+      }
+    }
+  }
+  const ubInk = o.inks && o.inks.find((i) => i.role === 'underbase');
+  let platesRaw, binary = false, cmykUb = null;
   if (!colors.length) platesRaw = [];
   else if (o.mode === 'simulated') platesRaw = separateSimulated(img, garment, colors, o, plan.wantUb);
   else if (o.mode === 'spot') platesRaw = separateSpot(img, garment, colors, o).plates;
   else if (o.mode === 'index') { platesRaw = separateIndex(img, garment, colors, o, plan.wantUb).plates; binary = true; }
-  else if (o.mode === 'cmyk') {
+  else if (o.mode === 'cmyk' && plan.wantUb) {
+    const r = separateCmykDark(img, o, colors, garment);
+    platesRaw = r.plates;
+    cmykUb = r.ub;
+  } else if (o.mode === 'cmyk') {
     platesRaw = separateCmyk(img, o, colors, garment);
     if (colors.length > 4) {
       const hl = new Uint8Array(img.width * img.height);
@@ -788,11 +991,16 @@ function separate(image, options) {
   // Transparent pixels never get ink.
   if (mask) for (const pl of platesRaw) for (let p = 0; p < pl.length; p++) if (mask[p] < 8) pl[p] = 0;
 
+  // The user's per-screen adjustments (amount, levels, spread).
+  platesRaw = platesRaw.map((pl, i) => (colors[i] && colors[i].adjust ? applyAdjust(pl, colors[i].adjust, img.width, img.height, binary) : pl));
+
   const screens = [];
   let ubScreen = null;
   if (plan.wantUb && colors.length) {
-    const ubPlate = buildUnderbase(platesRaw, colors, garment, img, o);
-    ubScreen = screen('Underbase White', '#f4f4f0', 'underbase', { plate: ubPlate });
+    let ubPlate = cmykUb ? (o.choke > 0 ? ops.erode(cmykUb, img.width, img.height, o.choke) : cmykUb) : buildUnderbase(platesRaw, colors, garment, img, o);
+    if (mask) for (let p = 0; p < ubPlate.length; p++) if (mask[p] < 8) ubPlate[p] = 0;
+    if (ubInk && ubInk.adjust) ubPlate = applyAdjust(ubPlate, ubInk.adjust, img.width, img.height, binary);
+    ubScreen = screen(ubInk ? ubInk.name : 'Underbase White', '#f4f4f0', 'underbase', { plate: ubPlate, adjust: ubInk ? ubInk.adjust || null : null, film: ubInk ? ubInk.film || null : null });
     screens.push(ubScreen);
   }
   colors.forEach((c, i) => screens.push(Object.assign(c, { plate: platesRaw[i] })));
@@ -813,7 +1021,7 @@ function separate(image, options) {
 
   const preview = composite(screens, garment, img.width, img.height, o, { binary: binary || spotBinary });
   const report = buildReport(img, preview, mask, screens, garment, o, removedTotal);
-  screens.forEach((s, i) => { s.order = i + 1; s.id = `s${i + 1}`; });
+  screens.forEach((s, i) => { s.order = i + 1; s.id = `s${i + 1}`; s.histogram = plateHistogram(s.plate); });
   return {
     width: img.width, height: img.height, dpi, mode: o.mode,
     garment: { hex: garment.hex, rgb: garment.rgb, dark: isDark(garment.lab) },
@@ -870,10 +1078,10 @@ function autoScreenCount(image, o) {
   const start = o.mode === 'simulated' && dark ? 3 : 1;
   let best = 10;
   for (let n = start; n <= 10; n++) {
-    const r = separate(small, Object.assign({}, o, { screens: n, indexDpi: 0, minDot: 0, maxDot: 1 }));
+    const r = separate(small, Object.assign({}, o, { screens: n, indexDpi: 0, minDot: 0, maxDot: 1, refine: false }));
     if (r.report.match.avgDeltaE < (o.autoTarget || 3.2) && r.report.match.p95DeltaE < 9) { best = n; break; }
   }
   return best;
 }
 
-module.exports = { separate, DEFAULTS, underbaseNeed, solveSimplex, compensateDotGain, composite, autoScreenCount, isDark };
+module.exports = { separate, plateHistogram, adjustLut, DEFAULTS, underbaseNeed, solveSimplex, compensateDotGain, composite, autoScreenCount, isDark };

@@ -186,6 +186,29 @@ function addMarks(film, o) {
     drawTarget(out, m2, Math.round(h / 2), r, lw);
     drawTarget(out, w - m2, Math.round(h / 2), r, lw);
   }
+  const lw = Math.max(1, Math.round(film.dpi / 300));
+  const line = (x0, y0, x1, y1) => {
+    for (let y = Math.min(y0, y1); y <= Math.max(y0, y1); y++) for (let x = Math.min(x0, x1); x <= Math.max(x0, x1); x++) setPx(out, x, y);
+  };
+  if (o.crops && margin > 8) {
+    // Corner crop marks just outside the art: they show the print area and
+    // line up the films on a pre-registration board.
+    const gap = Math.round(margin * 0.15), len = Math.round(margin * 0.45);
+    const L = margin, T = margin, R = w - margin - 1, B = h - margin - 1;
+    for (const [cx, cy, sx, sy] of [[L, T, -1, -1], [R, T, 1, -1], [L, B, -1, 1], [R, B, 1, 1]]) {
+      line(cx + sx * gap, cy, cx + sx * (gap + len), cy + lw - 1);
+      line(cx, cy + sy * gap, cx + lw - 1, cy + sy * (gap + len));
+    }
+  }
+  if (o.center && margin > 8) {
+    // Centre ticks on all four sides (pre-registration center line).
+    const len = Math.round(margin * 0.18), cx = Math.round(w / 2), cy = Math.round(h / 2);
+    const half = Math.floor(lw / 2);
+    line(cx - half, margin - len, cx + half, margin - 2);
+    line(cx - half, h - margin + 1, cx + half, h - margin + len);
+    line(margin - len, cy - half, margin - 2, cy + half);
+    line(w - margin + 1, cy - half, w - margin + len, cy + half);
+  }
   if (o.label && margin > 10) {
     // Bottom-left, kept clear of the centre registration target.
     const room = Math.round(w / 2 - margin * 0.32 - margin * 0.25) - margin;

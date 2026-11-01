@@ -78,7 +78,7 @@
     const ctx = c.getContext('2d');
     ctx.drawImage(bmp, 0, 0);
     const d = ctx.getImageData(0, 0, bmp.width, bmp.height);
-    return { data: d.data, width: bmp.width, height: bmp.height, channels: 4, dpi: 300, name: file.name.replace(/\.[^.]+$/, '') };
+    return { data: d.data, width: bmp.width, height: bmp.height, channels: 4, dpi: 300, fromBrowser: true, name: file.name.replace(/\.[^.]+$/, '') };
   }
 
   window.EckoHost = host;
