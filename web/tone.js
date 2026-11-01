@@ -4,9 +4,9 @@
   const $ = (id) => document.getElementById(id);
   const SLIDERS = ["bg_tolerance", "lpi", "grain_mm", "angle", "spot_colors", "spot_softness", "brightness",
     "contrast", "gamma", "black_point", "white_point", "sharpen", "min_dot", "max_dot", "dot_gain",
-    "roughness", "misregister_mm", "choke_mm"];
-  const CHECKS = ["remove_background", "invert", "knockout", "registration_marks"];
-  const SELECTS = ["mode", "style", "target", "shirt_fit", "underbase"];
+    "roughness", "misregister_mm", "choke_mm", "threshold_levels", "threshold_soft", "smooth_mm", "denoise"];
+  const CHECKS = ["remove_background", "invert", "knockout", "registration_marks", "threshold_stack"];
+  const SELECTS = ["mode", "style", "target", "shirt_fit", "underbase", "threshold_colors", "palette"];
   const TONE_KEYS = ["brightness", "contrast", "gamma", "black_point", "white_point", "sharpen", "invert"];
   const STORE_KEY = "ecko-tone-options";
 
@@ -229,6 +229,40 @@
     $("addText").disabled = (opts.text || []).length >= 6;
   }
 
+  // ---------------------------------------------------------------- threshold cut points
+
+  let autoCuts = [];   // the automatic cut points from the last preview
+
+  function currentCuts() {
+    const n = opts.threshold_levels - 1;
+    if (opts.thresholds.length === n) return opts.thresholds;
+    if (autoCuts.length === n) return autoCuts;
+    return Array.from({ length: n }, (_, i) => Math.round((i + 1) / (n + 1) * 100) / 100);
+  }
+
+  function buildCuts() {
+    const box = $("cutsBox");
+    if (opts.mode !== "threshold") { box.innerHTML = ""; return; }
+    const cuts = currentCuts(), manual = opts.thresholds.length === cuts.length;
+    box.innerHTML = `<p class="hint">${manual ? "Your cut points (Auto levels to reset)" : "Cut points: automatic from your picture"}</p>`;
+    cuts.forEach((c, i) => {
+      const lab = document.createElement("label");
+      lab.innerHTML = `Cut ${i + 1} <output>${Math.round(c * 100)}%</output>
+        <input type="range" min="0.02" max="0.98" step="0.01" value="${c}">`;
+      const inp = lab.querySelector("input");
+      inp.addEventListener("input", () => {
+        const next = currentCuts().slice();
+        next[i] = parseFloat(inp.value);
+        lab.querySelector("output").textContent = `${Math.round(next[i] * 100)}%`;
+        opts.thresholds = next.slice().sort((a, b) => a - b);
+        box.querySelector(".hint").textContent = "Your cut points (Auto levels to reset)";
+        opts._preset = null;
+        changed();
+      });
+      box.appendChild(lab);
+    });
+  }
+
   // ---------------------------------------------------------------- batch
 
   function buildBatchShirts() {
@@ -331,8 +365,14 @@
     const grain = catalog.styles.find((s) => s.id === opts.style)?.grain;
     $("amRow").hidden = grain;
     $("grainRow").hidden = !grain;
-    $("inksBox").hidden = !(opts.mode === "mono" || opts.mode === "duotone");
-    $("spotBox").hidden = opts.mode !== "spot";
+    const thr = opts.mode === "threshold";
+    $("inksBox").hidden = !(opts.mode === "mono" || opts.mode === "duotone" || (thr && opts.threshold_colors === "ink"));
+    $("spotBox").hidden = !(opts.mode === "spot" || opts.mode === "index");
+    $("spotLabel").textContent = opts.mode === "index" ? "Colours" : "Spot screens";
+    $("spot_softness").closest("label").hidden = opts.mode === "index";   // index pixels are never blended
+    $("thresholdBox").hidden = !thr;
+    $("paletteRow").hidden = !(opts.mode === "spot" || opts.mode === "index" || (thr && opts.threshold_colors === "palette"));
+    buildCuts();
     $("bgTolRow").hidden = !opts.remove_background;
     buildInks();
     buildTextures();
@@ -351,6 +391,10 @@
     $("gainOut").textContent = `${Math.round(opts.dot_gain * 100)}%`;
     $("misOut").textContent = `${fmt(opts.misregister_mm)} mm`;
     $("chokeOut").textContent = `${fmt(opts.choke_mm)} mm`;
+    $("levelsOut").textContent = opts.threshold_levels;
+    $("softOut").textContent = opts.threshold_soft > 0 ? fmt(opts.threshold_soft) : "solid";
+    $("smoothOut").textContent = opts.smooth_mm > 0 ? `${fmt(opts.smooth_mm)} mm` : "off";
+    $("denoiseOut").textContent = opts.denoise > 0 ? opts.denoise : "off";
     $("dpiNote").textContent = $("dpi").value;
     document.querySelectorAll("#presets button").forEach((b) => b.classList.toggle("on", b.dataset.id === opts._preset));
   }
@@ -424,6 +468,11 @@
         if (!spotInks || spotInks.length !== palette.length) spotInks = null;
       }
       report = j.report;
+      if (report.thresholds) {
+        const was = autoCuts.join();
+        autoCuts = report.thresholds;
+        if (opts.thresholds.length !== autoCuts.length && was !== autoCuts.join()) buildCuts();
+      }
       showReport();
       if (loupeAt) renderLoupe();
       if (view === "shirt") renderMockup();
@@ -532,7 +581,7 @@
       const idx = ink.underbase ? -1 : colourIndex++;
       const e = opts.ink_edits[ink.name];
       const on = !(e && e.on === false);
-      const editable = opts.mode !== "cmyk" && !ink.underbase;
+      const editable = opts.mode !== "cmyk" && opts.mode !== "threshold" && !ink.underbase;
       li.className = (on ? "" : "off") + (solo === ink.name ? " solo" : "");
       const chokeVal = ink.underbase ? opts.choke_mm : (ink.choke_mm || 0);
       li.innerHTML = `
@@ -567,7 +616,7 @@
       });
       const inp = li.querySelector("input[type=color]");
       if (inp) inp.addEventListener("input", () => {
-        if (opts.mode === "spot") {
+        if (opts.mode === "spot" || opts.mode === "index") {
           // the ink list skips the underbase and inks the shirt supplies; map back by spot number
           const n = parseInt(ink.name.replace(/\D+/g, ""), 10) - 1;
           spotInks = (spotInks || palette).slice();
@@ -750,6 +799,7 @@
     for (const k of SLIDERS) $(k).addEventListener("input", () => {
       opts[k] = parseFloat($(k).value);
       if (k === "spot_colors") spotInks = null;
+      if (k === "threshold_levels") { opts.thresholds = []; buildCuts(); }
       opts._preset = null;
       changed();
     });
@@ -761,7 +811,7 @@
     });
     for (const k of SELECTS) $(k).addEventListener("change", () => {
       opts[k] = $(k).value;
-      if (k === "mode") opts.ink_edits = {};   // ink names change with the colour mode
+      if (k === "mode") { opts.ink_edits = {}; opts.thresholds = []; spotInks = null; }   // ink names change with the mode
       opts._preset = null;
       if (k === "target") {
         const t = catalog.targets.find((x) => x.id === opts.target);
@@ -807,6 +857,7 @@
     $("dlPng").addEventListener("click", (e) => download("png", e.currentTarget));
     $("dlZip").addEventListener("click", (e) => download("zip", e.currentTarget));
     $("clearPicture").addEventListener("click", clearPicture);
+    $("autoCuts").addEventListener("click", () => { opts.thresholds = []; buildCuts(); changed(); });
     $("simpleProcess").addEventListener("click", () => {
       const p = catalog.presets.find((x) => x.id === "simple-process");
       if (p) applyPreset(p);
@@ -831,7 +882,11 @@
   async function init() {
     catalog = await (await fetch("/api/tone/catalog")).json();
     buildSelect("mode", catalog.modes);
-    buildSelect("style", catalog.styles);
+    // patterns grouped like a menu: halftone dots, lines, grain, dithers
+    const names = Object.fromEntries(catalog.styles.map((x) => [x.id, x.name]));
+    $("style").innerHTML = (catalog.style_groups || [{ name: "Patterns", styles: catalog.styles.map((x) => x.id) }])
+      .map((g) => `<optgroup label="${g.name}">${g.styles.map((id) => `<option value="${id}">${names[id]}</option>`).join("")}</optgroup>`).join("");
+    buildSelect("palette", [{ id: "image", name: "From the picture" }, ...(catalog.palettes || [])]);
     buildSelect("target", catalog.targets);
     buildSelect("shirt_fit", catalog.shirt_fits);
     buildPresets();

@@ -71,6 +71,10 @@ download a print-ready file.
   - Spot inks that match the shirt are dropped, since the shirt supplies that colour.
   - On dark shirts, screen-print films get a choked white underbase.
   - **Automatic** chooses Recolor or Match the picture for you.
+- **Threshold layers** (AutoThresh-style): split a picture into 2–8 solid tones with automatic
+  cut points, smoothing, and knockout or overlap. Tones can also blend through any pattern.
+- **Dithers** (DitherTone-style): Floyd–Steinberg, Atkinson, Jarvis, Stucki, Burkes, Sierra,
+  ordered Bayer and wave lines. Plus **index colour** (one ink per pixel) with built-in palettes.
 - **Curved text:** arched or smile text in six fonts, with or without a picture.
 - **On-shirt mockup:** see the print to scale on a T-shirt of the chosen colour.
 - **Batch:** many designs × up to 12 shirt colours in one ZIP. Every colour gets its own

@@ -25,7 +25,7 @@ ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
 from ecko.tone import engine as E  # noqa: E402
-from ecko.tone import noise  # noqa: E402
+from ecko.tone import hybrid, noise  # noqa: E402
 from ecko.tone.api import catalog as api_catalog  # noqa: E402
 
 WEB = ROOT / "web"
@@ -46,6 +46,7 @@ def catalog_data() -> dict:
         "shirt_fits_map": E.SHIRT_FITS,
         "fonts": [{"id": f.id, "name": f.name, "file": f.file} for f in E.FONTS.values()],
         "defaults": cat["defaults"],
+        "diffusion": {k: [d, [list(t) for t in taps]] for k, (d, taps) in hybrid.DIFFUSION.items()},
     }
 
 

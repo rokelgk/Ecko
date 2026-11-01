@@ -14,8 +14,11 @@
   const BLUE_NOISE_B64 = "__BLUE_NOISE__";
 
   const STYLES = CATALOG.styles_map;
-  const AM_STYLES = ["round", "euclid", "ellipse", "square", "diamond", "line", "cross"];
-  const GRAIN_STYLES = ["fm", "xerox", "mezzotint"];
+  const AM_STYLES = ["round", "euclid", "ellipse", "square", "diamond", "line", "cross", "modulation"];
+  const DIFFUSION = CATALOG.diffusion;   // name -> [divisor, [[dx, dy, weight], ...]]
+  const DIFFUSION_STYLES = Object.keys(DIFFUSION);
+  const GRAIN_STYLES = ["fm", "xerox", "mezzotint", "bayer4", "bayer8", "random", ...DIFFUSION_STYLES];
+  const PALETTES = Object.fromEntries(CATALOG.api.palettes.map((p) => [p.id, p]));
   const TEXTURES = CATALOG.textures_map;
   const TARGETS = CATALOG.targets_map;
   const PROCESS_INKS = CATALOG.process_inks;   // [name, [r,g,b], angleOffset]
@@ -49,6 +52,7 @@
     black_point: [0, 0.95], white_point: [0.05, 1], sharpen: [0, 3],
     min_dot: [0, 0.5], max_dot: [0.5, 1], dot_gain: [0, 0.4], roughness: [0, 1],
     misregister_mm: [0, 5], bg_tolerance: [1, 80], seed: [0, 2 ** 31 - 1], choke_mm: [0, 1],
+    threshold_levels: [2, 8], threshold_soft: [0, 0.3], smooth_mm: [0, 3], denoise: [0, 3],
   };
   const TEXT_RANGES = { size: [0.02, 1.0], arc: [-340, 340], x: [-2, 2], y: [-2, 2], spacing: [-0.2, 1.0] };
   const TEXT_DEFAULTS = { font: "varsity", size: 0.12, arc: 0.0, x: 0.0, y: -0.7, spacing: 0.05, color: "#000000" };
@@ -61,15 +65,18 @@
     for (const [name, [lo, hi]] of Object.entries(RANGES)) {
       const v = Number(o[name]);
       if (!Number.isFinite(v) || v < lo || v > hi) throw new OptionError(`${name} must be between ${lo} and ${hi}.`);
-      o[name] = ["dpi", "spot_colors", "seed"].includes(name) ? Math.trunc(v) : v;
+      o[name] = ["dpi", "spot_colors", "seed", "threshold_levels", "denoise"].includes(name) ? Math.trunc(v) : v;
     }
     if (o.white_point <= o.black_point + 0.02) throw new OptionError("The white point must be above the black point.");
     const enums = { mode: CATALOG.modes_map, style: STYLES, target: TARGETS, shirt_fit: SHIRT_FITS,
-      underbase: { auto: 1, on: 1, off: 1 } };
+      underbase: { auto: 1, on: 1, off: 1 }, palette: { image: 1, ...PALETTES }, threshold_colors: { image: 1, ink: 1, palette: 1 } };
     for (const [name, table] of Object.entries(enums)) {
       if (!(o[name] in table)) throw new OptionError(`Unknown ${name}: ${JSON.stringify(o[name])}`);
     }
-    for (const name of ["invert", "remove_background", "knockout", "registration_marks"]) o[name] = !!o[name];
+    if (!Array.isArray(o.thresholds) || o.thresholds.length > 7) throw new OptionError("thresholds is a list of up to 7 cut points.");
+    o.thresholds = o.thresholds.map(Number).sort((a, b) => a - b);
+    if (o.thresholds.some((t) => !Number.isFinite(t) || t < 0.01 || t > 0.99)) throw new OptionError("Thresholds must be between 0.01 and 0.99.");
+    for (const name of ["invert", "remove_background", "knockout", "registration_marks", "threshold_stack"]) o[name] = !!o[name];
     if (!Array.isArray(o.inks) || o.inks.length < 1 || o.inks.length > 8) throw new OptionError("Give between 1 and 8 ink colours.");
     o.inks.forEach(hex);
     if (o.mode === "duotone" && o.inks.length < 2) throw new OptionError("Duotone needs two ink colours.");
@@ -133,7 +140,7 @@
 
   function prepareKey(o) {
     return JSON.stringify([o.remove_background, o.bg_tolerance, o.sharpen, o.mode === "spot" && o.spot_colors,
-      o.text, o.text.length ? textWorkWidth(o) : 0]);
+      o.text, o.text.length ? textWorkWidth(o) : 0, o.denoise, o.smooth_mm, o.smooth_mm ? Math.round(o.width_in * o.dpi) : 0]);
   }
 
   // ================================================================ noise (global coordinates)
@@ -586,6 +593,13 @@
         const keep = removeFlatBackground(src8, w, h, o.bg_tolerance);
         if (keep) for (let p = 0; p < w * h; p++) alpha[p] *= keep[p];
       }
+      if (o.denoise) rgb = median3(rgb, w, h, o.denoise);
+      if (o.smooth_mm > 0) {
+        let mn = w, mx = -1;
+        for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) if (alpha[y * w + x] > 0.02) { if (x < mn) mn = x; if (x > mx) mx = x; }
+        const artW = mx >= mn ? mx - mn + 1 : w;
+        rgb = gaussianBlur3(rgb, w, h, Math.max(0.3, o.smooth_mm * artW / (o.width_in * 25.4)));   // mm on the print -> source px
+      }
       if (o.sharpen > 0) {
         const blur = gaussianBlur3(rgb, w, h, Math.max(0.8, Math.max(w, h) / 1500));
         for (let k = 0; k < rgb.length; k++) rgb[k] = Math.max(0, Math.min(1, rgb[k] + o.sharpen * (rgb[k] - blur[k])));
@@ -614,20 +628,122 @@
       pm[p * 4] = img.rgb[p * 3] * a; pm[p * 4 + 1] = img.rgb[p * 3 + 1] * a; pm[p * 4 + 2] = img.rgb[p * 3 + 2] * a; pm[p * 4 + 3] = a;
     }
     const prep = { rgba: pm, srcW: img.w, srcH: img.h, palette: null, paletteLab: null, crop, photoLike: photo, levels: {},
-      spotLab: null, palettes: {} };
+      spotLab: null, palettes: {}, lumCounts: new Float64Array(256), lumRgb: new Float64Array(256 * 3),
+      token: Math.random().toString(36).slice(2) };
 
-    if (o.mode === "spot") {
-      const idx = [];
-      for (let p = 0; p < img.w * img.h; p++) if (img.alpha[p] > 0.5) idx.push(p);
-      const rnd = mulberry32(0), n = Math.min(idx.length, 40000), labs = new Float32Array(n * 3);
-      for (let k = 0; k < n; k++) {
-        const p = idx.length > n ? idx[Math.floor(rnd() * idx.length)] : idx[k];
-        labs.set(rgbToLab(img.rgb[p * 3], img.rgb[p * 3 + 1], img.rgb[p * 3 + 2]), k * 3);
-      }
-      prep.spotLab = labs;
-      [prep.paletteLab, prep.palette] = spotPalette(prep, o.spot_colors);
+    const idx = [];
+    for (let p = 0; p < img.w * img.h; p++) if (img.alpha[p] > 0.5) idx.push(p);
+    if (!idx.length) idx.push(0);
+    const rnd = mulberry32(0), n = Math.min(idx.length, 40000), labs = new Float32Array(n * 3);
+    for (let k = 0; k < n; k++) {
+      const p = idx.length > n ? idx[Math.floor(rnd() * idx.length)] : idx[k];
+      const r = img.rgb[p * 3], g = img.rgb[p * 3 + 1], b = img.rgb[p * 3 + 2];
+      labs.set(rgbToLab(r, g, b), k * 3);
+      const bin = Math.max(0, Math.min(255, Math.round(luma(r, g, b) * 255)));   // tone histogram for threshold layers
+      prep.lumCounts[bin]++;
+      prep.lumRgb[bin * 3] += r * 255; prep.lumRgb[bin * 3 + 1] += g * 255; prep.lumRgb[bin * 3 + 2] += b * 255;
     }
+    prep.spotLab = labs;
+    if (o.mode === "spot") [prep.paletteLab, prep.palette] = spotPalette(prep, o.spot_colors);
     return prep;
+  }
+
+  function median3(rgb, w, h, level) {   // speckle removal: per-channel median, window 3/5/7
+    const r = level, out = new Float32Array(rgb.length), win = [];
+    for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) for (let c = 0; c < 3; c++) {
+      win.length = 0;
+      for (let dy = -r; dy <= r; dy++) {
+        const yy = Math.min(h - 1, Math.max(0, y + dy));
+        for (let dx = -r; dx <= r; dx++) win.push(rgb[(yy * w + Math.min(w - 1, Math.max(0, x + dx))) * 3 + c]);
+      }
+      win.sort((a, b) => a - b);
+      out[(y * w + x) * 3 + c] = win[win.length >> 1];
+    }
+    return out;
+  }
+
+  /** k colours from a built-in palette: the ones closest to the art's own colours (light first). */
+  function fixedPalette(name, k, prep, exclude = null) {
+    let cols = PALETTES[name].colors.map(hex);
+    if (exclude) { const kept = cols.filter((c) => labDist(lab1(c), lab1(exclude)) >= 20); if (kept.length) cols = kept; }
+    if (cols.length > k && prep && prep.spotLab) {
+      const [want] = spotPalette(prep, k, exclude), labs = cols.map(lab1), chosen = [];
+      for (const w of want) {
+        let best = -1, bd = Infinity;
+        labs.forEach((l, i) => { if (!chosen.includes(i)) { const d = labDist(l, w); if (d < bd) { bd = d; best = i; } } });
+        chosen.push(best);
+      }
+      cols = chosen.map((i) => cols[i]);
+    }
+    cols = cols.slice(0, k).sort((a, b) => lab1(b)[0] - lab1(a)[0]);
+    return [cols.map(lab1), cols];
+  }
+
+  function kmeans1d(values, weights, k) {
+    const order = values.map((v, i) => i).sort((a, b) => values[a] - values[b]);
+    const v = order.map((i) => values[i]), w = order.map((i) => weights[i]), tot = w.reduce((a, b) => a + b, 0);
+    if (tot <= 0) return Array.from({ length: k }, (_, i) => 0.1 + 0.8 * i / Math.max(1, k - 1));
+    let acc = 0;
+    const cdf = w.map((x) => (acc += x) / tot);
+    let centers = Array.from({ length: k }, (_, i) => {
+      const q = (i + 0.5) / k;
+      let j = cdf.findIndex((c) => c >= q);
+      if (j < 0) j = v.length - 1;
+      return v[j];
+    });
+    for (let it = 0; it < 60; it++) {
+      const sum = new Array(k).fill(0), cnt = new Array(k).fill(0);
+      v.forEach((x, i) => {
+        let best = 0;
+        for (let c = 1; c < k; c++) if (Math.abs(x - centers[c]) < Math.abs(x - centers[best])) best = c;
+        sum[best] += x * w[i]; cnt[best] += w[i];
+      });
+      const nw = centers.map((c, i) => (cnt[i] > 0 ? sum[i] / cnt[i] : c));
+      const done = nw.every((c, i) => Math.abs(c - centers[i]) < 1e-5);
+      centers = nw;
+      if (done) break;
+    }
+    return centers.sort((a, b) => a - b);
+  }
+
+  /** Cut points between tones: yours, or automatic (weighted 1-D k-means on the art's tones). */
+  function thresholdCuts(prep, o) {
+    const n = o.threshold_levels;
+    if (o.thresholds.length === n - 1) return o.thresholds.slice();
+    const tone = toneFn(o), L = Array.from({ length: 256 }, (_, i) => { const t = tone(i / 255); return o.invert ? 1 - t : t; });
+    const centers = kmeans1d(L, Array.from(prep.lumCounts), n), out = [];
+    let last = 0;
+    for (let i = 0; i < n - 1; i++) {
+      const c = Math.min(0.98, Math.max(last + 0.02, (centers[i] + centers[i + 1]) / 2));
+      out.push(Math.round(c * 1000) / 1000);
+      last = c;
+    }
+    return out;
+  }
+
+  function bandColors(prep, o, cuts) {   // colour of each tone, darkest first
+    const n = cuts.length + 1;
+    if (o.threshold_colors === "ink") {
+      const base = hex(o.inks[0]);
+      return Array.from({ length: n }, (_, k) => base.map((v) => Math.round(v + (255 - v) * (0.85 * k / Math.max(1, n - 1)))));
+    }
+    if (o.threshold_colors === "palette" && o.palette !== "image") {
+      const cols = PALETTES[o.palette].colors.map(hex).sort((a, b) => lum(a) - lum(b));
+      return Array.from({ length: n }, (_, k) => cols[Math.round(k * (cols.length - 1) / Math.max(1, n - 1))]);
+    }
+    const tone = toneFn(o), edges = [-1, ...cuts, 2], out = [];
+    for (let k = 0; k < n; k++) {
+      let cnt = 0;
+      const sum = [0, 0, 0];
+      for (let b = 0; b < 256; b++) {
+        let L = tone(b / 255);
+        if (o.invert) L = 1 - L;
+        if (L >= edges[k] && L < edges[k + 1]) { cnt += prep.lumCounts[b]; for (let c = 0; c < 3; c++) sum[c] += prep.lumRgb[b * 3 + c]; }
+      }
+      if (cnt > 0) out.push(sum.map((v) => Math.round(v / cnt)));
+      else { const mid = (Math.max(edges[k], 0) + Math.min(edges[k + 1], 1)) / 2; out.push([0, 0, 0].map(() => Math.floor(mid * 255))); }
+    }
+    return out;
   }
 
   /** k spot colours from the art (light first). exclude: a shirt colour whose look-alikes are left out. */
@@ -736,18 +852,31 @@
     let auto = o.underbase === "auto" && o.target === "screen" && lg < 0.6;
     if (o.mode === "mono" || o.mode === "duotone") auto = auto && printed0.some((c) => lum(c) < 0.85);
     fit.underbase = o.underbase === "on" || auto;
-    fit.shirtIsBlack = fit.underbase && lg < 0.35 && (o.mode === "cmyk" || o.mode === "spot");
-    fit.palette = []; fit.paletteLab = null;
-    if (o.mode === "spot") {
+    fit.shirtIsBlack = fit.underbase && lg < 0.35 && ["cmyk", "spot", "index", "threshold"].includes(o.mode);
+    fit.palette = []; fit.paletteLab = null; fit.cuts = []; fit.bands = [];
+    if (o.mode === "threshold") {
+      fit.cuts = thresholdCuts(prep, o);
+      let cols = bandColors(prep, o, fit.cuts);
+      if (o.inks.length === cols.length) cols = o.inks.map(hex);
+      let free = null;
+      if (mode !== "off") {
+        const d = cols.map((c) => Math.abs(lum(c) - lg)), j = d.indexOf(Math.min(...d));
+        if (d[j] < 0.2) free = j;
+      }
+      fit.bands = cols.map((c, i) => (i === free ? null : c));
+      if (free !== null) fit.notes.push(`Tone ${free + 1} (${toHex(cols[free])}) is the shirt colour, so the shirt shows through there.`);
+    }
+    if (o.mode === "spot" || o.mode === "index") {
       // With a white base, it counts as one of the screens: 4 colours = white + 3 spot colours.
       const k = fit.underbase ? Math.max(1, o.spot_colors - 1) : o.spot_colors;
-      const [labs, pal] = spotPalette(prep, k, fit.shirtIsBlack ? g : null);
+      const exclude = fit.shirtIsBlack || o.mode === "index" ? g : null;
+      const [labs, pal] = o.palette !== "image" ? fixedPalette(o.palette, k, prep, exclude) : spotPalette(prep, k, exclude);
       fit.paletteLab = labs; fit.palette = pal.slice();
       const base = o.inks.length === pal.length ? o.inks.map(hex) : pal.slice();
       const glab = lab1(g);
       base.forEach((c, i) => {
         const close = mode !== "off" && labDist(lab1(c), glab) < 14;
-        if (close && (mode === "tones" || fit.underbase)) {
+        if (close && (mode === "tones" || fit.underbase || o.mode === "index")) {
           fit.spot.push(null);
           fit.notes.push(`Spot ${i + 1} (${toHex(c)}) matches the shirt, so the shirt shows through instead.`);
         } else if (close) {
@@ -762,7 +891,9 @@
         fit.notes.push("Dark shirt: prints as a white base + cyan, magenta, yellow. The shirt itself is the black, so there's no black ink.");
       } else if (o.mode === "cmyk") {
         fit.notes.push("White base under the process colours, solved for this shirt colour.");
-      } else if (o.mode === "spot") {
+      } else if (o.mode === "threshold") {
+        fit.notes.push(`White base + ${fit.bands.filter((c) => c).length} tones` + (fit.shirtIsBlack ? " (the shirt is the black)." : "."));
+      } else if (o.mode === "spot" || o.mode === "index") {
         fit.notes.push(`White base + ${fit.spot.filter((c) => c).length} spot colours` + (fit.shirtIsBlack ? " (the shirt is the black)." : "."));
       } else if (o.underbase === "auto") {
         fit.notes.push("Dark shirt: a choked white underbase is added under the colours so they stay bright.");
@@ -781,6 +912,15 @@
     } else if (o.mode === "cmyk") {
       plates = PROCESS_INKS.map(([n, c, a], i) => P(n, c, o.angle + a, i)).filter((p) => !(fit.shirtIsBlack && p.name === "Black"));
       blend = "multiply";
+    } else if (o.mode === "threshold") {
+      const n = fit.bands.length;   // light tones print first, darker ones on top
+      plates = [];
+      for (let k = n - 1; k >= 0; k--) if (fit.bands[k]) plates.push(P(`Tone ${k + 1}`, fit.bands[k], o.angle + 15 * (n - 1 - k), k));
+      blend = "opaque";
+    } else if (o.mode === "index") {
+      plates = [];
+      fit.spot.forEach((c, i) => { if (c) plates.push(P(`Colour ${i + 1}`, c, o.angle, i)); });
+      blend = "opaque";
     } else {
       plates = [];
       fit.spot.forEach((c, i) => { if (c) plates.push(P(`Spot ${i + 1}`, c, o.angle + 30 * i, i)); });
@@ -826,6 +966,22 @@
       for (let p = 0; p < n; p++) { c1[p] = c[p] ** 1.6 * a[p]; c2[p] = Math.min(1, c[p] * 1.3) ** 0.8 * a[p]; }
       return [c1, c2];
     }
+    if (o.mode === "threshold") {
+      const cuts = fit.cuts, nb = cuts.length + 1, soft = o.threshold_soft, out = Array.from({ length: nb }, () => new Float32Array(n));
+      const darker = new Float32Array(cuts.length);
+      for (let p = 0; p < n; p++) {
+        let L = tone(luma(rgb[p * 3], rgb[p * 3 + 1], rgb[p * 3 + 2]));
+        if (o.invert) L = 1 - L;
+        for (let i = 0; i < cuts.length; i++) darker[i] = soft <= 0 ? (L < cuts[i] ? 1 : 0) : Math.max(0, Math.min(1, (cuts[i] - L) / soft + 0.5));
+        for (let k = 0; k < nb; k++) {
+          const cov = o.threshold_stack ? (k < nb - 1 ? darker[k] : 1)   // lighter tones run under darker ones
+            : (k < nb - 1 ? darker[k] : 1) - (k > 0 ? darker[k - 1] : 0);   // knockout: one tone per spot
+          out[k][p] = Math.max(0, Math.min(1, cov)) * a[p];
+        }
+      }
+      return out;
+    }
+    if (o.mode === "index") return [new Float32Array(n)];   // separated on its pixel grid (indexGrids)
     if (o.mode === "cmyk") {
       const out = [0, 1, 2, 3, 4].map(() => new Float32Array(n)), g = hex(o.garment).map((v) => v / 255);
       for (let p = 0; p < n; p++) {
@@ -883,7 +1039,10 @@
       if (p.underbase || !p.on) continue;
       const c = covs[p.src];
       if (!m) m = c.slice();
-      else for (let k = 0; k < m.length; k++) m[k] = o.mode === "spot" ? Math.min(1, m[k] + c[k]) : Math.max(m[k], c[k]);
+      else {
+        const sum = o.mode === "spot" || (o.mode === "threshold" && !o.threshold_stack);   // the base goes under all of them
+        for (let k = 0; k < m.length; k++) m[k] = sum ? Math.min(1, m[k] + c[k]) : Math.max(m[k], c[k]);
+      }
     }
     if (!m) return new Float32Array(covs[0] ? covs[0].length : 0);
     return choke(m, o.choke_mm, o);
@@ -947,6 +1106,11 @@
         for (let j = 0; j < gw; j++) {
           const X = xs[j] / cell;
           let u = X * c + Y * s, v = -X * s + Y * c;
+          if (o.style === "modulation") {   // lines that wave; their width carries the tone
+            const vw = v + 0.22 * Math.sin(2 * Math.PI * u * 0.5);
+            T[i * gw + j] = Math.abs(vw - Math.floor(vw) - 0.5) * 2;
+            continue;
+          }
           u = u - Math.floor(u) - 0.5; v = v - Math.floor(v) - 0.5;
           const pos = Math.max(0, Math.min(M, (spotValue(o.style, u, v) - lo) * scale)), m = Math.floor(pos);
           T[i * gw + j] = m >= M ? lut[M] : lut[m] + (lut[m + 1] - lut[m]) * (pos - m);
@@ -960,6 +1124,22 @@
       return T;
     }
     const g = Math.max(o.grain_mm * ppm, 0.5);
+    if (o.style === "bayer4" || o.style === "bayer8") {
+      const n = o.style === "bayer4" ? 4 : 8, mtx = bayerMatrix(n), T = new Float32Array(gw * gh);
+      for (let i = 0; i < gh; i++) {
+        const iy = (((Math.floor(ys[i] / g)) % n) + n) % n;
+        for (let j = 0; j < gw; j++) T[i * gw + j] = mtx[iy * n + ((((Math.floor(xs[j] / g)) % n) + n) % n)];
+      }
+      return T;
+    }
+    if (o.style === "random") {
+      const T = new Float32Array(gw * gh);
+      for (let i = 0; i < gh; i++) for (let j = 0; j < gw; j++) {
+        T[i * gw + j] = Math.max(0.0005, Math.min(0.9995, hash2(Math.floor(xs[j] / g), Math.floor(ys[i] / g), seed)));
+      }
+      return T;
+    }
+    if (DIFFUSION_STYLES.includes(o.style)) return blueNoise(xs, ys, g, seed);   // plates use the diffusion grid
     if (o.style === "fm") return blueNoise(xs, ys, g, seed);
     if (o.style === "mezzotint") {
       const a = fbm(xs, ys, g * 2.5, seed + 3, 2, 3), b = blueNoise(xs, ys, Math.max(g * 0.6, 0.5), seed);
@@ -1034,7 +1214,15 @@
     fit = fit || resolveFit(prep, o);
     const [outW] = outSize(prep, o), xs = grid(x0, gw, step), ys = grid(y0, gh, step);
     const samples = {}, result = [];
+    const gridded = o.mode === "index" || DIFFUSION_STYLES.includes(o.style);
+    const igrids = o.mode === "index" ? indexGrids(prep, o, fit, plates) : null;
     for (const p of plates) {
+      if (gridded) {
+        if (!p.on) { result.push(new Uint8Array(gw * gh)); continue; }
+        const G = igrids ? igrids[p.underbase ? "base" : p.src] : diffusionGrid(prep, o, fit, plates, p);
+        result.push(lookupGrid(G, xs, ys, p.shift[0], p.shift[1]));
+        continue;
+      }
       const key = p.shift.join(",");
       if (!samples[key]) {
         const s = sample(prep, x0, y0, gw, gh, step, outW, p.shift[0], p.shift[1]);
@@ -1063,6 +1251,136 @@
       }
     }
     return result;
+  }
+
+  // ---------------------------------------------------------------- dither grids (error diffusion, index colour)
+
+  function bayerMatrix(n) {
+    let m = [0], size = 1;
+    while (size < n) {
+      const nm = new Array(4 * size * size), s2 = size * 2;
+      for (let y = 0; y < size; y++) for (let x = 0; x < size; x++) {
+        const v = 4 * m[y * size + x];
+        nm[y * s2 + x] = v; nm[y * s2 + x + size] = v + 2; nm[(y + size) * s2 + x] = v + 3; nm[(y + size) * s2 + x + size] = v + 1;
+      }
+      m = nm; size = s2;
+    }
+    return Float32Array.from(m, (v) => (v + 0.5) / (n * n));
+  }
+
+  /** 1-bit error diffusion of ink amounts (0..1), serpentine scan. */
+  function errorDiffuse(cov, W, H, style) {
+    const [div, taps] = DIFFUSION[style], buf = new Float64Array((H + 3) * (W + 4)), out = new Uint8Array(W * H), BW = W + 4;
+    for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) buf[y * BW + x + 2] = cov[y * W + x];
+    for (let y = 0; y < H; y++) {
+      const rev = y & 1;
+      for (let i = 0; i < W; i++) {
+        const x = rev ? W - 1 - i : i, k = y * BW + x + 2, v = buf[k], bit = v >= 0.5 ? 1 : 0, err = v - bit;
+        out[y * W + x] = bit;
+        for (const [dx, dy, wt] of taps) buf[k + dy * BW + (rev ? -dx : dx)] += err * wt / div;
+      }
+    }
+    return out;
+  }
+
+  /** Colour error diffusion: each cell gets one palette entry (index), or -1 where the art is transparent. */
+  function errorDiffusePalette(rgb, a, W, H, colors, style) {
+    const [div, taps] = DIFFUSION[style], BW = W + 4, buf = new Float64Array((H + 3) * BW * 3), out = new Int16Array(W * H).fill(-1);
+    for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) for (let c = 0; c < 3; c++) buf[(y * BW + x + 2) * 3 + c] = rgb[(y * W + x) * 3 + c];
+    for (let y = 0; y < H; y++) {
+      const rev = y & 1;
+      for (let i = 0; i < W; i++) {
+        const x = rev ? W - 1 - i : i, k = y * BW + x + 2;
+        if (a[y * W + x] < 0.5) continue;
+        const v = [0, 1, 2].map((c) => Math.min(1.5, Math.max(-0.5, buf[k * 3 + c])));
+        let best = 0, bd = Infinity;
+        colors.forEach((p, j) => {
+          const d = (v[0] - p[0]) ** 2 * 0.3 + (v[1] - p[1]) ** 2 * 0.59 + (v[2] - p[2]) ** 2 * 0.11;
+          if (d < bd) { bd = d; best = j; }
+        });
+        out[y * W + x] = best;
+        const e = v.map((val, c) => val - colors[best][c]);
+        for (const [dx, dy, wt] of taps) {
+          const q = (k + dy * BW + (rev ? -dx : dx)) * 3;
+          for (let c = 0; c < 3; c++) buf[q + c] += e[c] * wt / div;
+        }
+      }
+    }
+    return out;
+  }
+
+  const gridCache = new Map();
+  function cachedGrid(key, make) {
+    if (gridCache.has(key)) { const v = gridCache.get(key); gridCache.delete(key); gridCache.set(key, v); return v; }
+    const v = make();
+    gridCache.set(key, v);
+    while (gridCache.size > 24) gridCache.delete(gridCache.keys().next().value);
+    return v;
+  }
+  function optsKey(o) {
+    const d = { ...o };
+    for (const k of ["textures", "registration_marks", "misregister_mm", "seed", "knockout"]) delete d[k];
+    return JSON.stringify(d);
+  }
+  function gridGeometry(prep, o) {
+    const [outW, outH] = outSize(prep, o), cell = Math.max(1, o.grain_mm * o.dpi / 25.4);
+    return { outW, cell, GW: Math.ceil(outW / cell), GH: Math.ceil(outH / cell) };
+  }
+
+  /** Error diffusion runs once over the whole print (grain-sized cells), so every view reads the same dots. */
+  function diffusionGrid(prep, o, fit, plates, p) {
+    const key = ["diff", prep.token, optsKey(o), p.src, p.underbase, p.choke_mm, plates.map((q) => [q.src, q.on, q.underbase])].join("|");
+    return cachedGrid(key, () => {
+      const { outW, cell, GW, GH } = gridGeometry(prep, o);
+      const s = sample(prep, 0, 0, GW, GH, cell, outW);
+      const covs = coverages(s, prep, o, fit).map((c) => shapeDots(c, o));
+      const cov = p.underbase ? underbaseCov(covs, plates, o) : choke(covs[p.src], p.choke_mm, o);
+      return { G: errorDiffuse(cov, GW, GH, o.style), cell, GW, GH };
+    });
+  }
+
+  /** Index colour: every grain cell gets exactly one ink (or the shirt) by colour error diffusion. */
+  function indexGrids(prep, o, fit) {
+    return cachedGrid(["index", prep.token, optsKey(o)].join("|"), () => {
+      const { outW, cell, GW, GH } = gridGeometry(prep, o);
+      const s = sample(prep, 0, 0, GW, GH, cell, outW), tone = toneFn(o);
+      const t = s.rgb.map((v) => tone(v)), shirt = hex(o.garment).map((v) => v / 255);
+      const cols = [...fit.spot.map((c) => (c ? c.map((v) => v / 255) : shirt)), shirt];
+      const idx = errorDiffusePalette(t, s.a, GW, GH, cols, DIFFUSION_STYLES.includes(o.style) ? o.style : "fs");
+      const grids = {}, base = new Uint8Array(GW * GH);
+      fit.spot.forEach((c, i) => {
+        if (!c) return;
+        const G = new Uint8Array(GW * GH);
+        for (let k = 0; k < G.length; k++) if (idx[k] === i) { G[k] = 1; base[k] = 1; }
+        grids[i] = { G, cell, GW, GH };
+      });
+      const r = Math.round(o.choke_mm * o.dpi / 25.4 / cell);
+      let b = base;
+      if (r > 0) {   // choke the base by whole cells
+        b = new Uint8Array(GW * GH);
+        for (let y = 0; y < GH; y++) for (let x = 0; x < GW; x++) {
+          let all = base[y * GW + x];
+          for (let dy = -r; dy <= r && all; dy++) for (let dx = -r; dx <= r; dx++) {
+            const yy = y + dy, xx = x + dx;
+            if (yy < 0 || xx < 0 || yy >= GH || xx >= GW || !base[yy * GW + xx]) { all = 0; break; }
+          }
+          b[y * GW + x] = all;
+        }
+      }
+      grids.base = { G: b, cell, GW, GH };
+      return grids;
+    });
+  }
+
+  function lookupGrid(g, xs, ys, dx, dy) {
+    const out = new Uint8Array(xs.length * ys.length), ix = new Int32Array(xs.length);
+    for (let j = 0; j < xs.length; j++) ix[j] = Math.floor((xs[j] - dx) / g.cell);
+    for (let i = 0; i < ys.length; i++) {
+      const iy = Math.floor((ys[i] - dy) / g.cell);
+      if (iy < 0 || iy >= g.GH) continue;
+      for (let j = 0; j < xs.length; j++) if (ix[j] >= 0 && ix[j] < g.GW) out[i * xs.length + j] = g.G[iy * g.GW + ix[j]];
+    }
+    return out;
   }
 
   /** Straight-alpha composite. Returns {rgb: Float32Array, alpha: Uint8Array} (alpha strictly 0/1). */
@@ -1184,7 +1502,11 @@
       cm: [r1(outW / o.dpi * 2.54), r1(outH / o.dpi * 2.54)], dpi: o.dpi, megapixels: r1(outW * outH / 1e6),
       target: tgt.label, binary_alpha: true,
     };
-    if (AM_STYLES.includes(o.style)) {
+    const solid = o.mode === "threshold" && o.threshold_soft <= 0;
+    if (o.mode === "threshold") info.thresholds = resolveFit(prep, o).cuts.map((c) => r1(c, 3));
+    if (solid) {
+      info.solid = true;   // solid tones: no dots to hold
+    } else if (AM_STYLES.includes(o.style) && o.mode !== "index") {
       const cell = o.dpi / o.lpi, levels = Math.floor(cell * cell) + 1;
       info.cell_px = r1(cell, 2); info.tone_levels = Math.min(levels, 256);
       if (cell < 4) {
@@ -1266,6 +1588,7 @@
     CATALOG, DEFAULTS, STYLES, AM_STYLES, GRAIN_STYLES, TEXTURES, TARGETS, CREAM, INK_BLACK, LOUPE_MAX, MAX_OUTPUT_PX,
     ImageError, OptionError, hex, toHex, parseOptions, prepareKey, prepare, outSize, resolveFit, plateSpecs,
     renderPreview, renderFull, renderPlates, composite, report, threshold, shapeDots, lum, contrastInk, spotPalette,
+    thresholdCuts, fixedPalette, DIFFUSION_STYLES, PALETTES,
     _internal: { hash2, valueNoise, fbm, blueNoise, voronoiEdge, scratches, rgbToLab, labToRgb, resize },
   };
   if (typeof module !== "undefined" && module.exports) module.exports = api;

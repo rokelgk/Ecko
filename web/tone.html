@@ -47,6 +47,9 @@
       </label>
       <label class="check"><input type="checkbox" id="remove_background" checked> Remove flat background</label>
       <label id="bgTolRow">Background tolerance <input type="range" id="bg_tolerance" min="4" max="60" step="1"></label>
+      <label>Denoise <output id="denoiseOut"></output> <input type="range" id="denoise" min="0" max="3" step="1"></label>
+      <label>Smooth shapes <output id="smoothOut"></output> <input type="range" id="smooth_mm" min="0" max="3" step="0.05">
+        <span class="scale"><span>Every detail</span><span>Bold simple shapes</span></span></label>
       <button type="button" class="link" id="clearPicture" hidden>Remove picture</button>
     </details>
 
@@ -75,8 +78,21 @@
         <label>Ink colours</label>
         <div class="inks" id="inks"></div>
       </div>
+      <div id="thresholdBox">
+        <label>Tones <output id="levelsOut"></output> <input type="range" id="threshold_levels" min="2" max="8" step="1"></label>
+        <div id="cutsBox" class="cutsBox"></div>
+        <button type="button" class="ghost block" id="autoCuts">Auto levels</button>
+        <label>Blend between tones <output id="softOut"></output> <input type="range" id="threshold_soft" min="0" max="0.3" step="0.01">
+          <span class="scale"><span>Solid edges</span><span>Halftone / dither blend</span></span></label>
+        <label>Tone colours <select id="threshold_colors">
+          <option value="ink">Shades of the ink</option><option value="image">From the picture</option><option value="palette">From the palette</option>
+        </select></label>
+        <label class="check"><input type="checkbox" id="threshold_stack"> Overlap: lighter tones run under darker ones</label>
+        <p class="hint">Unticked = knockout: every spot gets exactly one tone, which saves ink.</p>
+      </div>
+      <label id="paletteRow">Palette <select id="palette"></select></label>
       <div id="spotBox">
-        <label>Spot screens <output id="spotOut"></output> <input type="range" id="spot_colors" min="2" max="8" step="1"></label>
+        <label><span id="spotLabel">Spot screens</span> <output id="spotOut"></output> <input type="range" id="spot_colors" min="2" max="8" step="1"></label>
         <p class="hint">On a dark shirt with a white base, the base is one of these screens.</p>
         <label>Blend between inks <input type="range" id="spot_softness" min="2" max="40" step="1">
           <span class="scale"><span>Hard edges</span><span>Soft blends</span></span></label>

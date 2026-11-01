@@ -121,6 +121,8 @@ def catalog():
         "targets": [{"id": k, "name": v["label"], "lpi": list(v["lpi"]), "min_dot_mm": v["min_dot_mm"]}
                     for k, v in E.TARGETS.items()],
         "presets": PRESETS,
+        "style_groups": [{"name": n, "styles": ids} for n, ids in E.STYLE_GROUPS],
+        "palettes": [{"id": k, "name": v["label"], "colors": v["colors"]} for k, v in E.PALETTES.items()],
         "fonts": [{"id": f.id, "name": f.name} for f in E.FONTS.values()],
         "shirt_fits": [{"id": k, "name": v} for k, v in E.SHIRT_FITS.items()],
         "garments": GARMENTS,
@@ -167,7 +169,7 @@ def preview(body: dict = Body(...)):
         "image": "data:image/png;base64," + base64.b64encode(buf.getvalue()).decode(),
         "size": rep["pixels"],
         "report": rep,
-        "palette": [E.to_hex(c) for c in E.resolve_fit(prep, o).palette] if o.mode == "spot" else None,
+        "palette": [E.to_hex(c) for c in E.resolve_fit(prep, o).palette] if o.mode in ("spot", "index") else None,
     }
 
 

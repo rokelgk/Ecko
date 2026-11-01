@@ -298,7 +298,7 @@
     const r = guard(() => E.renderPreview(prep, o, maxPx, region, textureImages(o)));
     const rep = E.report(prep, o, r.plates, r.bitmaps);
     const png = await encodePNG(r.width, r.height, r.rgba, 0);
-    return { png, size: rep.pixels, report: rep, palette: o.mode === "spot" ? E.resolveFit(prep, o).palette.map(E.toHex) : null };
+    return { png, size: rep.pixels, report: rep, palette: o.mode === "spot" || o.mode === "index" ? E.resolveFit(prep, o).palette.map(E.toHex) : null };
   }
 
   async function mockup(body) {

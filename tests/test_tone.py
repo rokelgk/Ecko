@@ -416,3 +416,82 @@ def test_art_darker_than_black_shirt_prints_nothing():
     half = seps[0].shape[1] // 2
     assert all(s[:, :half - 20].mean() < 0.01 for s in seps)   # dark half: bare shirt
     assert seps[0][:, half + 20:].mean() > 0.6                   # light half: white base
+
+
+# ------------------------------------------------------------- hybrid: threshold layers, dithers, index colour
+
+
+@pytest.fixture(scope="module")
+def three_greys():
+    arr = np.zeros((120, 360, 3), np.uint8)
+    arr[:, :120], arr[:, 120:240], arr[:, 240:] = 30, 128, 225
+    return _png(arr)
+
+
+def test_threshold_auto_cuts_split_the_tones(three_greys):
+    o = E.parse_options({"mode": "threshold", "width_in": 3, "remove_background": False, "sharpen": 0})
+    prep = E.prepare(three_greys, o)
+    cuts = E.threshold_cuts(prep, o)
+    assert len(cuts) == 2 and 30 / 255 < cuts[0] < 128 / 255 < cuts[1] < 225 / 255
+    _, plates, seps = E.render_full(prep, o, keep_plates=True)
+    names = [p.name for p in plates]
+    assert names == ["Tone 2", "Tone 1"]   # Tone 3 (near white) is the white shirt: not printed
+    third = seps[0].shape[1] // 3
+    tone2, tone1 = seps
+    assert tone1[:, :third - 5].mean() > 0.99 and tone1[:, third + 5:].mean() < 0.01
+    assert tone2[:, third + 5:2 * third - 5].mean() > 0.99 and tone2[:, :third - 5].mean() < 0.01  # knockout
+
+
+def test_threshold_stack_overlaps_and_manual_cuts(three_greys):
+    o = E.parse_options({"mode": "threshold", "width_in": 3, "remove_background": False, "sharpen": 0,
+                         "threshold_stack": True})
+    prep = E.prepare(three_greys, o)
+    _, plates, seps = E.render_full(prep, o, keep_plates=True)
+    third = seps[0].shape[1] // 3
+    assert seps[0][:, :third - 5].mean() > 0.99   # the lighter tone also runs under the darkest
+    o2 = E.parse_options({"mode": "threshold", "width_in": 3, "remove_background": False, "thresholds": [0.6]})
+    assert E.threshold_cuts(prep, E.parse_options({**{"mode": "threshold"}, "threshold_levels": 2, "thresholds": [0.6]})) == [0.6]
+    with pytest.raises(ValueError):
+        E.parse_options({"thresholds": [1.5]})
+
+
+def test_threshold_on_black_shirt_frees_the_dark_tone(three_greys):
+    o = E.parse_options({"mode": "threshold", "width_in": 3, "remove_background": False, "garment": "#141414",
+                         "threshold_colors": "image", "target": "screen"})
+    plates, _ = E.plate_specs(E.prepare(three_greys, o), o)
+    assert plates[0].underbase and "Tone 1" not in [p.name for p in plates]
+
+
+@pytest.mark.parametrize("style", ["fs", "atkinson", "jarvis", "stucki", "burkes", "sierra", "sierra_lite",
+                                   "bayer4", "bayer8", "random", "modulation"])
+def test_dither_styles_hold_tone_and_line_up(style):
+    grey = np.full((150, 200, 3), 180, np.uint8)   # ~30% ink
+    o = E.parse_options({"style": style, "width_in": 2, "dpi": 200, "remove_background": False, "sharpen": 0,
+                         "min_dot": 0, "max_dot": 1, "roughness": 0, "grain_mm": 0.3, "lpi": 30})
+    prep = E.prepare(_png(grey), o)
+    full, _, seps = E.render_full(prep, o, keep_plates=True)
+    target = 1 - 180 / 255
+    tol = 0.12 if style == "atkinson" else 0.05   # Atkinson drops a quarter of the error by design
+    assert abs(seps[0].mean() - target) < tol, seps[0].mean()
+    crop, _, _ = E.render_preview(prep, o, region=(37, 21, 120, 90))
+    assert np.array_equal(crop, full[21:111, 37:157])
+
+
+def test_index_colour_gives_each_pixel_one_ink(logo):
+    o = E.parse_options({"mode": "index", "spot_colors": 4, "width_in": 2, "dpi": 150})
+    prep = E.prepare(logo, o)
+    _, plates, seps = E.render_full(prep, o, keep_plates=True)
+    assert 1 <= len(plates) <= 4
+    assert np.sum([s.astype(int) for s in seps], axis=0).max() == 1
+    o2 = E.parse_options({"mode": "index", "spot_colors": 4, "width_in": 2, "dpi": 150, "palette": "gameboy"})
+    pal = [E.to_hex(c) for c in E.resolve_fit(prep, o2).palette]
+    assert set(pal) <= set(E.PALETTES["gameboy"]["colors"])
+
+
+def test_smooth_and_denoise_are_accepted(logo):
+    o = E.parse_options({"smooth_mm": 1.0, "denoise": 2, "width_in": 3})
+    assert E.prepare(logo, o).src_w > 0
+    with pytest.raises(ValueError):
+        E.parse_options({"denoise": 9})
+    with pytest.raises(ValueError):
+        E.parse_options({"palette": "nope"})

@@ -35,3 +35,26 @@ Halftone, WeGraphics Halftone, Envato duotone/Xerox templates, DEPTHTONE) work t
 The printer limits used in the checks (DTF 25–45 LPI with dots of about 0.25 mm or more,
 screen print 35–65 LPI, and so on) are common rules of thumb. Calibrate them on your own
 press.
+
+## Round 2: DitherTone Pro and AutoThresh Pro
+
+Two more popular Photoshop plug-ins, researched from listings (their own sites couldn't be fetched
+from the build environment):
+
+- **DitherTone Pro** (Doron Supply, $65): 40+ dither algorithms, up to 64 colours from the image's
+  palette, built-in retro/pastel/vibrant palettes, tri-tone mapping (separate dither and colour for
+  shadows, mids and highlights), and live blur, sharpen, denoise and contrast.
+- **AutoThresh Pro** (Charley Pangus, Photoshop; also AutoThresh Web, $159): threshold art (a
+  picture split into a few solid tones) with adjustable levels and colours, spot colour channels,
+  knockout stencils to save ink, and registration marks.
+
+What Ecko Tone took from them, and what it adds:
+
+| From | Ecko Tone |
+|---|---|
+| AutoThresh threshold levels | **Threshold layers** mode: 2-8 tones, **Auto levels** (cut points found from the picture's own tones), a slider per cut, smoothing, knockout or overlap |
+| AutoThresh knockout and spot channels | Knockout by default; each tone is a film, with per-tone on/off and choke/spread, a white base on dark shirts, and the shirt used as a free tone |
+| DitherTone tri-tone mapping | Tones can **blend through any pattern** (halftone, stochastic or dither), not just hard edges |
+| DitherTone algorithms | Floyd-Steinberg, Atkinson, Jarvis-Judice-Ninke, Stucki, Burkes, Sierra, Sierra Lite, ordered Bayer 4x4/8x8, random and wave-line modulation, alongside the 10 halftone screens. Diffusion runs once over the whole print, so the preview, the 1:1 loupe and the export are identical |
+| DitherTone palettes and indexed colour | **Index colour** mode: every pixel exactly one ink (a classic screen-print index separation, with no dot overlap or moiré), using picture colours or built-in palettes, shirt-aware, with a choked white base |
+| DitherTone denoise and blur | **Denoise** and **Smooth shapes** in the Art panel |

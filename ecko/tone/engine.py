@@ -26,7 +26,7 @@ import numpy as np
 from .. import arctext
 from ..digitizer import text as lettering
 from ..digitizer.preprocess import ImageError, _find_palette, _lab_to_rgb, _resize_max, _to_lab, load_image
-from . import noise
+from . import hybrid, noise
 
 # ----------------------------------------------------------------- catalog
 
@@ -41,15 +41,37 @@ STYLES = {
     "fm": "Stochastic grain (FM)",
     "xerox": "Xerox / photocopy",
     "mezzotint": "Mezzotint",
+    "modulation": "Wave lines (modulation)",
+    "bayer4": "Ordered dither 4x4 (Bayer)",
+    "bayer8": "Ordered dither 8x8 (Bayer)",
+    "random": "Random noise",
+    "fs": "Floyd-Steinberg diffusion",
+    "atkinson": "Atkinson diffusion",
+    "jarvis": "Jarvis-Judice-Ninke diffusion",
+    "stucki": "Stucki diffusion",
+    "burkes": "Burkes diffusion",
+    "sierra": "Sierra diffusion",
+    "sierra_lite": "Sierra Lite diffusion",
 }
-AM_STYLES = ("round", "euclid", "ellipse", "square", "diamond", "line", "cross")
-GRAIN_STYLES = ("fm", "xerox", "mezzotint")
+AM_STYLES = ("round", "euclid", "ellipse", "square", "diamond", "line", "cross", "modulation")
+DIFFUSION_STYLES = tuple(hybrid.DIFFUSION)
+GRAIN_STYLES = ("fm", "xerox", "mezzotint", "bayer4", "bayer8", "random") + DIFFUSION_STYLES
+STYLE_GROUPS = [
+    ("Halftone dots", ["round", "euclid", "ellipse", "square", "diamond", "cross"]),
+    ("Lines", ["line", "modulation"]),
+    ("Grain and copy", ["fm", "xerox", "mezzotint", "random"]),
+    ("Error diffusion dither", list(DIFFUSION_STYLES)),
+    ("Ordered dither", ["bayer4", "bayer8"]),
+]
+PALETTES = hybrid.PALETTES
 
 MODES = {
     "mono": "One ink",
     "duotone": "Two inks (duotone)",
     "cmyk": "CMYK process",
     "spot": "Spot colours (screen-print separations)",
+    "threshold": "Threshold layers (solid tones)",
+    "index": "Index colour (dithered pixels, no overlap)",
 }
 
 # size_mm is the feature size at scale 1.0
@@ -150,13 +172,22 @@ class ToneOptions:
     choke_mm: float = 0.1
     text: list = field(default_factory=list)
     ink_edits: dict = field(default_factory=dict)  # {"Cyan": {"on": False, "choke_mm": 0.05}, ...}
+    threshold_levels: int = 3        # threshold layers: how many tones
+    thresholds: list = field(default_factory=list)  # cut points (lightness 0..1); empty = automatic
+    threshold_soft: float = 0.0      # 0 = hard solid edges; more = halftone/dither blend between tones
+    threshold_stack: bool = False    # False = knockout (no overlap); True = lighter tones run under darker
+    threshold_colors: str = "ink"    # ink (shades of one ink) | image (colours from the picture) | palette
+    palette: str = "image"           # image or a built-in palette, for spot / index / threshold colours
+    smooth_mm: float = 0.0           # simplify shapes before separating
+    denoise: int = 0                 # 0-3: remove speckle noise
 
     # Settings that change the prepared source (the slow step).
     def prepare_key(self) -> tuple:
         text = tuple(tuple(sorted(t.items())) for t in self.text)
         return (self.remove_background, round(float(self.bg_tolerance), 2), round(float(self.sharpen), 3),
                 self.mode == "spot" and int(self.spot_colors), text,
-                text and _text_work_width(self))
+                text and _text_work_width(self), int(self.denoise), round(float(self.smooth_mm), 3),
+                self.smooth_mm and round(self.width_in * self.dpi))
 
 
 _RANGES = {
@@ -166,6 +197,7 @@ _RANGES = {
     "black_point": (0, 0.95), "white_point": (0.05, 1), "sharpen": (0, 3),
     "min_dot": (0, 0.5), "max_dot": (0.5, 1), "dot_gain": (0, 0.4), "roughness": (0, 1),
     "misregister_mm": (0, 5), "bg_tolerance": (1, 80), "seed": (0, 2**31 - 1), "choke_mm": (0, 1),
+    "threshold_levels": (2, 8), "threshold_soft": (0, 0.3), "smooth_mm": (0, 3), "denoise": (0, 3),
 }
 
 
@@ -184,14 +216,24 @@ def parse_options(data: dict | None) -> ToneOptions:
             raise ValueError(f"{name} must be a number.") from exc
         if not math.isfinite(v) or not lo <= v <= hi:
             raise ValueError(f"{name} must be between {lo} and {hi}.")
-        setattr(o, name, int(v) if name in ("dpi", "spot_colors", "seed") else v)
+        setattr(o, name, int(v) if name in ("dpi", "spot_colors", "seed", "threshold_levels", "denoise") else v)
     if o.white_point <= o.black_point + 0.02:
         raise ValueError("The white point must be above the black point.")
     for name, table in (("mode", MODES), ("style", STYLES), ("target", TARGETS), ("shirt_fit", SHIRT_FITS),
-                        ("underbase", {"auto": 1, "on": 1, "off": 1})):
+                        ("underbase", {"auto": 1, "on": 1, "off": 1}),
+                        ("palette", {"image": 1, **PALETTES}),
+                        ("threshold_colors", {"image": 1, "ink": 1, "palette": 1})):
         if getattr(o, name) not in table:
             raise ValueError(f"Unknown {name}: {getattr(o, name)!r}")
-    for name in ("invert", "remove_background", "knockout", "registration_marks"):
+    if not isinstance(o.thresholds, list) or len(o.thresholds) > 7:
+        raise ValueError("thresholds is a list of up to 7 cut points.")
+    try:
+        o.thresholds = sorted(float(t) for t in o.thresholds)
+    except (TypeError, ValueError) as exc:
+        raise ValueError("Thresholds must be numbers.") from exc
+    if any(not 0.01 <= t <= 0.99 for t in o.thresholds):
+        raise ValueError("Thresholds must be between 0.01 and 0.99.")
+    for name in ("invert", "remove_background", "knockout", "registration_marks", "threshold_stack"):
         setattr(o, name, bool(getattr(o, name)))
     if not isinstance(o.inks, list) or not 1 <= len(o.inks) <= 8:
         raise ValueError("Give between 1 and 8 ink colours.")
@@ -293,6 +335,9 @@ class Prepared:
     crop: tuple = (0, 0, 0, 0)    # artwork box (x, y, w, h) in the uploaded picture's pixels
     photo_like: bool = False      # many smooth tones (photo) rather than flat colours (logo)
     spot_lab: np.ndarray | None = None   # Lab sample of the art, for spot palettes of any size
+    lum_counts: np.ndarray | None = None  # 256-bin luminance histogram of the art
+    lum_rgb: np.ndarray | None = None     # summed RGB per luminance bin (for threshold tone colours)
+    token: str = field(default_factory=lambda: __import__("uuid").uuid4().hex)
     _palettes: dict = field(default_factory=dict)
     _levels: dict = field(default_factory=dict)
 
@@ -415,6 +460,14 @@ def prepare(image: bytes | np.ndarray | None, o: ToneOptions) -> Prepared:
         if o.remove_background and not has_alpha:
             alpha = alpha * _remove_flat_background(rgba[..., :3], o.bg_tolerance)
 
+        if o.denoise:
+            k = 2 * int(o.denoise) + 1
+            rgb = cv2.medianBlur((rgb * 255 + 0.5).astype(np.uint8), k).astype(np.float32) / 255
+        if o.smooth_mm > 0:
+            cols = np.nonzero((alpha > 0.02).any(axis=0))[0]
+            art_w = (cols.max() - cols.min() + 1) if len(cols) else rgb.shape[1]
+            sigma = o.smooth_mm * art_w / (o.width_in * 25.4)   # mm on the print -> source pixels
+            rgb = cv2.GaussianBlur(rgb, (0, 0), max(0.3, sigma))
         if o.sharpen > 0:
             sigma = max(0.8, max(rgb.shape[:2]) / 1500)
             blur = cv2.GaussianBlur(rgb, (0, 0), sigma)
@@ -449,14 +502,83 @@ def prepare(image: bytes | np.ndarray | None, o: ToneOptions) -> Prepared:
                           round(crop_wh[0] * back), round(crop_wh[1] * back)),
                     photo_like=photo)
 
+    sel = alpha > 0.5
+    pix = (rgb[sel] * 255).astype(np.uint8)
+    if len(pix) > 200_000:
+        pix = pix[np.random.default_rng(0).choice(len(pix), 200_000, replace=False)]
+    if len(pix) == 0:
+        pix = np.zeros((1, 3), np.uint8)
+    prep.spot_lab = _to_lab(pix)
+    lum8 = np.clip(np.round(pix.astype(np.float32) @ np.float32([0.299, 0.587, 0.114])), 0, 255).astype(np.int64)
+    prep.lum_counts = np.bincount(lum8, minlength=256).astype(np.float64)
+    prep.lum_rgb = np.stack([np.bincount(lum8, weights=pix[:, c].astype(np.float64), minlength=256)
+                             for c in range(3)], axis=1)
     if o.mode == "spot":
-        sel = alpha > 0.5
-        pix = (rgb[sel] * 255).astype(np.uint8)
-        if len(pix) > 200_000:
-            pix = pix[np.random.default_rng(0).choice(len(pix), 200_000, replace=False)]
-        prep.spot_lab = _to_lab(pix)
         prep.palette_lab, prep.palette = spot_palette(prep, int(o.spot_colors))
     return prep
+
+
+def fixed_palette(name: str, k: int, prep: Prepared | None = None, exclude=None):
+    """k colours from a built-in palette: the ones closest to the art's own colours."""
+    cols = [_hex(c) for c in PALETTES[name]["colors"]]
+    if exclude is not None:
+        cols = [c for c in cols if float(np.linalg.norm(_lab1(c) - _lab1(exclude))) >= 20] or cols
+    if len(cols) > k and prep is not None and prep.spot_lab is not None:
+        want, _ = spot_palette(prep, k, exclude)
+        labs = np.array([_lab1(c) for c in cols])
+        chosen = []
+        for w in want:
+            d = np.linalg.norm(labs - w, axis=1)
+            d[chosen] = 1e9
+            chosen.append(int(d.argmin()))
+        cols = [cols[i] for i in chosen]
+    cols = cols[:k]
+    labs = np.array([_lab1(c) for c in cols], np.float32)
+    order = np.argsort(-labs[:, 0])
+    return labs[order], [tuple(cols[i]) for i in order]
+
+
+def threshold_cuts(prep: Prepared, o: ToneOptions) -> list:
+    """Cut points between tones: yours, or found automatically (weighted 1-D k-means on the art's tones)."""
+    n = o.threshold_levels
+    if len(o.thresholds) == n - 1:
+        return list(o.thresholds)
+    L = _tone(np.arange(256, dtype=np.float32) / 255, o)
+    if o.invert:
+        L = 1 - L
+    centers = hybrid.kmeans_1d(L, prep.lum_counts if prep.lum_counts is not None else np.ones(256), n)
+    cuts = [(a + b) / 2 for a, b in zip(centers[:-1], centers[1:])]
+    out, last = [], 0.0
+    for c in cuts:  # keep them strictly increasing and inside the range
+        c = float(min(0.98, max(last + 0.02, c)))
+        out.append(round(c, 3))
+        last = c
+    return out
+
+
+def band_colors(prep: Prepared, o: ToneOptions, cuts: list) -> list:
+    """Colour of each tone, darkest first."""
+    n = len(cuts) + 1
+    if o.threshold_colors == "ink":
+        base = np.array(_hex(o.inks[0]), np.float32)
+        return [tuple(int(round(v)) for v in base + (255 - base) * (0.85 * k / max(1, n - 1))) for k in range(n)]
+    if o.threshold_colors == "palette" and o.palette != "image":
+        cols = sorted((_hex(c) for c in PALETTES[o.palette]["colors"]), key=_lum)
+        return [cols[int(round(k * (len(cols) - 1) / max(1, n - 1)))] for k in range(n)]
+    L = _tone(np.arange(256, dtype=np.float32) / 255, o)
+    if o.invert:
+        L = 1 - L
+    edges = [-1.0] + list(cuts) + [2.0]
+    out = []
+    for k in range(n):
+        m = (L >= edges[k]) & (L < edges[k + 1])
+        cnt = prep.lum_counts[m].sum() if prep.lum_counts is not None else 0
+        if cnt > 0:
+            out.append(tuple(int(round(v)) for v in prep.lum_rgb[m].sum(axis=0) / cnt))
+        else:
+            mid = (max(edges[k], 0) + min(edges[k + 1], 1)) / 2
+            out.append((int(mid * 255),) * 3)
+    return out
 
 
 def spot_palette(prep: Prepared, k: int, exclude=None):
@@ -570,6 +692,8 @@ class Fit:
     shirt_is_black: bool = False                # dark shirt under a white base: the shirt prints the blacks
     palette: list = field(default_factory=list)  # spot colours actually separated
     palette_lab: np.ndarray | None = None
+    cuts: list = field(default_factory=list)     # threshold layers: cut points used
+    bands: list = field(default_factory=list)    # threshold layers: colour per tone (dark first), None = shirt
     notes: list = field(default_factory=list)
 
 
@@ -590,17 +714,35 @@ def resolve_fit(prep: Prepared, o: ToneOptions) -> Fit:
     if o.mode in ("mono", "duotone"):
         auto = auto and any(_lum(c) < 0.85 for c in printed)
     fit.underbase = o.underbase == "on" or auto
-    fit.shirt_is_black = fit.underbase and lg < 0.35 and o.mode in ("cmyk", "spot")
-    if o.mode == "spot":
+    fit.shirt_is_black = fit.underbase and lg < 0.35 and o.mode in ("cmyk", "spot", "index", "threshold")
+    if o.mode == "threshold":
+        fit.cuts = threshold_cuts(prep, o)
+        cols = band_colors(prep, o, fit.cuts)
+        if len(o.inks) == len(cols):
+            cols = [_hex(c) for c in o.inks]
+        free = None
+        if mode != "off":
+            d = [abs(_lum(c) - lg) for c in cols]
+            j = int(np.argmin(d))
+            if d[j] < 0.2:
+                free = j
+        fit.bands = [None if i == free else c for i, c in enumerate(cols)]
+        if free is not None:
+            fit.notes.append(f"Tone {free + 1} ({to_hex(cols[free])}) is the shirt colour, so the shirt shows through there.")
+    if o.mode in ("spot", "index"):
         # With a white base, it counts as one of the screens: 4 colours = white + 3 spot colours.
         k = max(1, o.spot_colors - 1) if fit.underbase else o.spot_colors
-        fit.palette_lab, pal = spot_palette(prep, k, g if fit.shirt_is_black else None)
+        exclude = g if (fit.shirt_is_black or o.mode == "index") else None
+        if o.palette != "image":
+            fit.palette_lab, pal = fixed_palette(o.palette, k, prep, exclude)
+        else:
+            fit.palette_lab, pal = spot_palette(prep, k, exclude)
         fit.palette = list(pal)
         base = [_hex(c) for c in o.inks] if len(o.inks) == len(pal) else list(pal)
         glab = _lab1(g)
         for i, c in enumerate(base):
             close = mode != "off" and float(np.linalg.norm(_lab1(c) - glab)) < 14
-            if close and (mode == "tones" or fit.underbase):
+            if close and (mode == "tones" or fit.underbase or o.mode == "index"):
                 fit.spot.append(None)
                 fit.notes.append(f"Spot {i + 1} ({to_hex(c)}) matches the shirt, so the shirt shows through instead.")
             elif close:
@@ -615,7 +757,10 @@ def resolve_fit(prep: Prepared, o: ToneOptions) -> Fit:
                              "The shirt itself is the black, so there's no black ink.")
         elif o.mode == "cmyk":
             fit.notes.append("White base under the process colours, solved for this shirt colour.")
-        elif o.mode == "spot":
+        elif o.mode == "threshold":
+            fit.notes.append(f"White base + {sum(c is not None for c in fit.bands)} tones"
+                             + (" (the shirt is the black)." if fit.shirt_is_black else "."))
+        elif o.mode in ("spot", "index"):
             fit.notes.append(f"White base + {sum(c is not None for c in fit.spot)} spot colours"
                              + (" (the shirt is the black)." if fit.shirt_is_black else "."))
         elif o.underbase == "auto":
@@ -634,6 +779,14 @@ def plate_specs(prep: Prepared, o: ToneOptions, fit: Fit | None = None) -> tuple
     elif o.mode == "cmyk":
         plates, blend = [Plate(n, c, o.angle + a, src=i) for i, (n, c, a) in enumerate(PROCESS_INKS)
                          if not (fit.shirt_is_black and n == "Black")], "multiply"
+    elif o.mode == "threshold":
+        n = len(fit.bands)  # print light tones first, darker ones on top
+        plates = [Plate(f"Tone {k + 1}", fit.bands[k], o.angle + 15 * (n - 1 - k), src=k)
+                  for k in reversed(range(n)) if fit.bands[k] is not None]
+        blend = "opaque"
+    elif o.mode == "index":
+        plates = [Plate(f"Colour {i + 1}", c, o.angle, src=i) for i, c in enumerate(fit.spot) if c is not None]
+        blend = "opaque"
     else:
         plates = [Plate(f"Spot {i + 1}", c, o.angle + 30 * i, src=i) for i, c in enumerate(fit.spot) if c is not None]
         blend = "opaque"
@@ -679,6 +832,23 @@ def _coverages(rgb, a, prep: Prepared, o: ToneOptions, fit: Fit) -> list[np.ndar
         if o.mode == "mono":
             return [c * a]
         return [(c ** 1.6) * a, np.minimum(1, c * 1.3) ** 0.8 * a]
+    if o.mode == "threshold":
+        L = _tone(_luma(rgb), o)
+        if o.invert:
+            L = 1 - L
+        cuts, n = fit.cuts, len(fit.cuts) + 1
+        soft = o.threshold_soft
+        darker = [(L < t).astype(np.float32) if soft <= 0 else np.clip((t - L) / soft + 0.5, 0, 1) for t in cuts]
+        out = []
+        for k in range(n):
+            if o.threshold_stack:   # lighter tones run under the darker ones (no gaps at the edges)
+                cov = darker[k] if k < n - 1 else np.ones_like(L)
+            else:                   # knockout: each spot gets exactly one tone (saves ink)
+                cov = (darker[k] if k < n - 1 else 1.0) - (darker[k - 1] if k > 0 else 0.0)
+            out.append(np.clip(cov, 0, 1) * a)
+        return out
+    if o.mode == "index":
+        return [a * 0]   # index colour is separated on its pixel grid (see _index_grids)
     if o.mode == "cmyk":
         t = _tone(rgb, o)
         if not fit.underbase:
@@ -728,7 +898,7 @@ def _underbase(covs: list[np.ndarray], plates: list[Plate], o: ToneOptions) -> n
         if not p.underbase and p.on:
             if m is None:
                 m = covs[p.src].copy()
-            elif o.mode == "spot":
+            elif o.mode in ("spot", "threshold") and not o.threshold_stack:
                 m = m + covs[p.src]        # spot colours share the base: it goes under all of them
             else:
                 m = np.maximum(m, covs[p.src])
@@ -788,16 +958,32 @@ def threshold(xs, ys, o: ToneOptions, angle: float, seed: int) -> np.ndarray:
         Y = np.asarray(ys, np.float64)[:, None] / cell
         u = X * c + Y * s
         v = -X * s + Y * c
-        u = (u - np.floor(u) - 0.5).astype(np.float32)
-        v = (v - np.floor(v) - 0.5).astype(np.float32)
-        T = np.interp(_spot(o.style, u, v), _spot_quantiles(o.style),
-                      np.linspace(0, 1, 1025)).astype(np.float32)
+        if o.style == "modulation":   # lines that wave; their width carries the tone
+            vw = v + 0.22 * np.sin(2 * np.pi * u * 0.5)
+            T = (np.abs(vw - np.floor(vw) - 0.5) * 2).astype(np.float32)
+        else:
+            u = (u - np.floor(u) - 0.5).astype(np.float32)
+            v = (v - np.floor(v) - 0.5).astype(np.float32)
+            T = np.interp(_spot(o.style, u, v), _spot_quantiles(o.style),
+                          np.linspace(0, 1, 1025)).astype(np.float32)
         if o.roughness > 0:
             r = max(cell * 0.3, 1.5)
             T = T + o.roughness * 0.35 * (noise.value_noise(xs, ys, r, r, seed + 71) - 0.5)
         return np.clip(T, 0.0005, 0.9995)
 
     g = max(o.grain_mm * ppm, 0.5)
+    if o.style in ("bayer4", "bayer8"):
+        m = hybrid.bayer_matrix(4 if o.style == "bayer4" else 8)
+        n = m.shape[0]
+        ix = np.floor(np.asarray(xs) / g).astype(np.int64) % n
+        iy = np.floor(np.asarray(ys) / g).astype(np.int64) % n
+        return m[iy[:, None], ix[None, :]]
+    if o.style == "random":
+        ix = np.floor(np.asarray(xs) / g).astype(np.int64)
+        iy = np.floor(np.asarray(ys) / g).astype(np.int64)
+        return np.clip(noise.hash2(ix[None, :], iy[:, None], seed), 0.0005, 0.9995)
+    if o.style in DIFFUSION_STYLES:
+        return noise.blue_noise(xs, ys, g, seed)   # only used if called directly; plates use the diffusion grid
     if o.style == "fm":
         return noise.blue_noise(xs, ys, g, seed)
     if o.style == "mezzotint":
@@ -872,7 +1058,17 @@ def render_plates(prep: Prepared, o: ToneOptions, x0: float, y0: float, gw: int,
     ys = y0 + (np.arange(gh) + 0.5) * step
     samples: dict[tuple, list[np.ndarray]] = {}
     result = []
+    gridded = o.mode == "index" or o.style in DIFFUSION_STYLES
+    index_grids = _index_grids(prep, o, fit, plates) if o.mode == "index" else None
     for i, p in enumerate(plates):
+        if gridded:
+            if not p.on:
+                result.append(np.zeros((gh, gw), bool))
+                continue
+            G, cell = (index_grids[p.src if not p.underbase else "base"] if index_grids is not None
+                       else _diffusion_grid(prep, o, fit, plates, p))
+            result.append(_lookup(G, cell, xs - p.shift[0], ys - p.shift[1]))
+            continue
         if p.shift not in samples:
             rgb, a = _sample(prep, x0, y0, gw, gh, step, out_w, *p.shift)
             samples[p.shift] = [_shape_dots(c, o) for c in _coverages(rgb, a, prep, o, fit)]
@@ -897,6 +1093,84 @@ def render_plates(prep: Prepared, o: ToneOptions, x0: float, y0: float, gw: int,
             if inks:  # toner specks go on the darkest / black plate (printed last)
                 result[inks[-1]] |= add & alpha_any & ~remove
     return result
+
+
+_GRID_CACHE: "OrderedDict[tuple, object]" = __import__("collections").OrderedDict()
+
+
+def _opts_key(o: ToneOptions) -> str:
+    """Everything that changes a dither grid (not textures, marks, seeds or shifts)."""
+    import json
+    from dataclasses import asdict
+    d = asdict(o)
+    for k in ("textures", "registration_marks", "misregister_mm", "seed", "knockout"):
+        d.pop(k, None)
+    return json.dumps(d, sort_keys=True, default=str)
+
+
+def _cached_grid(key, make):
+    if key in _GRID_CACHE:
+        _GRID_CACHE.move_to_end(key)
+        return _GRID_CACHE[key]
+    val = make()
+    _GRID_CACHE[key] = val
+    while len(_GRID_CACHE) > 24:
+        _GRID_CACHE.popitem(last=False)
+    return val
+
+
+def _grid_geometry(prep: Prepared, o: ToneOptions):
+    out_w, out_h = prep.out_size(o)
+    cell = max(1.0, o.grain_mm * o.dpi / 25.4)
+    return out_w, cell, int(math.ceil(out_w / cell)), int(math.ceil(out_h / cell))
+
+
+def _diffusion_grid(prep: Prepared, o: ToneOptions, fit, plates: list, p: Plate):
+    """Error diffusion runs once over the whole print on a grid of grain-sized cells, so every view of
+    the print (preview, loupe, export strips) reads the same dots."""
+    key = ("diff", prep.token, _opts_key(o), p.src, p.underbase, p.choke_mm,
+           tuple((q.src, q.on, q.underbase) for q in plates))
+
+    def make():
+        out_w, cell, GW, GH = _grid_geometry(prep, o)
+        rgb, a = _sample(prep, 0, 0, GW, GH, cell, out_w)
+        covs = [_shape_dots(c, o) for c in _coverages(rgb, a, prep, o, fit)]
+        cov = _underbase(covs, plates, o) if p.underbase else _choke(covs[p.src], p.choke_mm, o)
+        return hybrid.error_diffuse(cov, o.style).astype(bool), cell
+    return _cached_grid(key, make)
+
+
+def _index_grids(prep: Prepared, o: ToneOptions, fit, plates: list) -> dict:
+    """Index colour: every grain cell gets exactly one ink (or the shirt) by colour error diffusion."""
+    key = ("index", prep.token, _opts_key(o))
+
+    def make():
+        out_w, cell, GW, GH = _grid_geometry(prep, o)
+        rgb, a = _sample(prep, 0, 0, GW, GH, cell, out_w)
+        t = _tone(rgb, o)
+        shirt = np.array(_hex(o.garment), np.float32) / 255
+        cols = [np.array(c, np.float32) / 255 if c is not None else shirt for c in fit.spot] + [shirt]
+        style = o.style if o.style in DIFFUSION_STYLES else "fs"
+        idx = hybrid.error_diffuse_palette(t, a, np.array(cols), style)
+        grids = {i: (idx == i) for i, c in enumerate(fit.spot) if c is not None}
+        base = np.zeros_like(idx, dtype=bool)
+        for g in grids.values():
+            base |= g
+        r = int(round(o.choke_mm * o.dpi / 25.4 / cell))
+        if r > 0 and base.any():
+            base = cv2.erode(base.astype(np.uint8), np.ones((2 * r + 1, 2 * r + 1), np.uint8)).astype(bool)
+        grids["base"] = base
+        return {k: (v, cell) for k, v in grids.items()}
+    return _cached_grid(key, make)
+
+
+def _lookup(G: np.ndarray, cell: float, xs, ys) -> np.ndarray:
+    ix = np.floor(np.asarray(xs) / cell).astype(np.int64)
+    iy = np.floor(np.asarray(ys) / cell).astype(np.int64)
+    okx = (ix >= 0) & (ix < G.shape[1])
+    oky = (iy >= 0) & (iy < G.shape[0])
+    out = G[np.clip(iy, 0, G.shape[0] - 1)[:, None], np.clip(ix, 0, G.shape[1] - 1)[None, :]]
+    return out & oky[:, None] & okx[None, :]
 
 
 def composite(bitmaps: list[np.ndarray], plates: list[Plate], blend: str, o: ToneOptions,
@@ -1000,7 +1274,12 @@ def report(prep: Prepared, o: ToneOptions, plates: list[Plate], bitmaps: list[np
         "target": tgt["label"],
         "binary_alpha": True,
     }
-    if o.style in AM_STYLES:
+    solid = o.mode == "threshold" and o.threshold_soft <= 0
+    if o.mode == "threshold":
+        info["thresholds"] = [round(c, 3) for c in resolve_fit(prep, o).cuts]
+    if solid:
+        info["solid"] = True   # solid tones: no dots to hold, nothing to check about screens
+    elif o.style in AM_STYLES and o.mode != "index":
         cell = o.dpi / o.lpi
         levels = int(cell * cell) + 1
         info["cell_px"] = round(cell, 2)

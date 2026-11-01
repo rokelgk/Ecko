@@ -131,3 +131,52 @@ test("bad options are rejected", () => {
   }
   assert.throws(() => E.prepare(null, 0, 0, E.parseOptions({})), /picture or some text/);
 });
+
+// ---------------------------------------------------------------- hybrid: threshold layers, dithers, index colour
+
+function greys() {   // 30 / 128 / 225 thirds
+  const w = 360, h = 120, rgba = new Uint8Array(w * h * 4);
+  for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) { const v = x < 120 ? 30 : x < 240 ? 128 : 225, k = (y * w + x) * 4; rgba.set([v, v, v, 255], k); }
+  return { rgba, w, h };
+}
+const mean = (a, x0, x1, W) => { let on = 0, n = 0; for (let k = 0; k < a.length; k++) { const x = k % W; if (x >= x0 && x < x1) { on += a[k]; n++; } } return on / n; };
+
+test("threshold layers: auto cuts and knockout", () => {
+  const { rgba, w, h } = greys();
+  const o = E.parseOptions({ mode: "threshold", width_in: 3, remove_background: false, sharpen: 0 });
+  const p = E.prepare(rgba, w, h, o), cuts = E.thresholdCuts(p, o);
+  assert.ok(cuts.length === 2 && cuts[0] > 30 / 255 && cuts[0] < 128 / 255 && cuts[1] > 128 / 255 && cuts[1] < 225 / 255, JSON.stringify(cuts));
+  const r = E.renderFull(p, o, null, true), W = r.width, t = W / 3;
+  assert.deepStrictEqual(r.plates.map((q) => q.name), ["Tone 2", "Tone 1"]);
+  const [tone2, tone1] = r.seps;
+  assert.ok(mean(tone1, 0, t - 5, W) > 0.99 && mean(tone1, t + 5, W, W) < 0.01);
+  assert.ok(mean(tone2, t + 5, 2 * t - 5, W) > 0.99 && mean(tone2, 0, t - 5, W) < 0.01);
+  const st = E.renderFull(p, E.parseOptions({ ...o, threshold_stack: true }), null, true);
+  assert.ok(mean(st.seps[0], 0, t - 5, W) > 0.99);
+});
+
+for (const style of ["fs", "atkinson", "jarvis", "stucki", "burkes", "sierra", "sierra_lite", "bayer4", "bayer8", "random", "modulation"]) {
+  test(`${style} holds tone and lines up with the export`, () => {
+    const w = 200, h = 150, rgba = new Uint8Array(w * h * 4).fill(180);
+    for (let k = 3; k < rgba.length; k += 4) rgba[k] = 255;
+    const o = E.parseOptions({ style, width_in: 2, dpi: 200, remove_background: false, sharpen: 0, min_dot: 0, max_dot: 1,
+      roughness: 0, grain_mm: 0.3, lpi: 30 });
+    const p = E.prepare(rgba, w, h, o), full = E.renderFull(p, o, null, true);
+    let on = 0;
+    for (const v of full.seps[0]) on += v;
+    const cov = on / full.seps[0].length, tol = style === "atkinson" ? 0.12 : 0.05;
+    assert.ok(Math.abs(cov - (1 - 180 / 255)) < tol, `${style} ${cov}`);
+    const crop = E.renderPreview(p, o, 900, [37, 21, 120, 90]);
+    for (let y = 0; y < 90; y++) for (let x = 0; x < 480; x++) assert.strictEqual(crop.rgba[y * 480 + x], full.rgba[((y + 21) * full.width + 37) * 4 + x]);
+  });
+}
+
+test("index colour: each pixel one ink; fixed palettes", () => {
+  const w = 240, h = 120, rgba = new Uint8Array(w * h * 4);
+  for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) rgba.set([x, 255 - x, (x * 3) % 255, 255], (y * w + x) * 4);
+  const o = E.parseOptions({ mode: "index", spot_colors: 4, width_in: 2, dpi: 150, remove_background: false });
+  const p = E.prepare(rgba, w, h, o), r = E.renderFull(p, o, null, true);
+  for (let k = 0; k < r.seps[0].length; k++) assert.ok(r.seps.reduce((s, q) => s + q[k], 0) <= 1);
+  const pal = E.resolveFit(p, E.parseOptions({ ...o, palette: "gameboy" })).palette.map(E.toHex);
+  for (const c of pal) assert.ok(E.PALETTES.gameboy.colors.includes(c), c);
+});

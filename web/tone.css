@@ -125,6 +125,8 @@ body.panelsHidden .psSide { display: none; }
 .psSide .presets button small { display: none; }
 .psSide .primary { width: 100%; padding: 9px 12px; font-size: 14px; margin-top: 4px; }
 .ghost.block { width: 100%; margin-top: 6px; text-align: center; }
+.cutsBox label { margin-bottom: 2px; }
+.cutsBox .hint { margin: 0 0 4px; }
 .addTexture { border-style: dashed; padding: 9px; margin-bottom: 6px; color: var(--accent); font-weight: 600; }
 #simpleProcess { margin: 0 0 4px; }
 .inkPanel .tname { background: none; border: 0; padding: 0; text-align: left; color: inherit; cursor: pointer; font: inherit; }
