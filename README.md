@@ -2,13 +2,18 @@
 
 ## Try it
 
-**[▶ Open Ecko in your browser (GitHub Codespaces)](https://codespaces.new/rokelgk/ecko?quickstart=1)**:
-click **Create codespace**, wait 2–3 minutes, and the app opens in a new tab. There's nothing to
-install, and it's free within GitHub's monthly allowance.
+**Halftone tool, nothing to install:** download
+[`dist/ecko-tone.html`](dist/ecko-tone.html) and double-click it. It's the whole halftone tool
+in one file: it runs in your browser, works offline, and your pictures never leave your
+computer. Everything works, including fit to shirt, curved text, mockups, batch ZIPs, and PNG
+and separation downloads. Use a current Chrome, Edge, Firefox or Safari.
 
-On your own computer instead: install [Python](https://www.python.org/downloads/), then
-double-click **`start-windows.bat`** (Windows) or **`start-mac.command`** (Mac). The first
-run takes a few minutes to install everything, then the halftone tool opens in your browser.
+**Photoshop:** the panel in [`photoshop-plugin/`](photoshop-plugin/README.md) also runs on its
+own inside Photoshop, with no server needed.
+
+**The full app (with embroidery):** install [Python](https://www.python.org/downloads/), then
+double-click **`start-windows.bat`** (Windows) or **`start-mac.command`** (Mac). Or open it in
+the cloud with [GitHub Codespaces](https://codespaces.new/rokelgk/ecko?quickstart=1).
 
 Upload a picture, pick your machine and fabric, click **Digitize**, and
 download a file your machine can sew.
@@ -108,7 +113,8 @@ Saved designs go in SQLite at `$ECKO_DATA_DIR/ecko.sqlite3` (default
 ## Test
 
 ```bash
-.venv/bin/python -m pytest
+.venv/bin/python -m pytest          # also runs the JS engine tests when Node is installed
+python tools/build_standalone.py    # after changing Tone: rebuild dist/ecko-tone.html
 ```
 
 ## How it works
@@ -141,6 +147,8 @@ picture ─► colors (k-means in Lab, anti-alias clean-up, background removal)
 | `ecko/tone/api.py`, `export.py`, `presets.py` | Tone API, PNG/ZIP export, starting looks |
 | `ecko/tone/mockup.py` | Flat T-shirt mockups, drawn to scale |
 | `ecko/arctext.py` | Text set along an arc (shared by embroidery and Tone) |
+| `web/standalone/` | No-server Tone: JS engine port (`engine.src.js`), browser host, fetch shim |
+| `tools/build_standalone.py` | Builds `dist/ecko-tone.html` and the Photoshop panel's engine |
 | `ecko/app.py` | FastAPI backend |
 | `web/` | Front end (plain HTML/CSS/JS, no build step) |
 

@@ -1,9 +1,14 @@
-/* Ecko Tone panel for Photoshop (UXP). Sends the selected layer's pixels to an Ecko server
-   and places the halftoned result on a new layer at the same position. */
+/* Ecko Tone panel for Photoshop (UXP). Halftones the selected layer with the built-in engine
+   (tone-engine.js, the same one the stand-alone web page uses) and puts the result on a new
+   layer at the same position. No server and no network access. */
 const { app, core, imaging } = require("photoshop");
+const E = require("./tone-engine.js");
 
 const $ = (id) => document.getElementById(id);
-let catalog = null;
+const cat = E.CATALOG.api;
+const fill = (id, items, label = (x) => x.name, value = (x) => x.id) => {
+  $(id).innerHTML = items.map((x) => `<option value="${value(x)}">${label(x)}</option>`).join("");
+};
 
 function status(msg, isErr) {
   $("status").textContent = msg;
@@ -15,41 +20,30 @@ function labels() {
   $("angleOut").textContent = `${$("angle").value}°`;
 }
 
-async function loadCatalog() {
-  try {
-    const r = await fetch(`${$("server").value.replace(/\/$/, "")}/api/tone/catalog`);
-    catalog = await r.json();
-    $("preset").innerHTML = catalog.presets.map((p) => `<option value="${p.id}">${p.name}</option>`).join("");
-    $("style").innerHTML = catalog.styles.map((s) => `<option value="${s.id}">${s.name}</option>`).join("");
-    $("target").innerHTML = catalog.targets.map((t) => `<option value="${t.id}">${t.name}</option>`).join("");
-    applyPreset();
-    status("");
-  } catch (e) {
-    status(`Can't reach the Ecko server: ${e.message}`, true);
-  }
-}
-
 function applyPreset() {
-  const p = catalog.presets.find((x) => x.id === $("preset").value);
+  const p = cat.presets.find((x) => x.id === $("preset").value);
   if (!p) return;
-  const o = { ...catalog.defaults, ...p.options };
+  const o = { ...cat.defaults, ...p.options };
   $("style").value = o.style;
   $("lpi").value = o.lpi;
   $("angle").value = o.angle;
   $("target").value = o.target;
+  if (p.options.garment) $("garment").value = p.options.garment;
   labels();
 }
 
-function options(doc) {
-  const p = catalog.presets.find((x) => x.id === $("preset").value);
-  return {
+function options(doc, widthPx) {
+  const p = cat.presets.find((x) => x.id === $("preset").value);
+  const dpi = Math.round(Math.min(1200, Math.max(72, doc.resolution)));
+  const o = {
     ...(p ? p.options : {}),
-    style: $("style").value,
-    lpi: parseFloat($("lpi").value),
-    angle: parseFloat($("angle").value),
-    target: $("target").value,
-    dpi: Math.round(Math.min(1200, Math.max(72, doc.resolution))),
+    style: $("style").value, lpi: parseFloat($("lpi").value), angle: parseFloat($("angle").value),
+    target: $("target").value, garment: $("garment").value, shirt_fit: $("fit").value, dpi,
+    width_in: Math.max(0.5, widthPx / dpi), text: [],
   };
+  // Image textures need a file picker; the web page has them. Procedural textures work here.
+  o.textures = (o.textures || []).filter((t) => t.type !== "image");
+  return E.parseOptions(o);
 }
 
 async function run() {
@@ -57,7 +51,7 @@ async function run() {
   if (!doc) return status("Open a document first.", true);
   const layer = doc.activeLayers[0];
   if (!layer) return status("Select a layer first.", true);
-  status("Reading layer…");
+  status("Halftoning…");
   try {
     await core.executeAsModal(async () => {
       const got = await imaging.getPixels({ documentID: doc.id, layerID: layer.id, componentSize: 8, colorSpace: "RGB" });
@@ -73,37 +67,37 @@ async function run() {
           rgba[j] = src[i]; rgba[j + 1] = src[i + 1]; rgba[j + 2] = src[i + 2]; rgba[j + 3] = 255;
         }
       }
+      let opaque = true;
+      for (let k = 3; k < rgba.length; k += 4) if (rgba[k] !== 255) { opaque = false; break; }
 
-      status("Halftoning…");
-      const q = new URLSearchParams({ width, height, options: JSON.stringify(options(doc)) });
-      const r = await fetch(`${$("server").value.replace(/\/$/, "")}/api/tone/raw?${q}`, {
-        method: "POST", headers: { "Content-Type": "application/octet-stream" }, body: rgba.buffer,
-      });
-      if (!r.ok) {
-        let msg = `Server error ${r.status}`;
-        try { msg = (await r.json()).detail || msg; } catch (e) { /* not JSON */ }
-        throw new Error(msg);
-      }
-      const out = new Uint8Array(await r.arrayBuffer());
+      let o = options(doc, width);
+      o.remove_background = o.remove_background && opaque;   // a layer with transparency is already cut out
+      const prep = E.prepare(rgba, width, height, o, null);
+      o = E.parseOptions({ ...o, width_in: Math.max(0.5, prep.crop[2] / o.dpi) });   // 1:1 with the layer's pixels
+      const out = E.renderFull(prep, o);
 
       const newLayer = await doc.createLayer({ name: `Ecko Tone (${$("preset").selectedOptions[0].text})` });
-      const imageData = await imaging.createImageDataFromBuffer(out, {
-        width, height, components: 4, chunky: true, colorSpace: "RGB", colorProfile: "sRGB IEC61966-2.1",
+      const imageData = await imaging.createImageDataFromBuffer(new Uint8Array(out.rgba.buffer), {
+        width: out.width, height: out.height, components: 4, chunky: true, colorSpace: "RGB", colorProfile: "sRGB IEC61966-2.1",
       });
       await imaging.putPixels({ documentID: doc.id, layerID: newLayer.id, imageData,
-        targetBounds: { left: bounds.left, top: bounds.top } });
+        targetBounds: { left: bounds.left + prep.crop[0], top: bounds.top + prep.crop[1] } });
       imageData.dispose();
+      const fit = E.resolveFit(prep, o);
+      status(["Done. The result is on a new layer.", ...fit.notes].join(" "));
     }, { commandName: "Ecko Tone halftone" });
-    status("Done. The result is on a new layer.");
   } catch (e) {
     status(e.message || String(e), true);
   }
 }
 
+fill("preset", cat.presets);
+fill("style", cat.styles);
+fill("target", cat.targets);
+fill("fit", cat.shirt_fits);
+fill("garment", cat.garments, (g) => g.name, (g) => g.hex);
 $("preset").addEventListener("change", applyPreset);
 $("lpi").addEventListener("input", labels);
 $("angle").addEventListener("input", labels);
-$("server").addEventListener("change", loadCatalog);
 $("run").addEventListener("click", run);
-labels();
-loadCatalog();
+applyPreset();
