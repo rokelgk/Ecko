@@ -92,6 +92,19 @@ def build_page(engine_js: str) -> str:
     return html
 
 
+def build_plugin_zip() -> None:
+    """dist/ecko-tone-photoshop-plugin.zip: the Photoshop panel folder, ready for UXP Developer Tool."""
+    import zipfile
+    src = ROOT / "photoshop-plugin"
+    out = ROOT / "dist" / "ecko-tone-photoshop-plugin.zip"
+    with zipfile.ZipFile(out, "w", zipfile.ZIP_DEFLATED) as z:
+        for name in ("manifest.json", "index.html", "index.js", "tone-engine.js", "README.md"):
+            info = zipfile.ZipInfo(f"Ecko Tone/{name}", date_time=(2026, 1, 1, 0, 0, 0))
+            info.compress_type = zipfile.ZIP_DEFLATED
+            z.writestr(info, (src / name).read_bytes())
+    print(f"dist/ecko-tone-photoshop-plugin.zip  {out.stat().st_size / 1e3:.0f} KB")
+
+
 def main() -> None:
     engine_js = build_engine()
     (STANDALONE / "tone-engine.js").write_text(engine_js)
@@ -101,6 +114,7 @@ def main() -> None:
         page = build_page(engine_js)
         (ROOT / "dist" / "ecko-tone.html").write_text(page)
         print(f"dist/ecko-tone.html  {len(page) / 1e6:.2f} MB")
+        build_plugin_zip()
     print("web/standalone/tone-engine.js, photoshop-plugin/tone-engine.js")
 
 

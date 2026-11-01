@@ -209,6 +209,16 @@
     return (fbmQuantileCache[octaves] = q);
   }
 
+  const fbmLutCache = {};
+  function fbmLut(octaves) {
+    if (!fbmLutCache[octaves]) {
+      const q = fbmQuantiles(octaves), M = 8192, lut = new Float32Array(M + 1);
+      for (let i = 0; i <= M; i++) lut[i] = interpSorted(i / M, q);
+      fbmLutCache[octaves] = lut;
+    }
+    return fbmLutCache[octaves];
+  }
+
   function interpSorted(v, q) {   // np.interp(v, q, linspace(0, 1, len(q)))
     const n = q.length;
     if (v <= q[0]) return 0;
@@ -230,8 +240,11 @@
       for (let k = 0; k < out.length; k++) out[k] += amp * v[k];
       tot += amp; amp *= 0.5; used++;
     }
-    const q = fbmQuantiles(used);
-    for (let k = 0; k < out.length; k++) out[k] = interpSorted(out[k] / tot, q);
+    const lut = fbmLut(used), M = lut.length - 1;   // precomputed uniformising curve: O(1) per pixel
+    for (let k = 0; k < out.length; k++) {
+      const pos = Math.max(0, Math.min(1, out[k] / tot)) * M, i = Math.floor(pos);
+      out[k] = i >= M ? lut[M] : lut[i] + (lut[i + 1] - lut[i]) * (pos - i);
+    }
     return out;
   }
 
@@ -352,11 +365,20 @@
     if (dw > sw || dh > sh) return resizeBilinear(src, sw, sh, dw, dh, C);
     const tmp = new Float32Array(dw * sh * C), out = new Float32Array(dw * dh * C);
     const sx = sw / dw, sy = sh / dh;
+    const taps = [];   // per output column: [source column, weight] pairs
     for (let x = 0; x < dw; x++) {
-      const a = x * sx, b = a + sx, i0 = Math.floor(a), i1 = Math.min(sw, Math.ceil(b));
-      for (let i = i0; i < i1; i++) {
-        const w = (Math.min(b, i + 1) - Math.max(a, i)) / sx;
-        for (let y = 0; y < sh; y++) for (let c = 0; c < C; c++) tmp[(y * dw + x) * C + c] += src[(y * sw + i) * C + c] * w;
+      const a = x * sx, b = a + sx, i0 = Math.floor(a), i1 = Math.min(sw, Math.ceil(b)), t = [];
+      for (let i = i0; i < i1; i++) t.push(i, (Math.min(b, i + 1) - Math.max(a, i)) / sx);
+      taps.push(t);
+    }
+    for (let y = 0; y < sh; y++) {   // row by row: memory is read in order
+      const sb = y * sw * C, tb = y * dw * C;
+      for (let x = 0; x < dw; x++) {
+        const t = taps[x], o = tb + x * C;
+        for (let j = 0; j < t.length; j += 2) {
+          const q = sb + t[j] * C, w = t[j + 1];
+          for (let c = 0; c < C; c++) tmp[o + c] += src[q + c] * w;
+        }
       }
     }
     for (let y = 0; y < dh; y++) {
@@ -393,24 +415,42 @@
     return s >= 1 ? [w, h] : [Math.max(1, Math.round(w * s)), Math.max(1, Math.round(h * s))];
   }
 
-  function gaussianBlur3(rgb, w, h, sigma) {
-    const r = Math.ceil(sigma * 3), k = new Float32Array(2 * r + 1);
+  function gaussianBlur3(rgb, w, h, sigma) {   // separable Gaussian on interleaved RGB, mirrored edges
+    const r = Math.ceil(sigma * 3), n = 2 * r + 1, k = new Float32Array(n);
     let sum = 0;
     for (let i = -r; i <= r; i++) { k[i + r] = Math.exp(-(i * i) / (2 * sigma * sigma)); sum += k[i + r]; }
-    for (let i = 0; i < k.length; i++) k[i] /= sum;
-    const refl = (i, n) => { if (n === 1) return 0; while (i < 0 || i >= n) i = i < 0 ? -i : 2 * n - 2 - i; return i; };
+    for (let i = 0; i < n; i++) k[i] /= sum;
+    const refl = (i, len) => { if (len === 1) return 0; while (i < 0 || i >= len) i = i < 0 ? -i : 2 * len - 2 - i; return i; };
+    const cols = new Int32Array(w + 2 * r), rows = new Int32Array(h + 2 * r);
+    for (let i = -r; i < w + r; i++) cols[i + r] = refl(i, w) * 3;
+    for (let i = -r; i < h + r; i++) rows[i + r] = refl(i, h) * w * 3;
     const tmp = new Float32Array(rgb.length), out = new Float32Array(rgb.length);
-    for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) for (let c = 0; c < 3; c++) {
-      let s = 0;
-      for (let i = -r; i <= r; i++) s += rgb[(y * w + refl(x + i, w)) * 3 + c] * k[i + r];
-      tmp[(y * w + x) * 3 + c] = s;
+    for (let y = 0; y < h; y++) {
+      const row = y * w * 3;
+      for (let x = 0; x < w; x++) {
+        let a = 0, b = 0, c = 0;
+        for (let t = 0; t < n; t++) { const q = row + cols[x + t], kv = k[t]; a += rgb[q] * kv; b += rgb[q + 1] * kv; c += rgb[q + 2] * kv; }
+        const o = row + x * 3;
+        tmp[o] = a; tmp[o + 1] = b; tmp[o + 2] = c;
+      }
     }
-    for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) for (let c = 0; c < 3; c++) {
-      let s = 0;
-      for (let i = -r; i <= r; i++) s += tmp[(refl(y + i, h) * w + x) * 3 + c] * k[i + r];
-      out[(y * w + x) * 3 + c] = s;
+    for (let y = 0; y < h; y++) {
+      const o0 = y * w * 3;
+      for (let x3 = 0; x3 < w * 3; x3++) {
+        let a = 0;
+        for (let t = 0; t < n; t++) a += tmp[rows[y + t] + x3] * k[t];
+        out[o0 + x3] = a;
+      }
     }
     return out;
+  }
+
+  /** Wide blurs are done on a smaller copy (same look, many times faster on big layers). */
+  function blurFast(rgb, w, h, sigma) {
+    if (sigma <= 1.5) return gaussianBlur3(rgb, w, h, sigma);
+    const f = sigma / 1.2, sw = Math.max(1, Math.round(w / f)), sh = Math.max(1, Math.round(h / f));
+    const small = gaussianBlur3(resize(rgb, w, h, sw, sh, 3), sw, sh, 1.2);
+    return resizeBilinear(small, sw, sh, w, h, 3);
   }
 
   function mulberry32(a) {
@@ -599,10 +639,10 @@
         let mn = w, mx = -1;
         for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) if (alpha[y * w + x] > 0.02) { if (x < mn) mn = x; if (x > mx) mx = x; }
         const artW = mx >= mn ? mx - mn + 1 : w;
-        rgb = gaussianBlur3(rgb, w, h, Math.max(0.3, o.smooth_mm * artW / (o.width_in * 25.4)));   // mm on the print -> source px
+        rgb = blurFast(rgb, w, h, Math.max(0.3, o.smooth_mm * artW / (o.width_in * 25.4)));   // mm on the print -> source px
       }
       if (o.sharpen > 0) {
-        const blur = gaussianBlur3(rgb, w, h, Math.max(0.8, Math.max(w, h) / 1500));
+        const blur = blurFast(rgb, w, h, Math.max(0.8, Math.max(w, h) / 1500));
         for (let k = 0; k < rgb.length; k++) rgb[k] = Math.max(0, Math.min(1, rgb[k] + o.sharpen * (rgb[k] - blur[k])));
       }
       art = cropTo(rgb, alpha, w, h);
@@ -632,8 +672,11 @@
       spotLab: null, palettes: {}, lumCounts: new Float64Array(256), lumRgb: new Float64Array(256 * 3),
       token: Math.random().toString(36).slice(2) };
 
-    const idx = [];
-    for (let p = 0; p < img.w * img.h; p++) if (img.alpha[p] > 0.5) idx.push(p);
+    // Sample up to 40,000 art pixels without listing them all (big layers have millions).
+    const total = img.w * img.h, idx = [];
+    const step = Math.max(1, Math.floor(total / 160000));
+    for (let p = 0; p < total; p += step) if (img.alpha[p] > 0.5) idx.push(p);
+    if (!idx.length) for (let p = 0; p < total && idx.length < 40000; p++) if (img.alpha[p] > 0.5) idx.push(p);
     if (!idx.length) idx.push(0);
     const rnd = mulberry32(0), n = Math.min(idx.length, 40000), labs = new Float32Array(n * 3);
     for (let k = 0; k < n; k++) {
