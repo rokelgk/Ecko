@@ -40,6 +40,9 @@ Pick the job type, the shirt color and the number of screens, then press
   and fine-grain knockouts, or your own texture image; amount, size,
   softness, strength, invert, new pattern, and apply to all screens, the
   underbase only or the top colors only.
+- **Aztec carved theme:** stepped-fret bands, sun-stone glyph, carved card
+  corners and step-pyramid dividers in obsidian, gold, terracotta and jade
+  (pure CSS + inline SVG). The ◈ Theme button switches to the plain look.
 - **Works on small screens:** every pane scrolls with an always-visible
   scrollbar, so nothing is cut off on a MacBook Air, older 13" laptops,
   phones or a short Photoshop panel. Drag the divider to resize the

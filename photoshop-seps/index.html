@@ -11,11 +11,13 @@
 
     <!-- Left / top: the preview, always visible -->
     <div id="previewPane" class="pane-preview">
+      <div class="band"></div>
       <div class="pv-head">
         <div class="brand">Ecko <b>Seps</b></div>
         <div class="pv-tools">
           <span id="matchBadge" class="badge hidden"></span>
           <button id="cleanOpen" class="btn" title="Remove unwanted color from just one area">🧹 Clean up</button>
+          <button id="themeBtn" class="btn" title="Switch between the Aztec carved look and the plain look">◈ Theme</button>
           <button id="uiSmaller" class="btn" title="Smaller interface (fits small screens)">A−</button>
           <button id="uiBigger" class="btn" title="Larger interface">A+</button>
           <button id="togglePreview" class="btn" title="Hide the preview to give the options all the room">Hide preview</button>
@@ -51,12 +53,14 @@
       <div id="viewHint" class="muted small hint"></div>
       <div id="delta" class="delta hidden"><span id="deltaText"></span><button id="undo" class="btn small">Undo</button></div>
       <div id="status" class="status muted small"></div>
+      <div class="band pyr"></div>
     </div>
 
     <div id="splitter" class="splitter" title="Drag to resize. Double-click to reset."></div>
 
     <!-- Right / bottom: every option -->
     <div id="optionsPane" class="pane-options">
+      <div class="band"></div>
       <div id="docInfo" class="muted small docinfo">No artwork yet</div>
 
       <section class="card" id="workflow">

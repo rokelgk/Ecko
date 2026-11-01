@@ -1148,6 +1148,7 @@
     else app.style.setProperty('--pv-h', `${Math.round(h < 620 ? h * 0.38 : h * 0.45)}px`);
     document.body.classList.toggle('ui-compact', ui.size === 'compact' || (!ui.size && h < 700));
     document.body.classList.toggle('ui-large', ui.size === 'large');
+    document.body.classList.toggle('theme-aztec', ui.theme !== 'plain');
     $('togglePreview').textContent = ui.previewHidden ? 'Show preview' : 'Hide preview';
   }
 
@@ -1173,6 +1174,7 @@
 
   $('uiSmaller').addEventListener('click', () => { ui.size = ui.size === 'large' ? 'normal' : 'compact'; saveUi(); layout(); });
   $('uiBigger').addEventListener('click', () => { ui.size = ui.size === 'compact' || !ui.size ? 'normal' : 'large'; saveUi(); layout(); });
+  $('themeBtn').addEventListener('click', () => { ui.theme = ui.theme === 'plain' ? 'aztec' : 'plain'; saveUi(); layout(); });
   $('togglePreview').addEventListener('click', () => { ui.previewHidden = !ui.previewHidden; saveUi(); layout(); });
   if ($('toTop')) $('toTop').addEventListener('click', () => { $('optionsPane').scrollTop = 0; });
   setupSplitter();
