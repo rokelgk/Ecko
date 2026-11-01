@@ -17,6 +17,13 @@ Pick the job type, the shirt color and the number of screens, then press
   you like.
 - **Pre-registration:** one-tap registration marks, crop marks, center
   marks, ink names and LPI/mesh labels on plates, films and the document.
+- **Tonal underbase:** the underbase follows the art's own light and color
+  (like a fuller highlight white), keeping the shading instead of going
+  solid under every ink. "Solid under every color" is still an option.
+- **Background & shirt:** one-tap background removal (auto-detected or
+  picked on the art, with tolerance, edge-only and soft-edge controls; edges
+  are cleaned so no halo is left) and shirt-color knockout so the shirt
+  shows wherever the art matches it.
 - **Automatic high-res:** art under 300 ppi at its print size is upscaled
   and sharpened automatically, with one-tap undo. Art Levels and saturation
   are also available.

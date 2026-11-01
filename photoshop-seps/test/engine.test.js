@@ -252,3 +252,31 @@ test('registration adds marks, crop marks and ink names around every plate', () 
   const none = engine.applyRegistration(r, {}, { marks: false, crops: false, center: false, names: false });
   assert.strictEqual(none, r);
 });
+
+test('remove background makes the border color transparent and keeps the design', () => {
+  const img = fx('on-bg.png');
+  const r = engine.prepareArt(img, { printWidthIn: 2, upscale: false, removeBg: true });
+  const a = (x, y) => r.image.data[(y * r.image.width + x) * 4 + 3];
+  assert.strictEqual(r.info.background, '#ecece8');
+  assert.strictEqual(a(2, 2), 0);
+  assert.strictEqual(a(120, 75), 255, 'white box inside the design is kept');
+  const all = engine.prepareArt(img, { printWidthIn: 2, upscale: false, removeBg: true, bgEdgesOnly: false, bgTolerance: 30 });
+  assert.ok(all.image.data[(75 * img.width + 120) * 4 + 3] < 255, 'everywhere mode also takes near-white inside');
+});
+
+test('knockout lets the shirt show where the art matches it', () => {
+  const img = fx('on-bg.png');
+  const r = engine.prepareArt(img, { printWidthIn: 2, upscale: false, removeBg: true, knockout: true, garment: '#141414' });
+  const sep = engine.separate(r.image, preset('dark-sim'));
+  assert.deepStrictEqual(sep.screens.map((s) => s.role), ['underbase', 'color', 'highlight']);
+  // The black eye prints nothing.
+  const p = 100 * sep.width + 120;
+  for (const s of sep.screens) assert.strictEqual(s.plate[p], 0, s.name);
+});
+
+test('tonal underbase follows the art: lighter art, more base', () => {
+  const ramp = fx('ramp.png');
+  const r = engine.separate(ramp, preset('dark-sim', { screens: 3, choke: 0 }));
+  const ub = r.screens[0].plate, w = r.width, y = 20;
+  assert.ok(ub[y * w + 240] > ub[y * w + 120] && ub[y * w + 120] > ub[y * w + 40], `${ub[y * w + 40]} ${ub[y * w + 120]} ${ub[y * w + 240]}`);
+});

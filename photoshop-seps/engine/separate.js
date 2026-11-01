@@ -62,6 +62,7 @@ const DEFAULTS = {
   inkOpacity: 0.97,
   bareOpacity: 0.75, // ink opacity on a dark garment without underbase
   lutGrid: 33,
+  underbaseStyle: 'tonal', // 'tonal' (follows the art's light) | 'inks' (solid under every ink)
   refine: true, // accuracy pass on fresh sim/index separations
   seed: 1234,
 };
@@ -113,6 +114,16 @@ function underbaseNeed(inkLab, garmentLab) {
   const lift = (inkLab[0] - garmentLab[0]) / Math.max(1, 100 - garmentLab[0]);
   const chromaNeed = C.chroma(inkLab) / 55;
   return Math.max(0, Math.min(1, Math.max(lift * 1.15, chromaNeed * 0.9)));
+}
+
+// Tonal underbase amount for one art color: graded by lightness above the
+// shirt, with saturation adding a little so bright reds and blues still
+// pop. Unlike underbaseNeed (per ink, mostly 0 or 1) this keeps the art's
+// shading, so the plate looks like a fuller version of the highlight white.
+function tonalNeed(lab, garmentLab) {
+  const lift = Math.max(0, (lab[0] - garmentLab[0]) / Math.max(1, 100 - garmentLab[0]));
+  const chromaPart = C.chroma(lab) / 85;
+  return Math.max(0, Math.min(1, Math.max(lift * 1.05, chromaPart)));
 }
 
 function screen(name, hex, role, extra) {
@@ -553,10 +564,27 @@ function buildUnderbase(plates, colors, garment, img, o) {
     return ub;
   }
   const need = colors.map((c) => underbaseNeed(c.lab, garment.lab) * o.underbaseStrength);
+  const tonal = o.underbaseStyle !== 'inks';
+  const cache = new Map();
+  const d = img.data;
   for (let p = 0; p < n; p++) {
     let open = 1;
     for (let i = 0; i < plates.length; i++) open *= 1 - Math.min(1, (plates[i][p] / 255) * need[i]);
-    ub[p] = Math.round((1 - open) * 255);
+    let v = 1 - open; // white under every ink that needs it
+    if (tonal) {
+      // Tonal underbase: follows the art's own light and color, like a
+      // fuller version of the highlight white. Dark and dull areas get a
+      // thin base (the shirt does the work), bright and saturated areas a
+      // full one. Never more than the inks above it cover.
+      const key = (d[p * 3] << 16) | (d[p * 3 + 1] << 8) | d[p * 3 + 2];
+      let t = cache.get(key);
+      if (t === undefined) {
+        t = Math.min(1, tonalNeed(C.rgbToLab([d[p * 3], d[p * 3 + 1], d[p * 3 + 2]]), garment.lab) * o.underbaseStrength);
+        cache.set(key, t);
+      }
+      v = Math.min(v, t);
+    }
+    ub[p] = Math.round(v * 255);
   }
   return o.choke > 0 && o.mode !== 'index' ? ops.erode(ub, img.width, img.height, o.choke) : ub;
 }
@@ -1021,6 +1049,18 @@ function separate(image, options) {
 
   const preview = composite(screens, garment, img.width, img.height, o, { binary: binary || spotBinary });
   const report = buildReport(img, preview, mask, screens, garment, o, removedTotal);
+  // A fresh separation never hands back an empty screen: drop inks that
+  // ended up printing nothing and separate again with the rest.
+  if (!(o.inks && o.inks.length) && !o._pruned) {
+    // ...and inks that are practically the same color as a busier one.
+    const dead = screens.filter((x) => x.role === 'color' && !x.locked && (x.coverage < 0.0005 ||
+      screens.some((y) => y !== x && y.role !== 'underbase' && y.coverage >= x.coverage && C.deltaE2000(x.lab, y.lab) < 4)));
+    if (dead.length && screens.length - dead.length >= 1) {
+      const keep = screens.filter((x) => !dead.includes(x)).map((x) => ({ name: x.name, hex: x.hex, role: x.role, code: x.code, library: x.library, locked: x.locked }));
+      uniqueNames(keep);
+      return separate(image, Object.assign({}, options, { inks: keep, _pruned: true, screens: keep.length }));
+    }
+  }
   screens.forEach((s, i) => { s.order = i + 1; s.id = `s${i + 1}`; s.histogram = plateHistogram(s.plate); });
   return {
     width: img.width, height: img.height, dpi, mode: o.mode,

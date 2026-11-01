@@ -1226,8 +1226,134 @@ const PREP_DEFAULTS = {
   sharpenRadius: 1.0, // px at output resolution
   sharpenThreshold: 3,
   levels: null, // { black: 0..255, white: 0..255, gamma: 0.2..5 } on the art
+  removeBg: false, // drop the picture's background (made transparent = shirt shows)
+  bgTolerance: 12, // ΔE: how different from the background color still counts as background
+  bgEdgesOnly: true, // only background connected to the picture's edges
+  bgColor: null, // '#rrggbb' to force the background color, else detected
+  feather: 1, // px soft edge after removal
+  knockout: false, // let the shirt color show through where the art matches it
+  knockoutTolerance: 10,
+  garment: null, // '#rrggbb', set by the caller for knockout
   saturation: 1, // 0..2
 };
+
+const color = require('./color');
+
+// The background color: most common color along the picture's border.
+function detectBackground(img) {
+  const { width: w, height: h, channels: c, data } = img;
+  const bins = new Map();
+  const add = (x, y) => {
+    const i = (y * w + x) * c;
+    if (c === 4 && data[i + 3] < 128) return;
+    const k = ((data[i] >> 4) << 8) | ((data[i + 1] >> 4) << 4) | (data[i + 2] >> 4);
+    const b = bins.get(k) || [0, 0, 0, 0];
+    b[0] += data[i]; b[1] += data[i + 1]; b[2] += data[i + 2]; b[3]++;
+    bins.set(k, b);
+  };
+  for (let x = 0; x < w; x++) { add(x, 0); add(x, h - 1); }
+  for (let y = 0; y < h; y++) { add(0, y); add(w - 1, y); }
+  let best = null;
+  for (const b of bins.values()) if (!best || b[3] > best[3]) best = b;
+  if (!best) return null;
+  const total = 2 * (w + h);
+  return { rgb: [best[0] / best[3], best[1] / best[3], best[2] / best[3]].map(Math.round), share: best[3] / total };
+}
+
+// Distance (ΔE76) of every pixel to a color, cached per color.
+function distanceMap(img, targetLab) {
+  const { width: w, height: h, channels: c, data } = img;
+  const out = new Float32Array(w * h);
+  const cache = new Map();
+  for (let p = 0; p < w * h; p++) {
+    const key = (data[p * c] << 16) | (data[p * c + 1] << 8) | data[p * c + 2];
+    let d = cache.get(key);
+    if (d === undefined) { d = color.deltaE76(color.rgbToLab([data[p * c], data[p * c + 1], data[p * c + 2]]), targetLab); cache.set(key, d); }
+    out[p] = d;
+  }
+  return out;
+}
+
+function withAlpha(img) {
+  if (img.channels === 4) return Object.assign({}, img, { data: new Uint8ClampedArray(img.data) });
+  const n = img.width * img.height;
+  const out = new Uint8ClampedArray(n * 4);
+  for (let p = 0; p < n; p++) { out[p * 4] = img.data[p * 3]; out[p * 4 + 1] = img.data[p * 3 + 1]; out[p * 4 + 2] = img.data[p * 3 + 2]; out[p * 4 + 3] = 255; }
+  return Object.assign({}, img, { data: out, channels: 4 });
+}
+
+// Background removal: flood-fill from the edges through pixels close to the
+// background color (or every such pixel when edgesOnly is off), then a soft
+// edge so anti-aliased outlines don't leave a halo.
+function removeBackground(img, p) {
+  const bg = p.bgColor ? { rgb: color.parseHex(p.bgColor) } : detectBackground(img);
+  if (!bg) return { image: img, bg: null };
+  const out = withAlpha(img);
+  const { width: w, height: h } = out;
+  const dist = distanceMap(out, color.rgbToLab(bg.rgb));
+  const tol = p.bgTolerance;
+  const isBg = new Uint8Array(w * h);
+  if (p.bgEdgesOnly) {
+    const stack = [];
+    const push = (x, y) => { const i = y * w + x; if (!isBg[i] && dist[i] < tol) { isBg[i] = 1; stack.push(i); } };
+    for (let x = 0; x < w; x++) { push(x, 0); push(x, h - 1); }
+    for (let y = 0; y < h; y++) { push(0, y); push(w - 1, y); }
+    while (stack.length) {
+      const i = stack.pop(), x = i % w, y = (i / w) | 0;
+      if (x > 0) push(x - 1, y);
+      if (x < w - 1) push(x + 1, y);
+      if (y > 0) push(x, y - 1);
+      if (y < h - 1) push(x, y + 1);
+    }
+  } else {
+    for (let i = 0; i < w * h; i++) if (dist[i] < tol) isBg[i] = 1;
+  }
+  // Edge pixels next to the background fade by how close they are to it.
+  const r = Math.max(0, Math.round(p.feather || 0));
+  const fill = p.garment ? color.parseHex(p.garment) : null;
+  for (let y = 0; y < h; y++) {
+    for (let x = 0; x < w; x++) {
+      const i = y * w + x;
+      if (isBg[i]) {
+        out.data[i * 4 + 3] = 0;
+        // Hidden color = the shirt, so sharpening can't pull a halo of the
+        // old background into the edge.
+        if (fill) { out.data[i * 4] = fill[0]; out.data[i * 4 + 1] = fill[1]; out.data[i * 4 + 2] = fill[2]; }
+        continue;
+      }
+      if (!r) continue;
+      let near = false;
+      for (let dy = -r; dy <= r && !near; dy++) for (let dx = -r; dx <= r; dx++) {
+        const xx = x + dx, yy = y + dy;
+        if (xx >= 0 && yy >= 0 && xx < w && yy < h && isBg[yy * w + xx]) { near = true; break; }
+      }
+      if (near) {
+        const a = Math.max(0, Math.min(1, (dist[i] - tol) / (tol * 1.5)));
+        out.data[i * 4 + 3] = Math.round(out.data[i * 4 + 3] * a);
+        // Un-mix the background from edge pixels (anti-aliasing blended the
+        // two), so no light or dark halo is left around the design.
+        if (a > 0.05 && a < 1) {
+          for (let k = 0; k < 3; k++) out.data[i * 4 + k] = (out.data[i * 4 + k] - (1 - a) * bg.rgb[k]) / a;
+        }
+      }
+    }
+  }
+  return { image: out, bg: color.toHex(bg.rgb) };
+}
+
+// Knockout: where the art is (almost) the shirt color, print nothing and
+// let the shirt be that color. Saves ink and keeps the print soft.
+function knockoutGarment(img, p) {
+  if (!p.garment) return img;
+  const out = withAlpha(img);
+  const dist = distanceMap(out, color.rgbToLab(color.parseHex(p.garment)));
+  const tol = p.knockoutTolerance;
+  for (let i = 0; i < out.width * out.height; i++) {
+    const a = Math.max(0, Math.min(1, (dist[i] - tol * 0.6) / (tol * 0.8)));
+    out.data[i * 4 + 3] = Math.round(out.data[i * 4 + 3] * a);
+  }
+  return out;
+}
 
 // Art levels + saturation as one pass.
 function toneArt(img, levels, saturation) {
@@ -1264,23 +1390,41 @@ function artInfo(image, prep) {
 }
 
 // scale < 1 prepares a smaller proof with the same look (radius scaled).
+// Background removal / knockout at the art's own resolution (before any
+// upscale, so anti-aliased edges are cleaned where they really are), cached
+// so live edits to other settings don't redo it.
+let cutCache = { image: null, key: '', result: null };
+function cutArt(image, p) {
+  if (!p.removeBg && !p.knockout) return { image, bg: null };
+  const key = JSON.stringify([p.removeBg, p.bgTolerance, p.bgEdgesOnly, p.bgColor, p.feather, p.knockout, p.knockoutTolerance, p.garment]);
+  if (cutCache.image === image && cutCache.key === key) return cutCache.result;
+  let img = image, bg = null;
+  if (p.removeBg) { const r = removeBackground(img, p); img = r.image; bg = r.bg; }
+  if (p.knockout) img = knockoutGarment(img, p);
+  const result = { image: img, bg };
+  cutCache = { image, key, result };
+  return result;
+}
+
+// scale < 1 prepares a smaller proof with the same look (radius scaled).
 function prepareArt(image, prep, scale) {
   const p = Object.assign({}, PREP_DEFAULTS, prep || {});
   const info = artInfo(image, p);
   const s = scale || 1;
+  const cut = cutArt(image, p);
+  let img = cut.image;
   const w = Math.max(1, Math.round(info.outWidth * s)), h = Math.max(1, Math.round(info.outHeight * s));
-  let img = image;
-  if (w !== image.width || h !== image.height) {
-    img = w > image.width ? ops.resizeBicubic(image, w, h) : ops.resizeImage(image, w, h);
+  if (w !== img.width || h !== img.height) {
+    img = w > img.width ? ops.resizeBicubic(img, w, h) : ops.resizeImage(img, w, h);
   }
   for (let i = 0; i < (p.denoise | 0); i++) img = ops.median3(img);
   img = toneArt(img, p.levels, p.saturation);
   if (p.sharpen > 0) img = ops.unsharpMask(img, p.sharpen, Math.max(0.35, p.sharpenRadius * s), p.sharpenThreshold);
   img = Object.assign({}, img, { dpi: info.outputPpi * s });
-  return { image: img, info };
+  return { image: img, info: Object.assign({}, info, { background: cut.bg }) };
 }
 
-module.exports = { prepareArt, artInfo, toneArt, PREP_DEFAULTS };
+module.exports = { prepareArt, artInfo, toneArt, detectBackground, removeBackground, knockoutGarment, PREP_DEFAULTS };
 
   };
   defs["./presets"] = function (module, exports, require) {
@@ -1416,6 +1560,7 @@ const DEFAULTS = {
   inkOpacity: 0.97,
   bareOpacity: 0.75, // ink opacity on a dark garment without underbase
   lutGrid: 33,
+  underbaseStyle: 'tonal', // 'tonal' (follows the art's light) | 'inks' (solid under every ink)
   refine: true, // accuracy pass on fresh sim/index separations
   seed: 1234,
 };
@@ -1467,6 +1612,16 @@ function underbaseNeed(inkLab, garmentLab) {
   const lift = (inkLab[0] - garmentLab[0]) / Math.max(1, 100 - garmentLab[0]);
   const chromaNeed = C.chroma(inkLab) / 55;
   return Math.max(0, Math.min(1, Math.max(lift * 1.15, chromaNeed * 0.9)));
+}
+
+// Tonal underbase amount for one art color: graded by lightness above the
+// shirt, with saturation adding a little so bright reds and blues still
+// pop. Unlike underbaseNeed (per ink, mostly 0 or 1) this keeps the art's
+// shading, so the plate looks like a fuller version of the highlight white.
+function tonalNeed(lab, garmentLab) {
+  const lift = Math.max(0, (lab[0] - garmentLab[0]) / Math.max(1, 100 - garmentLab[0]));
+  const chromaPart = C.chroma(lab) / 85;
+  return Math.max(0, Math.min(1, Math.max(lift * 1.05, chromaPart)));
 }
 
 function screen(name, hex, role, extra) {
@@ -1907,10 +2062,27 @@ function buildUnderbase(plates, colors, garment, img, o) {
     return ub;
   }
   const need = colors.map((c) => underbaseNeed(c.lab, garment.lab) * o.underbaseStrength);
+  const tonal = o.underbaseStyle !== 'inks';
+  const cache = new Map();
+  const d = img.data;
   for (let p = 0; p < n; p++) {
     let open = 1;
     for (let i = 0; i < plates.length; i++) open *= 1 - Math.min(1, (plates[i][p] / 255) * need[i]);
-    ub[p] = Math.round((1 - open) * 255);
+    let v = 1 - open; // white under every ink that needs it
+    if (tonal) {
+      // Tonal underbase: follows the art's own light and color, like a
+      // fuller version of the highlight white. Dark and dull areas get a
+      // thin base (the shirt does the work), bright and saturated areas a
+      // full one. Never more than the inks above it cover.
+      const key = (d[p * 3] << 16) | (d[p * 3 + 1] << 8) | d[p * 3 + 2];
+      let t = cache.get(key);
+      if (t === undefined) {
+        t = Math.min(1, tonalNeed(C.rgbToLab([d[p * 3], d[p * 3 + 1], d[p * 3 + 2]]), garment.lab) * o.underbaseStrength);
+        cache.set(key, t);
+      }
+      v = Math.min(v, t);
+    }
+    ub[p] = Math.round(v * 255);
   }
   return o.choke > 0 && o.mode !== 'index' ? ops.erode(ub, img.width, img.height, o.choke) : ub;
 }
@@ -2375,6 +2547,18 @@ function separate(image, options) {
 
   const preview = composite(screens, garment, img.width, img.height, o, { binary: binary || spotBinary });
   const report = buildReport(img, preview, mask, screens, garment, o, removedTotal);
+  // A fresh separation never hands back an empty screen: drop inks that
+  // ended up printing nothing and separate again with the rest.
+  if (!(o.inks && o.inks.length) && !o._pruned) {
+    // ...and inks that are practically the same color as a busier one.
+    const dead = screens.filter((x) => x.role === 'color' && !x.locked && (x.coverage < 0.0005 ||
+      screens.some((y) => y !== x && y.role !== 'underbase' && y.coverage >= x.coverage && C.deltaE2000(x.lab, y.lab) < 4)));
+    if (dead.length && screens.length - dead.length >= 1) {
+      const keep = screens.filter((x) => !dead.includes(x)).map((x) => ({ name: x.name, hex: x.hex, role: x.role, code: x.code, library: x.library, locked: x.locked }));
+      uniqueNames(keep);
+      return separate(image, Object.assign({}, options, { inks: keep, _pruned: true, screens: keep.length }));
+    }
+  }
   screens.forEach((s, i) => { s.order = i + 1; s.id = `s${i + 1}`; s.histogram = plateHistogram(s.plate); });
   return {
     width: img.width, height: img.height, dpi, mode: o.mode,

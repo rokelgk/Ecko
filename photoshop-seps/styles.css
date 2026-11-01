@@ -166,3 +166,5 @@ footer { text-align: center; margin: 10px 0 20px 0; }
 .hist div { flex: 1; background: #8a8a8a; margin-right: 1px; min-height: 1px; }
 .scr .ic.gear.on { background: #24364d; border-color: var(--accent); }
 .picking .stage img { cursor: copy; }
+
+.subhead { margin: 10px 0 6px 0; font-size: 11.5px; color: #cfcfcf; border-top: 1px solid var(--line); padding-top: 8px; }

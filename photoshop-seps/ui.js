@@ -82,24 +82,32 @@
   function schedule(kind, note) {
     if (!state.art) { save(); return; }
     // A fresh run (new inks) wins over an ink-keeping run.
-    pending = { fresh: (pending && pending.fresh) || kind === 'fresh', note: note || (pending && pending.note) };
+    // Changes to the art itself (background, knockout, levels, size) make the
+    // old and new match scores incomparable, so they get no better/worse verdict.
+    const artChanged = kind === 'prep' || /background|knock|levels|high-res/i.test(note || '');
+    pending = { fresh: (pending && pending.fresh) || kind === 'fresh', note: note || (pending && pending.note), artChanged: (pending && pending.artChanged) || artChanged };
     $('busy').classList.remove('hidden');
     clearTimeout(timer);
-    timer = setTimeout(() => { const p = pending; pending = null; runProof(p.fresh, p.note); }, 120);
+    timer = setTimeout(() => { const p = pending; pending = null; runProof(p.fresh, p.note, p.artChanged); }, 120);
     save();
   }
 
+  function prepOpts() {
+    // Knockout needs to know the shirt color.
+    return Object.assign({}, state.prep, { garment: state.garment });
+  }
+
   function proofImage() {
-    const key = JSON.stringify(state.prep);
+    const key = JSON.stringify(prepOpts());
     if (state.proof && state.proofKey === key) return state.proof;
     const info = E.artInfo(state.art.original, state.prep);
     const scale = Math.min(1, PROOF_MAX / Math.max(info.outWidth, info.outHeight));
-    state.proof = E.prepareArt(state.art.original, state.prep, scale);
+    state.proof = E.prepareArt(state.art.original, prepOpts(), scale);
     state.proofKey = key;
     return state.proof;
   }
 
-  async function runProof(fresh, note) {
+  async function runProof(fresh, note, artChanged) {
     try {
       const prev = state.result ? state.result.report.match : null;
       $('busy').classList.remove('hidden');
@@ -117,7 +125,8 @@
       }
       state.full = null;
       renderResults();
-      showDelta(note, note && state.dragBase ? state.dragBase : prev, r.report.match);
+      if (state.prep.removeBg) renderBg();
+      showDelta(note, note && state.dragBase ? state.dragBase : prev, r.report.match, artChanged);
       if (note) state.dragBase = null;
       const ms = Date.now() - t0;
       if (fresh && state.screens === 'auto' && MODES_WITH_COUNT.includes(mode())) status(`Auto picked ${r.screens.length} screens · ${ms} ms`);
@@ -132,9 +141,17 @@
     }
   }
 
-  function showDelta(note, prev, now) {
+  function r0(m) { return `Match now ${m.rating} (ΔE ${m.avgDeltaE}).`; }
+
+  function showDelta(note, prev, now, artChanged) {
     const box = $('delta');
     if (!note || !prev) { box.classList.add('hidden'); return; }
+    if (artChanged) {
+      $('deltaText').textContent = `${note}. ${r0(now)}`;
+      box.className = 'delta';
+      $('undo').style.display = state.undo.length ? '' : 'none';
+      return;
+    }
     const d = now.avgDeltaE - prev.avgDeltaE;
     const verdict = Math.abs(d) < 0.15 ? 'about the same' : d > 0 ? 'worse' : 'better';
     $('deltaText').textContent = `${note}: match ${prev.rating} (ΔE ${prev.avgDeltaE}) → ${now.rating} (ΔE ${now.avgDeltaE}), ${verdict}.`;
@@ -337,6 +354,39 @@
     b.appendChild(text); b.appendChild(btn);
   }
 
+  // Background removal and shirt knockout.
+  function renderBg() {
+    const box = $('bgBody');
+    if (!box) return;
+    box.innerHTML = '';
+    const tg = $('bgToggles');
+    tg.innerHTML = '';
+    const pill = (on, label, fn) => { const t = document.createElement('span'); t.className = 'tog' + (on ? ' on' : ''); t.textContent = (on ? '✓ ' : '') + label; t.addEventListener('click', fn); tg.appendChild(t); };
+    pill(state.prep.removeBg, 'Remove background', () => { state.prep.removeBg = !state.prep.removeBg; renderBg(); schedule('fresh', state.prep.removeBg ? 'Removed background' : 'Background back'); });
+    pill(state.prep.knockout, 'Knock out shirt color', () => { state.prep.knockout = !state.prep.knockout; renderBg(); schedule('fresh', state.prep.knockout ? 'Shirt color knocked out' : 'Knockout off'); });
+    if (state.prep.removeBg) {
+      const info = state.proof && state.proof.info && state.proof.info.background;
+      const row = document.createElement('div'); row.className = 'row';
+      const chip = document.createElement('span'); chip.className = 'chip'; chip.style.background = state.prep.bgColor || info || '#888';
+      const lab = document.createElement('span'); lab.className = 'muted small';
+      lab.textContent = state.prep.bgColor ? `Background color ${state.prep.bgColor} (picked)` : `Background found: ${info || '…'}`;
+      const pick = document.createElement('button'); pick.className = 'btn small'; pick.textContent = state.picking === 'bg' ? 'Tap the background…' : 'Pick it on the art';
+      pick.addEventListener('click', () => { state.picking = 'bg'; $('app').classList.add('picking'); state.view = 'art'; renderTabs(); renderView(); status('Tap the background in the picture.'); renderBg(); });
+      row.appendChild(chip); row.appendChild(lab); row.appendChild(pick);
+      if (state.prep.bgColor) { const auto = document.createElement('button'); auto.className = 'btn small'; auto.textContent = 'Auto'; auto.addEventListener('click', () => { state.prep.bgColor = null; renderBg(); schedule('fresh'); }); row.appendChild(auto); }
+      box.appendChild(row);
+      box.appendChild(fieldEl({ label: 'Tolerance', type: 'range', min: 2, max: 40, step: 1, fmt: (v) => String(v), tip: 'How different from the background color a pixel can be and still be removed.' }, state.prep.bgTolerance, (v) => { state.prep.bgTolerance = v; schedule('prep'); }));
+      box.appendChild(fieldEl({ label: 'Only from edges', type: 'check', tip: 'On: removes only background touching the picture edges (keeps the same color inside the design). Off: removes that color everywhere.' }, state.prep.bgEdgesOnly, (v) => { state.prep.bgEdgesOnly = v; schedule('prep'); }));
+      box.appendChild(fieldEl({ label: 'Soft edge', type: 'range', min: 0, max: 3, step: 1, fmt: (v) => `${v} px` }, state.prep.feather, (v) => { state.prep.feather = v; schedule('prep'); }));
+    }
+    if (state.prep.knockout) {
+      box.appendChild(fieldEl({ label: 'Knockout amount', type: 'range', min: 2, max: 40, step: 1, fmt: (v) => String(v), tip: 'Art colors this close to the shirt color print nothing: the shirt shows through.' }, state.prep.knockoutTolerance, (v) => { state.prep.knockoutTolerance = v; schedule('prep'); }));
+    }
+    const hint = document.createElement('div'); hint.className = 'muted small';
+    hint.textContent = 'Removed areas print nothing, so the shirt shows. Knockout lets the shirt be any art color that matches it (for example black in the art on a black shirt), which saves ink and keeps the print soft.';
+    box.appendChild(hint);
+  }
+
   function renderArtLevels() {
     const box = $('artLevels');
     box.innerHTML = '';
@@ -375,6 +425,18 @@
       if (typeof state.view !== 'number') state.view = state.result.screens.length > 1 ? 1 : 0;
       renderTabs(); renderView();
     }
+  }
+
+  function pickBgAt(fx, fy) {
+    state.picking = false;
+    $('app').classList.remove('picking');
+    const src = state.art.original;
+    const x = Math.min(src.width - 1, Math.floor(fx * src.width)), y = Math.min(src.height - 1, Math.floor(fy * src.height));
+    const i = (y * src.width + x) * src.channels;
+    state.prep.bgColor = E.color.toHex([src.data[i], src.data[i + 1], src.data[i + 2]]);
+    state.prep.removeBg = true;
+    renderBg();
+    schedule('fresh', `Background set to ${state.prep.bgColor}`);
   }
 
   function pickSpotAt(fx, fy) {
@@ -475,6 +537,7 @@
   const TUNE = [
     { k: 'overlap', label: 'Ink build-up', modes: ['simulated'], type: 'select', opts: [['stack', 'Full color'], ['side', 'Soft hand (less ink)']] },
     { k: 'underbase', label: 'Underbase', modes: ['simulated', 'index', 'spot', 'cmyk'], type: 'select', opts: [['auto', 'Auto (dark shirts)'], [true, 'Always'], [false, 'Never']], fresh: true },
+    { k: 'underbaseStyle', label: 'Underbase style', modes: ['simulated', 'spot'], type: 'select', opts: [['tonal', 'Tonal (follows the art’s light)'], ['inks', 'Solid under every color']], tip: 'Tonal keeps the shading of the art in the underbase, like a fuller highlight white. Solid puts full white under anything that needs it.' },
     { k: 'underbaseStrength', label: 'Underbase density', modes: ['simulated', 'spot'], type: 'range', min: 0.5, max: 1.3, step: 0.05, fmt: pct },
     { k: 'choke', label: 'Underbase choke', modes: ['simulated', 'spot'], type: 'range', min: 0, max: 4, step: 1, fmt: (v) => `${v} px` },
     { k: 'highlightWhite', label: 'Highlight white', modes: ['simulated', 'index', 'spot'], type: 'select', opts: [['auto', 'Auto'], [true, 'Always'], [false, 'Never']], fresh: true },
@@ -593,7 +656,7 @@
       // Photoshop knows the document's print size. A browser image has no
       // reliable size, so assume a standard 11 in front print.
       state.prep.printWidthIn = art.fromBrowser ? +Math.max(1, Math.min(11, art.width / 300 > 11 ? art.width / 300 : 11)).toFixed(2) : +(art.width / (art.dpi || 300)).toFixed(2);
-      state.prep.levels = null; state.prep.saturation = 1; state.prep.sharpen = 0; state.prep.denoise = 0;
+      state.prep.levels = null; state.prep.saturation = 1; state.prep.sharpen = 0; state.prep.denoise = 0; state.prep.bgColor = null;
       autoFixResolution();
     }
     $('docInfo').textContent = `${state.art.name} · ${art.width}×${art.height}px · ${Math.round(art.dpi || 300)} ppi`;
@@ -618,7 +681,7 @@
     if (state.full && state.fullKey === key) return state.full;
     status('Preparing art at full resolution…');
     await tick();
-    const prepared = E.prepareArt(state.art.original, state.prep);
+    const prepared = E.prepareArt(state.art.original, prepOpts());
     status('Separating at full resolution…');
     await tick();
     const o = options(false);
@@ -955,6 +1018,7 @@
 
   function renderAll() {
     renderReg();
+    renderBg();
     renderArtLevels();
     renderSteps();
     renderPresets();
@@ -978,6 +1042,7 @@
     const dx = (rect.width - iw * k) / 2, dy = (rect.height - ih * k) / 2;
     const fx = (ev.clientX - rect.left - dx) / (iw * k), fy = (ev.clientY - rect.top - dy) / (ih * k);
     if (fx < 0 || fy < 0 || fx > 1 || fy > 1) return;
+    if (state.picking === 'bg') { pickBgAt(fx, fy); return; }
     if (state.picking) { pickSpotAt(fx, fy); return; }
     if (typeof state.view === 'number') return; // plate views include margins
     state.zoom = { x: fx, y: fy };
