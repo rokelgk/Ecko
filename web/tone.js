@@ -903,6 +903,20 @@
     $("dlPng").addEventListener("click", (e) => download("png", e.currentTarget));
     $("dlZip").addEventListener("click", (e) => download("zip", e.currentTarget));
     $("clearPicture").addEventListener("click", clearPicture);
+    const pluginData = document.getElementById("eckoPlugin");   // only in the stand-alone build
+    if (pluginData) {
+      $("pluginBox").hidden = false;
+      $("dlPlugin").addEventListener("click", async () => {
+        try {
+          const bin = atob(JSON.parse(pluginData.textContent)), bytes = new Uint8Array(bin.length);
+          for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+          const none = { headers: { get: () => null } };
+          await saveBlob(new Blob([bytes], { type: "application/zip" }), none, "Ecko-Tone-Photoshop-plugin.zip");
+        } catch (e) {
+          showError(`Couldn't save the plug-in: ${e.message || e}`);
+        }
+      });
+    }
     $("autoCuts").addEventListener("click", () => { opts.thresholds = []; buildCuts(); changed(); });
     $("simpleProcess").addEventListener("click", () => {
       const p = catalog.presets.find((x) => x.id === "simple-process");

@@ -85,6 +85,7 @@ def build_page(engine_js: str) -> str:
     bundle = "\n".join([
         script(json.dumps(fonts), ' type="application/json" id="eckoFonts"'),
         script(worker_src, ' type="text/plain" id="eckoWorkerSrc"'),
+        script(json.dumps(base64.b64encode(plugin_zip_bytes(engine_js)).decode()), ' type="application/json" id="eckoPlugin"'),
         script(engine_js), script(host), script(shim), script(ui),
     ])
     html = html.replace('<script src="tone.js"></script>', bundle)
@@ -92,25 +93,65 @@ def build_page(engine_js: str) -> str:
     return html
 
 
-def build_plugin_zip() -> None:
-    """dist/ecko-tone-photoshop-plugin.zip: the Photoshop panel folder, ready for UXP Developer Tool."""
+INSTALL_TXT = """Ecko Tone for Photoshop: how to install
+==========================================
+
+EASIEST (works on every Mac with Photoshop 2023 or newer)
+1. Install "UXP Developer Tool" from the Creative Cloud app (free; search for it under Apps).
+2. Open UXP Developer Tool and click "Add Plugin".
+3. Open the "Ecko Tone" folder that is next to this file and choose "manifest.json".
+4. With Photoshop open, click the "..." button next to Ecko Tone and choose "Load".
+5. In Photoshop: Plugins > Ecko Tone. Select a layer and click "Apply to selected layer".
+   (After restarting Photoshop, click Load again in UXP Developer Tool.)
+
+ONE-CLICK INSTALLER (only if your Creative Cloud allows plug-ins from outside the Adobe store)
+- Double-click "ecko-tone.ccx". If Creative Cloud opens, click Install, then restart Photoshop.
+- If it won't open, use the UXP Developer Tool steps above instead.
+
+The web version needs no install: open the Ecko Tone link in your browser.
+"""
+
+
+def _zip(entries: dict) -> bytes:
+    """Deterministic zip (fixed dates) from {name: bytes}."""
+    import io
     import zipfile
-    src = ROOT / "photoshop-plugin"
-    out = ROOT / "dist" / "ecko-tone-photoshop-plugin.zip"
-    with zipfile.ZipFile(out, "w", zipfile.ZIP_DEFLATED) as z:
-        for name in ("manifest.json", "index.html", "index.js", "tone-engine.js", "README.md"):
-            info = zipfile.ZipInfo(f"Ecko Tone/{name}", date_time=(2026, 1, 1, 0, 0, 0))
-            info.compress_type = zipfile.ZIP_DEFLATED
-            z.writestr(info, (src / name).read_bytes())
-    print(f"dist/ecko-tone-photoshop-plugin.zip  {out.stat().st_size / 1e3:.0f} KB")
-    # The same files with manifest.json at the top level, as Adobe's .ccx plug-in package:
-    # double-click installs it through the Creative Cloud app.
-    ccx = ROOT / "dist" / "ecko-tone.ccx"
-    with zipfile.ZipFile(ccx, "w", zipfile.ZIP_DEFLATED) as z:
-        for name in ("manifest.json", "index.html", "index.js", "tone-engine.js"):
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as z:
+        for name, data in entries.items():
             info = zipfile.ZipInfo(name, date_time=(2026, 1, 1, 0, 0, 0))
             info.compress_type = zipfile.ZIP_DEFLATED
-            z.writestr(info, (src / name).read_bytes())
+            info.external_attr = 0o644 << 16
+            z.writestr(info, data)
+    return buf.getvalue()
+
+
+def plugin_files(engine_js: str) -> dict:
+    src = ROOT / "photoshop-plugin"
+    files = {name: (src / name).read_bytes() for name in ("manifest.json", "index.html", "index.js")}
+    files["tone-engine.js"] = engine_js.encode()
+    return files
+
+
+def ccx_bytes(engine_js: str) -> bytes:
+    """Adobe's .ccx plug-in package: the panel files with manifest.json at the top level."""
+    return _zip(plugin_files(engine_js))
+
+
+def plugin_zip_bytes(engine_js: str) -> bytes:
+    """Everything needed for Photoshop: the panel folder, the .ccx and install steps."""
+    entries = {f"Ecko Tone Photoshop plug-in/Ecko Tone/{n}": b for n, b in plugin_files(engine_js).items()}
+    entries["Ecko Tone Photoshop plug-in/ecko-tone.ccx"] = ccx_bytes(engine_js)
+    entries["Ecko Tone Photoshop plug-in/HOW TO INSTALL.txt"] = INSTALL_TXT.encode()
+    return _zip(entries)
+
+
+def build_plugin_zip(engine_js: str) -> None:
+    out = ROOT / "dist" / "ecko-tone-photoshop-plugin.zip"
+    out.write_bytes(plugin_zip_bytes(engine_js))
+    print(f"dist/ecko-tone-photoshop-plugin.zip  {out.stat().st_size / 1e3:.0f} KB")
+    ccx = ROOT / "dist" / "ecko-tone.ccx"
+    ccx.write_bytes(ccx_bytes(engine_js))
     print(f"dist/ecko-tone.ccx  {ccx.stat().st_size / 1e3:.0f} KB")
 
 
@@ -123,7 +164,7 @@ def main() -> None:
         page = build_page(engine_js)
         (ROOT / "dist" / "ecko-tone.html").write_text(page)
         print(f"dist/ecko-tone.html  {len(page) / 1e6:.2f} MB")
-        build_plugin_zip()
+        build_plugin_zip(engine_js)
     print("web/standalone/tone-engine.js, photoshop-plugin/tone-engine.js")
 
 
