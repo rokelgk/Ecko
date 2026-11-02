@@ -58,7 +58,7 @@
       // Never read our own live-preview document as artwork: fall back to
       // the document the art came from.
       let doc = app.activeDocument;
-      if (doc && doc.id === this._liveId) doc = app.documents.find((d) => d.id === this._artId) || null;
+      if (doc && (doc.id === this._liveId || doc.id === this._proofId)) doc = app.documents.find((d) => d.id === this._artId) || null;
       if (!doc) return null;
       this._artId = doc.id;
       return modal('Read artwork for separation', async () => {
@@ -91,9 +91,9 @@
         if (!doc) {
           // The Proof Window: a document at the same print size as the art,
           // tiled next to it (like ActionSeps' proof window).
-          doc = await app.documents.add({ width: w, height: h, resolution: Math.max(1, Math.round(dpi || 72)), mode: 'RGBColorMode', fill: 'white', name: 'Proof Window' });
+          doc = await app.documents.add({ width: w, height: h, resolution: Math.max(1, Math.round(dpi || 72)), mode: 'RGBColorMode', fill: 'white', name: 'Separation Preview' });
           this._liveId = doc.id;
-          const layer = await doc.createLayer({ name: 'Ecko Seps proof' });
+          const layer = await doc.createLayer({ name: 'Ecko Seps separation' });
           this._liveLayer = layer.id;
           created = true;
         }
@@ -104,26 +104,31 @@
           id.dispose();
         }
         if (created) {
-          // Its own window: Window > Arrange > Float in Window on the Proof
-          // Window only, so it floats beside your art instead of becoming a
-          // tab (or splitting the tab area). Drag it where you like;
-          // Photoshop opens the next one in the same spot.
-          if (!opts || opts.float !== false) {
-            try {
-              app.activeDocument = doc;
-              await action.batchPlay([{ _obj: 'select', _target: [{ _ref: 'menuItemClass', _enum: 'menuItemType', _value: 'floatInWindow' }] }], {});
-            } catch (e) { /* floating is optional; it stays a tab */ }
-          }
+          // Proof Window = a copy of the original artwork, opened as a tab and
+          // arranged side by side with the Separation Preview (split tabs).
           const art = this._artId ? app.documents.find((d) => d.id === this._artId) : null;
-          if (art) { try { app.activeDocument = art; } catch (e) { /* keep proof active */ } }
+          let proof = this._proofId ? app.documents.find((d) => d.id === this._proofId) : null;
+          if (art && !proof) {
+            try { proof = await art.duplicate('Proof Window'); this._proofId = proof.id; } catch (e) { proof = null; }
+          }
+          if (opts && opts.float === false) return; // "Proof: tabs only" - no arranging
+          // Window > Arrange > 2-up Vertical (falls back to Tile All Vertically).
+          for (const item of ['twoUpVertical', 'tile2UpVertical', 'tileVertically']) {
+            try {
+              if (proof) app.activeDocument = proof;
+              await action.batchPlay([{ _obj: 'select', _target: [{ _ref: 'menuItemClass', _enum: 'menuItemType', _value: item }] }], {});
+              break;
+            } catch (e) { /* try the next arrangement */ }
+          }
+          try { app.activeDocument = doc; } catch (e) { /* fine */ }
         }
       });
     },
 
     closeLive() {
-      const doc = this._liveId ? app.documents.find((d) => d.id === this._liveId) : null;
-      this._liveId = null;
-      if (doc) return modal('Close Ecko Seps live view', () => doc.closeWithoutSaving());
+      const docs = [this._liveId, this._proofId].map((id) => (id ? app.documents.find((d) => d.id === id) : null)).filter(Boolean);
+      this._liveId = null; this._proofId = null;
+      if (docs.length) return modal('Close Ecko Seps preview', async () => { for (const d of docs) await d.closeWithoutSaving(); });
       return null;
     },
 

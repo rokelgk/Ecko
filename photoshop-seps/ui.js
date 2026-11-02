@@ -158,6 +158,7 @@
       if (fresh && state.screens === 'auto' && MODES_WITH_COUNT.includes(mode())) status(`Auto picked ${r.screens.length} screens · ${ms} ms`);
       else status(`Updated in ${ms} ms`);
       ['build', 'exportFilms', 'exportSheet'].forEach((id) => { $(id).disabled = false; });
+      if (fresh) openSection('screensCard', true);
       $('separate').textContent = 'Start over with new inks';
     } catch (e) {
       console.error(e);
@@ -494,6 +495,45 @@
     });
   }
 
+  // ---------- drop-down sections (accordion) ----------
+  // Every options card is a drop-down with a one-line summary on its header.
+  // Opening one closes the others, so the panel stays short and tidy.
+  function setupSections() {
+    const cards = Array.prototype.slice.call(document.querySelectorAll('#optionsPane > section.card'));
+    for (const card of cards) {
+      const h = card.querySelector('h2');
+      if (!h) continue;
+      if (!card.classList.contains('collapsible')) {
+        card.classList.add('collapsible');
+        const body = document.createElement('div');
+        body.className = 'body';
+        while (h.nextSibling) body.appendChild(h.nextSibling);
+        card.appendChild(body);
+      }
+      h.classList.add('toggle');
+      if (!h.querySelector('.sum')) { const sm = document.createElement('span'); sm.className = 'sum'; h.appendChild(sm); }
+      h.addEventListener('click', () => openSection(card.id, !card.classList.contains('open')));
+    }
+    const ui0 = load('ui') || {};
+    cards.forEach((c) => c.classList.remove('open'));
+    openSection(ui0.section || 'artCard', true, true);
+  }
+
+  function openSection(id, open, quiet) {
+    const cards = document.querySelectorAll('#optionsPane > section.card');
+    for (const c of cards) if (c.id !== id) c.classList.remove('open');
+    const el = $(id);
+    if (!el) return;
+    el.classList.toggle('open', open !== false);
+    if (!quiet) { ui.section = open !== false ? id : ''; saveUi(); }
+  }
+
+  function setSummary(id, text) {
+    const el = $(id);
+    const sm = el && el.querySelector('h2 .sum');
+    if (sm) sm.textContent = text || '';
+  }
+
   // ---------- workflow checklist ----------
   const CARD = { art: 'artCard', job: 'presetCard', shirt: 'garmentCard', screens: 'countCard', sep: 'separate', colors: 'screensCard', tex: 'textureCard', ub: 'tuneCard', film: 'filmCard', reg: 'regCard', out: 'outputCard' };
   function renderSteps() {
@@ -534,6 +574,10 @@
     const on = REG_TOGGLES.filter(([k]) => state.reg[k]).map(([, l]) => l.split(' ')[0].toLowerCase());
     steps.push(['reg', on.length ? 'ok' : 'warn', 'Registration', on.length ? on.join(', ') : 'no marks: films are hard to line up']);
     steps.push(['out', r ? 'todo' : '', 'Output', r ? (host.name === 'photoshop' ? 'Build document or export films' : 'Ready (Photoshop plug-in exports)') : 'after separating']);
+    for (const [key, , , sub] of steps) if (CARD[key] && CARD[key] !== 'separate') setSummary(CARD[key], sub);
+    const done = steps.filter((x) => x[1] === 'ok').length;
+    setSummary('workflow', `${done} of ${steps.length} done`);
+    setSummary('libraryCard', state.libraryId === 'builtin' ? 'built-in inks' : 'your library');
     box.innerHTML = '';
     steps.forEach(([key, st, title, sub], idx) => {
       const d = document.createElement('div');
@@ -542,7 +586,7 @@
       d.addEventListener('click', () => {
         const el = $(CARD[key]);
         if (!el) return;
-        if (el.classList.contains('collapsible')) el.classList.add('open');
+        if (el.classList.contains('collapsible')) openSection(el.id, true);
         el.scrollIntoView({ behavior: 'smooth', block: 'start' });
         el.classList.add('flash');
         setTimeout(() => el.classList.remove('flash'), 900);
@@ -801,7 +845,7 @@
     img.className = '';
     if (state.view === 'preview') {
       rgba = r.preview;
-      hint = 'Simulated print on the shirt. Tap anywhere to see the real halftone dots there.';
+      hint = 'Simulated print on the shirt. Scroll or use − / + to zoom; tap (at Fit) to see the real halftone dots there.';
     } else if (state.view === 'art') {
       const src = proofImage().image;
       rgba = new Uint8ClampedArray(w * h * 4);
@@ -1548,6 +1592,81 @@
     } catch (e) { status('Could not load that image: ' + e.message, true); }
   }
 
+  // ---------- zoom and pan in the preview ----------
+  let zoom = 1;
+  // Scale at which the whole picture fits (outer size, so scrollbars that
+  // appear when zoomed don't change it).
+  function fitScale() {
+    const img = $('previewImg'), r = $('stage').getBoundingClientRect();
+    return Math.min(r.width / img.naturalWidth, r.height / img.naturalHeight);
+  }
+  function applyZoom(anchor) {
+    const img = $('previewImg'), st = $('stage');
+    const bar = $('zoomBar');
+    if (bar) bar.classList.toggle('hidden', !state.result);
+    if (!img.naturalWidth) return;
+    if (zoom <= 1.001) {
+      zoom = 1;
+      img.style.width = ''; img.style.height = '';
+      st.classList.remove('zoomed');
+    } else {
+      const fit = fitScale();
+      // Keep the point under the cursor (or the center) in place.
+      const fx = anchor ? anchor.fx : (st.scrollLeft + st.clientWidth / 2) / Math.max(1, st.scrollWidth);
+      const fy = anchor ? anchor.fy : (st.scrollTop + st.clientHeight / 2) / Math.max(1, st.scrollHeight);
+      st.classList.add('zoomed');
+      img.style.width = `${Math.round(img.naturalWidth * fit * zoom)}px`;
+      img.style.height = `${Math.round(img.naturalHeight * fit * zoom)}px`;
+      st.scrollLeft = fx * st.scrollWidth - (anchor ? anchor.ox : st.clientWidth / 2);
+      st.scrollTop = fy * st.scrollHeight - (anchor ? anchor.oy : st.clientHeight / 2);
+    }
+    if ($('zoomLabel')) {
+      const fit = img.naturalWidth ? fitScale() : 1;
+      $('zoomLabel').textContent = `${Math.round(fit * zoom * 100)}%`;
+    }
+  }
+  function setZoom(z, ev) {
+    const st = $('stage');
+    let anchor = null;
+    if (ev && zoom > 1) {
+      const r = st.getBoundingClientRect();
+      const ox = ev.clientX - r.left, oy = ev.clientY - r.top;
+      anchor = { fx: (st.scrollLeft + ox) / st.scrollWidth, fy: (st.scrollTop + oy) / st.scrollHeight, ox, oy };
+    }
+    zoom = Math.max(1, Math.min(24, z));
+    applyZoom(anchor);
+  }
+  $('previewImg').addEventListener('load', () => applyZoom());
+  $('zoomIn').addEventListener('click', () => setZoom(zoom * 1.5));
+  $('zoomOut').addEventListener('click', () => setZoom(zoom / 1.5));
+  $('zoomFit').addEventListener('click', () => setZoom(1));
+  $('zoom100').addEventListener('click', () => {
+    const img = $('previewImg'), st = $('stage');
+    void st;
+    if (img.naturalWidth) setZoom(1 / fitScale());
+  });
+  $('stage').addEventListener('wheel', (ev) => {
+    if (!state.result) return;
+    ev.preventDefault();
+    setZoom(zoom * (ev.deltaY < 0 ? 1.2 : 1 / 1.2), ev);
+  }, { passive: false });
+  // Drag to move around when zoomed (not while brushing or picking).
+  let pan = null, panMoved = false;
+  $('stage').addEventListener('pointerdown', (ev) => {
+    if (zoom <= 1 || state.clean.active || state.picking) return;
+    const st = $('stage');
+    pan = { x: ev.clientX, y: ev.clientY, l: st.scrollLeft, t: st.scrollTop };
+    panMoved = false;
+  });
+  window.addEventListener('pointermove', (ev) => {
+    if (!pan) return;
+    const st = $('stage');
+    if (Math.abs(ev.clientX - pan.x) + Math.abs(ev.clientY - pan.y) > 3) panMoved = true;
+    st.scrollLeft = pan.l - (ev.clientX - pan.x);
+    st.scrollTop = pan.t - (ev.clientY - pan.y);
+  });
+  window.addEventListener('pointerup', () => { pan = null; });
+
   // ---------- clean-up: remove stray color from one area ----------
   const ALL = '*';
   function cleanTargets() { return (state.inks || []).filter((x) => hasScreen(x)); }
@@ -1626,8 +1745,8 @@
 
   let stroke = null;
   function stageXY(ev) {
-    const sr = $('stage').getBoundingClientRect();
-    return [ev.clientX - sr.left, ev.clientY - sr.top];
+    const st = $('stage'), sr = st.getBoundingClientRect();
+    return [ev.clientX - sr.left + st.scrollLeft, ev.clientY - sr.top + st.scrollTop];
   }
   function drawRing(ev) {
     const c = state.clean, ring = $('brushRing');
@@ -1729,6 +1848,8 @@
 
   $('previewImg').addEventListener('click', (ev) => {
     if (!state.result || state.clean.active) return;
+    if (panMoved) { panMoved = false; return; }
+    if (zoom > 1 && !state.picking) return; // zoomed: clicks are for moving around
     if (state.view === 'dots' && !state.picking) { state.view = 'preview'; renderTabs(); renderView(); return; }
     // The picture is letterboxed inside the element (object-fit: contain).
     const rect = $('previewImg').getBoundingClientRect();
@@ -1746,7 +1867,7 @@
     renderTabs();
     renderView();
   });
-  document.querySelectorAll('.collapsible .toggle').forEach((t) => t.addEventListener('click', () => t.parentNode.classList.toggle('open')));
+  setupSections();
   $('garmentHex').addEventListener('change', () => setGarment($('garmentHex').value));
   $('garmentPick').addEventListener('click', async () => { const hex = await host.pickColor(state.garment); if (hex) setGarment(hex); });
   $('garmentFg').addEventListener('click', async () => { const hex = await host.foregroundColor(); if (hex) setGarment(hex); });

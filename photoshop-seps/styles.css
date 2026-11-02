@@ -334,3 +334,25 @@ body.ps-host .btn.to-top { position: static; box-shadow: none; }
 .layout.slim .cleanbar select { max-width: none; }
 .layout.slim .card { padding: 8px 7px; }
 .layout.slim .card > h2 { font-size: 12.5px; }
+
+/* Zoom and pan */
+.zoombar { display: flex; align-items: center; flex-wrap: wrap; margin: 0 0 4px; }
+.zoombar .btn { margin: 0 4px 0 0; min-width: 30px; }
+.zoombar span { margin-right: 6px; }
+.stage.zoomed { display: block; overflow: auto; cursor: grab; }
+.stage.zoomed img { max-width: none; max-height: none; object-fit: fill; display: block; margin: 0; }
+
+/* Drop-down sections: header with summary, chevron, one open at a time */
+#optionsPane > section.card { padding: 0; overflow: hidden; }
+#optionsPane > section.card > h2.toggle { margin: 0; padding: 10px 10px 10px 12px; cursor: pointer; display: flex; align-items: center; }
+#optionsPane > section.card > h2.toggle .sum { margin-left: auto; padding-left: 8px; font-size: 11px; font-weight: 400; color: var(--muted); text-align: right; max-width: 55%; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+#optionsPane > section.card > h2.toggle:after { content: "\25BE"; margin-left: 8px; color: var(--muted); transition: transform 0.15s; }
+#optionsPane > section.card:not(.open) > h2.toggle:after { transform: rotate(-90deg); }
+#optionsPane > section.card > h2.toggle:before { display: none; }
+#optionsPane > section.card > .body { padding: 0 10px 10px; margin-top: 0; }
+#optionsPane > section.card.open > h2.toggle { border-bottom: 1px solid var(--line); margin-bottom: 8px; }
+#optionsPane > section.card:not(.open) > h2.toggle:hover { background: rgba(255,255,255,0.04); }
+body.theme-aztec #optionsPane > section.card > h2.toggle { padding-left: 30px; padding-right: 30px; }
+body.theme-aztec #optionsPane > section.card:before, body.theme-aztec #optionsPane > section.card:after { top: 4px; }
+.layout.slim #optionsPane > section.card > h2.toggle { flex-wrap: wrap; }
+.layout.slim #optionsPane > section.card > h2.toggle .sum { max-width: 100%; flex: 1 1 100%; text-align: left; padding-left: 26px; margin-top: 2px; white-space: normal; }

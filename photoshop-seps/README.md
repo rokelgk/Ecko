@@ -51,10 +51,15 @@ Pick the job type, the shirt color and the number of screens, then press
   and fine-grain knockouts, or your own texture image; amount, size,
   softness, strength, invert, new pattern, and apply to all screens, the
   underbase only or the top colors only.
-- **Proof Window (🪟, Photoshop):** like ActionSeps, the panel has no picture;
-  a "Proof Window" document at the art's print size opens in its own
-  floating window (Window → Arrange → Float in Window) to place beside your
-  artwork ("⋯ More → Proof: tab" keeps it as a tab) and redraws after every change, showing whichever view tab you
+- **Drop-down sections:** every options category is a drop-down with its
+  current setting on the header; one opens at a time. Tap a Workflow step
+  to jump to it.
+- **Zoom and pan:** − / Fit / + / 100%, mouse-wheel zoom to the cursor and
+  drag to move, in the panel and the full window.
+- **Proof Window (🪟, Photoshop):** the panel has no picture; the **Proof
+  Window** (a copy of your original art) and a live **Separation Preview**
+  open as tabs arranged side by side (2-up / split view; "⋯ More → Proof:
+  tabs only" skips the arranging) and redraws after every change, showing whichever view tab you
   pick. The panel picture comes back while the clean-up brush or eyedropper
   is in use, or when the Proof window is switched off.
   **Detail** (Fast / Sharp / Max) sets how sharp the live proof is.
