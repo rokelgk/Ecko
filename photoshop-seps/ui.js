@@ -763,9 +763,27 @@
     };
     add('preview', 'On shirt');
     add('art', 'Original');
+    add('compare', '⇆ Compare');
     add('dots', 'Dots (close-up)');
-    if (state.view !== 'preview' && state.view !== 'art' && state.view !== 'dots' && state.view >= state.result.screens.length) state.view = 'preview';
+    if (typeof state.view === 'number' && state.view >= state.result.screens.length) state.view = 'preview';
     state.result.screens.forEach((s, i) => add(i, String(s.order), s.hex));
+  }
+
+  // The uploaded art, untouched, scaled to the preview size on the shirt.
+  let origCache = { key: '', rgba: null };
+  function originalOnShirt(w, h) {
+    const key = `${w}x${h}:${state.garment}:${state.art && state.art.original.width}`;
+    if (origCache.key === key) return origCache.rgba;
+    const src = E.ops.resizeImage(state.art.original, w, h);
+    const g = E.color.parseHex(state.garment);
+    const out = new Uint8ClampedArray(w * h * 4);
+    for (let p = 0; p < w * h; p++) {
+      const a = src.channels === 4 ? src.data[p * 4 + 3] / 255 : 1;
+      for (let k = 0; k < 3; k++) out[p * 4 + k] = src.data[p * src.channels + k] * a + g[k] * (1 - a);
+      out[p * 4 + 3] = 255;
+    }
+    origCache = { key, rgba: out };
+    return out;
   }
 
   function renderView() {
@@ -788,6 +806,20 @@
         rgba[p * 4 + 3] = 255;
       }
       hint = 'Your art after resolution, sharpen and clean-up, on the shirt color.';
+    } else if (state.view === 'compare') {
+      // Original upload (before any fixes) next to the print preview, side
+      // by side when the window is wide, stacked when it's tall.
+      const orig = originalOnShirt(w, h);
+      const st = $('stage').getBoundingClientRect();
+      const across = st.height > 0 ? (st.width / st.height) >= (w / h) : true;
+      const gap = Math.max(6, Math.round(Math.max(w, h) * 0.02));
+      ww = across ? w * 2 + gap : w; hh = across ? h : h * 2 + gap;
+      rgba = new Uint8ClampedArray(ww * hh * 4);
+      for (let p = 0; p < ww * hh; p++) { rgba[p * 4] = 30; rgba[p * 4 + 1] = 26; rgba[p * 4 + 2] = 22; rgba[p * 4 + 3] = 255; }
+      const blit = (src, ox, oy) => { for (let y = 0; y < h; y++) rgba.set(src.subarray(y * w * 4, (y + 1) * w * 4), ((y + oy) * ww + ox) * 4); };
+      blit(orig, 0, 0);
+      blit(r.preview, across ? w + gap : 0, across ? 0 : h + gap);
+      hint = across ? 'Left: your original artwork as uploaded · Right: the print preview with every fix and setting.' : 'Top: your original artwork as uploaded · Bottom: the print preview with every fix and setting.';
     } else if (state.view === 'dots') {
       const d = E.dotPreview(r, state.film, state.zoom.x, state.zoom.y, 320);
       rgba = d.rgba; ww = d.width; hh = d.height;
@@ -1421,6 +1453,7 @@
     const dx = (rect.width - iw * k) / 2, dy = (rect.height - ih * k) / 2;
     const fx = (ev.clientX - rect.left - dx) / (iw * k), fy = (ev.clientY - rect.top - dy) / (ih * k);
     if (fx < 0 || fy < 0 || fx > 1 || fy > 1) return;
+    if (state.view === 'compare' && !state.picking) return;
     if (state.picking === 'bg') { pickBgAt(fx, fy); return; }
     if (state.picking) { pickSpotAt(fx, fy); return; }
     if (typeof state.view === 'number') return; // plate views include margins
@@ -1465,7 +1498,7 @@
   $('build').addEventListener('click', build);
   $('exportFilms').addEventListener('click', exportFilms);
   $('exportSheet').addEventListener('click', exportSheet);
-  window.addEventListener('resize', layout);
+  window.addEventListener('resize', () => { layout(); if (state.view === 'compare') renderView(); });
 
   if (host.name === 'photoshop') {
     $('openArtLabel').classList.add('hidden');

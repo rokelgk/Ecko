@@ -5,14 +5,40 @@
   if (window.EckoHost) return;
   let artwork = null;
 
-  function download(name, bytes, type) {
-    const blob = new Blob([bytes], { type: type || 'application/octet-stream' });
+  // On claude.ai the page runs in a sandbox: files are offered through the
+  // viewer's "downloads" prompt. Elsewhere (a local file or web server) a
+  // normal browser download is used.
+  let claudeDownloads = null;
+  try {
+    if (window.claude && typeof window.claude.use === 'function') {
+      window.claude.use('downloads').then((d) => { claudeDownloads = d; }).catch(() => {});
+    }
+  } catch (e) { /* not on claude.ai */ }
+  const CLAUDE_OK = /\.(png|jpg|jpeg|txt|json|csv|zip|pdf|svg)$/i;
+
+  async function download(name, bytes, type) {
+    if (claudeDownloads) {
+      // Types claude.ai can't hand over (like .tif) go inside a ZIP.
+      if (!CLAUDE_OK.test(name)) {
+        bytes = window.EckoEngine.zip.makeZip([{ name, data: bytes instanceof Uint8Array ? bytes : new Uint8Array(bytes) }]);
+        name = name.replace(/\.[^.]+$/, '') + '.zip';
+      }
+      try {
+        await claudeDownloads.save({ filename: name, data: bytes instanceof Blob ? bytes : new Blob([bytes]) });
+        return true;
+      } catch (e) {
+        if (e && e.code === 'declined') return false;
+        throw new Error(e && e.message ? e.message : 'Download was not allowed here.');
+      }
+    }
+    const blob = bytes instanceof Blob ? bytes : new Blob([bytes], { type: type || 'application/octet-stream' });
     const a = document.createElement('a');
     a.href = URL.createObjectURL(blob);
     a.download = name;
     document.body.appendChild(a);
     a.click();
-    setTimeout(() => { URL.revokeObjectURL(a.href); a.remove(); }, 1000);
+    setTimeout(() => { URL.revokeObjectURL(a.href); a.remove(); }, 1500);
+    return true;
   }
 
   function toCanvas(rgba, w, h) {
@@ -73,10 +99,10 @@
     // One file downloads as itself; several go into one ZIP, because
     // browsers (Safari especially) block a burst of separate downloads.
     async saveFiles(files, zipName) {
-      if (files.length === 1) { download(files[0].name, files[0].data); return 'your Downloads folder'; }
+      if (files.length === 1) return (await download(files[0].name, files[0].data)) ? 'your Downloads folder' : null;
       const name = zipName || 'ecko-seps-films.zip';
-      download(name, window.EckoEngine.zip.makeZip(files), 'application/zip');
-      return `your Downloads folder (${name})`;
+      const ok = await download(name, window.EckoEngine.zip.makeZip(files), 'application/zip');
+      return ok ? `your Downloads folder (${name})` : null;
     },
     // Browser stand-in for the Photoshop document: every plate as a
     // grayscale TIFF (no canvas, so no browser size limit) plus a preview
@@ -100,7 +126,7 @@
       const blob = await new Promise((r) => toCanvas(rgba, w, h).toBlob((bb) => r(bb), 'image/png'));
       files.push({ name: 'preview.png', data: new Uint8Array(await blob.arrayBuffer()) });
       const base = ((opts && opts.name) || 'ecko-seps').replace(/[^a-z0-9 _-]+/gi, '').trim().replace(/\s+/g, '_') || 'ecko-seps';
-      download(`${base}-plates.zip`, E.zip.makeZip(files), 'application/zip');
+      await download(`${base}-plates.zip`, E.zip.makeZip(files), 'application/zip');
     },
   };
 

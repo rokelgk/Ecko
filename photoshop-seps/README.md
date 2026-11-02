@@ -20,6 +20,8 @@ Pick the job type, the shirt color and the number of screens, then press
 - **Tonal underbase:** the underbase follows the art's own light and color
   (like a fuller highlight white), keeping the shading instead of going
   solid under every ink. "Solid under every color" is still an option.
+- **Compare (⇆):** the original artwork as uploaded next to the print
+  preview, side by side (stacked on tall screens).
 - **Clean-up tool (🧹):** remove unwanted color from just one area, not the
   whole color. Pick a screen (or all screens), then **Brush** over stray
   pixels or tap them with **Magic area** to remove that connected patch
@@ -105,8 +107,12 @@ each one is handled here.
    `photoshop-seps/manifest.json`, then click **Load**.
 4. In Photoshop: **Plugins → Ecko Seps**.
 
-To share it with other machines, use **Package** in UXP Developer Tool. That
-makes a `.ccx` file that installs with a double-click.
+Or skip the developer tool: `node tools/package.js` also writes
+`dist/EckoSeps.ccx`. Double-click it and Creative Cloud installs it into
+Photoshop (it may warn that the plug-in isn't from the Marketplace).
+
+If anything fails inside Photoshop, the panel shows the error message at the
+bottom (from `compat.js`), so a screenshot tells us exactly what broke.
 
 ## Use it
 
