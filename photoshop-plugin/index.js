@@ -95,15 +95,20 @@
     const h = sec.querySelector(".head");
     h.textContent = (open ? "▾ " : "▸ ") + h.textContent.replace(/^[▸▾] /, "");
   }
-  for (const s of sections) {
-    s.querySelector(".body").style.display = "block";
-    markHead(s, true);
-    s.querySelector(".head").addEventListener("click", () => {
-      const body = s.querySelector(".body"), open = body.style.display === "none";
-      body.style.display = open ? "block" : "none";
-      markHead(s, open);
-    });
+  // Fold-out boards: one open at a time, so the panel never gets long. The first (Look) starts open.
+  function openSection(sec, open) {
+    sec.querySelector(".body").style.display = open ? "block" : "none";
+    markHead(sec, open);
   }
+  sections.forEach((s, i) => {
+    openSection(s, i === 0);
+    s.querySelector(".head").addEventListener("click", () => {
+      const open = s.querySelector(".body").style.display === "none";
+      for (const o of sections) if (o !== s) openSection(o, false);
+      openSection(s, open);
+      if (open) $("steps").scrollTop = s.offsetTop - $("steps").offsetTop;
+    });
+  });
 
   // ---------------------------------------------------------------- bound controls (data-k = option name)
 
@@ -248,34 +253,67 @@
 
   // ---------------------------------------------------------------- textures
 
+  // Textures work like a pattern overlay: pick one from the dropdown, then set strength, size and
+  // rotation on its card. Pick again to stack another; Remove takes one off.
+  function textureName(id) {
+    if (id === "image") return "Your texture layer";
+    const t = cat.textures.find((x) => x.id === id);
+    const n = t ? t.name.replace(/^Scan: /, "") : id;
+    return n.charAt(0).toUpperCase() + n.slice(1);
+  }
+  const canRotate = (id) => id === "image" || !!(cat.textures.find((x) => x.id === id) || {}).scan;
+
+  function buildTexturePicker() {
+    const sel = $("texAdd");
+    while (sel.firstChild) sel.removeChild(sel.firstChild);
+    const add = (v, label, disabled) => {
+      const o = document.createElement("option");
+      o.setAttribute("value", v); o.setAttribute("data-v", v); o.value = v; o.textContent = label;
+      if (disabled) o.disabled = true;
+      sel.appendChild(o);
+    };
+    add("", "Choose a texture…");
+    add("-", "── Scanned from real worn prints ──", true);
+    for (const t of cat.textures.filter((x) => x.scan)) add(t.id, textureName(t.id) + (tex[t.id] && tex[t.id].on ? "  (applied)" : ""));
+    add("-", "── Generated wear ──", true);
+    for (const t of cat.textures.filter((x) => !x.scan && x.id !== "image")) add(t.id, textureName(t.id) + (tex[t.id] && tex[t.id].on ? "  (applied)" : ""));
+    sel.selectedIndex = 0;
+  }
+
   function buildTextures() {
+    buildTexturePicker();
     const box = $("textures");
     while (box.firstChild) box.removeChild(box.firstChild);
-    let scanHead = false;
-    for (const t of cat.textures) {
-      if (t.id === "image" && !texLayerId) continue;
-      if (t.scan && !scanHead) {
-        scanHead = true;
-        const h = document.createElement("div");
-        h.className = "hint";
-        h.textContent = "Scanned from real worn prints (dark = ink knocked out, on any shirt colour):";
-        box.appendChild(h);
-      }
-      tex[t.id] = tex[t.id] || { on: t.id === "image", strength: 0.4, scale: 1 };
-      const st = tex[t.id];
+    const applied = Object.entries(tex).filter(([id, t]) => t.on && (id !== "image" || texLayerId));
+    $("texEmpty").style.display = applied.length ? "none" : "block";
+    for (const [id, st] of applied) {
       const el = document.createElement("div");
       el.className = "ink";
-      el.innerHTML = `<div class="check"><input type="checkbox" ${st.on ? "checked" : ""}> ${esc(t.id === "image" ? "Your texture layer" : t.name.replace(/^Scan: /, ""))}</div>
-        <div class="field"><div class="title">Strength<span class="value">${fmt(st.strength)}</span></div><input type="range" min="0" max="1" step="0.02" value="${st.strength}" data-t="strength"></div>
-        <div class="field"><div class="title">Size<span class="value">${fmt(st.scale)}</span></div><input type="range" min="0.25" max="4" step="0.05" value="${st.scale}" data-t="scale"></div>`;
-      el.querySelector("input[type=checkbox]").addEventListener("change", (e) => { st.on = !!e.target.checked; save(); scheduleLive(50); });
+      el.innerHTML = `<div class="inkTop"><span class="nm">${esc(textureName(id))}</span><button class="rm">Remove</button></div>
+        <div class="field"><div class="title">Strength<span class="value">${Math.round(st.strength * 100)}%</span></div><input type="range" min="0" max="1" step="0.02" value="${st.strength}" data-t="strength"></div>
+        <div class="field"><div class="title">Size<span class="value">${fmt(st.scale)}×</span></div><input type="range" min="0.25" max="4" step="0.05" value="${st.scale}" data-t="scale"></div>
+        ${canRotate(id) ? `<div class="field"><div class="title">Rotation<span class="value">${Math.round(st.rotate || 0)}°</span></div><input type="range" min="0" max="360" step="1" value="${st.rotate || 0}" data-t="rotate"></div>` : ""}`;
+      el.querySelector(".rm").addEventListener("click", () => {
+        st.on = false;
+        if (id === "image") { texLayerId = null; setSel($("texLayer"), ""); }
+        setTimeout(buildTextures, 0); save(); scheduleLive(50);
+      });
       for (const inp of el.querySelectorAll("input[type=range]")) {
         const k = inp.getAttribute("data-t"), out = inp.parentNode.querySelector(".value");
-        inp.addEventListener("input", () => { st[k] = Number(inp.value); out.textContent = fmt(st[k]); save(); scheduleLive(350); });
-        inp.addEventListener("change", () => { st[k] = Number(inp.value); save(); scheduleLive(80); });
+        const show = () => { out.textContent = k === "strength" ? `${Math.round(st[k] * 100)}%` : k === "scale" ? `${fmt(st[k])}×` : `${Math.round(st[k])}°`; };
+        inp.addEventListener("input", () => { st[k] = Number(inp.value); show(); save(); scheduleLive(350); });
+        inp.addEventListener("change", () => { st[k] = Number(inp.value); show(); save(); scheduleLive(80); });
       }
       box.appendChild(el);
     }
+  }
+
+  function addTexture(id) {
+    if (!id || id === "-") return;
+    const old = tex[id] || { strength: 0.5, scale: 1, rotate: 0 };
+    delete tex[id];   // re-adding puts it at the end of the stack
+    tex[id] = { ...old, on: true };
+    buildTextures(); save(); scheduleLive(50);
   }
 
   function allLayers(layers, depth = 0, out = []) {
@@ -342,7 +380,8 @@
     if (!p.options.garment) opts.garment = keep.garment;
     presetId = p.id;
     for (const k of Object.keys(tex)) if (k !== "image") tex[k].on = false;
-    for (const t of p.options.textures || []) tex[t.type] = { on: true, strength: t.strength, scale: t.scale };
+    for (const t of p.options.textures || []) delete tex[t.type];   // keep the preset's order
+    for (const t of p.options.textures || []) tex[t.type] = { on: true, strength: t.strength, scale: t.scale, rotate: t.rotate || 0 };
     spotInks = null; solo = null; autoCuts = [];
     syncUI();
     save();
@@ -378,7 +417,7 @@
     o.width_in = Math.min(60, Math.max(0.5, widthPx / dpi));
     o.text = [];
     o.textures = Object.entries(tex).filter(([type, t]) => t.on && (type !== "image" || texLayerId))
-      .map(([type, t]) => ({ type, strength: t.strength, scale: t.scale, image_id: type === "image" ? `layer-${texLayerId}` : null }));
+      .map(([type, t]) => ({ type, strength: t.strength, scale: t.scale, rotate: t.rotate || 0, image_id: type === "image" ? `layer-${texLayerId}` : null }));
     if (o.mode === "spot") o.inks = spotInks && spotInks.length === o.spot_colors ? spotInks.slice() : ["#000000"];
     if (o.mode === "mono") o.inks = [o.inks[0]];
     if (o.mode === "duotone") o.inks = [o.inks[0], o.inks[1] || "#e94e77"];
@@ -871,6 +910,7 @@
       if (!h) { syncGarment(); return status("Shirt colour is a 6-digit hex, like #1b2a4a.", true); }
       setGarment(h);
     });
+    $("texAdd").addEventListener("change", () => addTexture(selVal($("texAdd"))));
     $("texLayer").addEventListener("change", () => {
       texLayerId = selVal($("texLayer")) || null;
       texCache.clear();

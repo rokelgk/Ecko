@@ -174,3 +174,8 @@ body.panelsHidden .psSide { display: none; }
 .outlineColour .check { margin: 0; flex: 1; }
 .outlineColour input[type=color] { width: 40px; height: 30px; flex: 0 0 auto; }
 .texHead { margin: 10px 0 4px; font-weight: 600; }
+.texCard { border: 1px solid var(--line); border-radius: 8px; padding: 8px 10px; margin: 8px 0; background: var(--panel); }
+.texCard label { margin: 6px 0 0; font-size: 12.5px; }
+.texTop { display: flex; justify-content: space-between; align-items: center; gap: 8px; }
+.texTop b { font-size: 13px; }
+details.board > summary { cursor: pointer; }

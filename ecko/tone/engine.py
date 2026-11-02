@@ -117,11 +117,30 @@ def _mirror(i: np.ndarray, n: int) -> np.ndarray:
     return np.where(t < n, t, 2 * n - 1 - t)
 
 
-def sample_scan(scan_id: str, xs, ys, tile_px: float) -> np.ndarray:
-    """Bilinear sample of a scan tiled (mirrored) every tile_px print pixels."""
+def _rotated(xs, ys, angle: float):
+    """Print coordinates turned by angle degrees (about the print origin): two (h, w) grids."""
+    a = math.radians(angle)
+    c, s = math.cos(a), math.sin(a)
+    X = np.asarray(xs, np.float64)[None, :]
+    Y = np.asarray(ys, np.float64)[:, None]
+    return X * c + Y * s, Y * c - X * s
+
+
+def sample_scan(scan_id: str, xs, ys, tile_px: float, angle: float = 0.0) -> np.ndarray:
+    """Bilinear sample of a scan tiled (mirrored) every tile_px print pixels, turned by angle degrees."""
     T = scan_levels(scan_id)
     th, tw = T.shape
     k = tw / tile_px
+    if angle:
+        U, V = _rotated(xs, ys, angle)
+        u, v = U * k - 0.5, V * k - 0.5
+        x0, y0 = np.floor(u), np.floor(v)
+        fx, fy = u - x0, v - y0
+        xa, xb = _mirror(x0.astype(np.int64), tw), _mirror(x0.astype(np.int64) + 1, tw)
+        ya, yb = _mirror(y0.astype(np.int64), th), _mirror(y0.astype(np.int64) + 1, th)
+        a = T[ya, xa] + (T[ya, xb] - T[ya, xa]) * fx
+        b = T[yb, xa] + (T[yb, xb] - T[yb, xa]) * fx
+        return a + (b - a) * fy
     u = np.asarray(xs, np.float64) * k - 0.5
     v = np.asarray(ys, np.float64) * k - 0.5
     x0, y0 = np.floor(u), np.floor(v)
@@ -324,7 +343,10 @@ def parse_options(data: dict | None) -> ToneOptions:
         scale = float(t.get("scale", 1.0))
         if not (0 <= strength <= 1 and 0.1 <= scale <= 8):
             raise ValueError("Texture strength must be 0-1 and scale 0.1-8.")
-        clean.append({"type": t["type"], "strength": strength, "scale": scale,
+        rotate = float(t.get("rotate", 0.0))
+        if not (math.isfinite(rotate) and -360 <= rotate <= 360):
+            raise ValueError("Texture rotation must be between -360 and 360 degrees.")
+        clean.append({"type": t["type"], "strength": strength, "scale": scale, "rotate": rotate % 360,
                       "image_id": t.get("image_id")})
     o.textures = clean
     o.text = _parse_text(o.text)
@@ -1229,13 +1251,19 @@ def texture_masks(xs, ys, o: ToneOptions, texture_images: dict | None = None):
         elif kind == "pinholes":   # tiny holes from dust and gaps in the screen emulsion
             remove |= noise.fbm(xs, ys, max(base * 0.08, 0.7), seed, 2) > 1 - s * 0.06
         elif TEXTURES[kind].get("scan"):
-            remove |= sample_scan(kind, xs, ys, base) < s   # strength 1 = all but clean areas
+            remove |= sample_scan(kind, xs, ys, base, t.get("rotate", 0.0)) < s   # strength 1 = all but clean areas
         elif kind == "image":
             tex = (texture_images or {}).get(t.get("image_id"))
             if tex is None:
                 continue
             th, tw = tex.shape
             tile_px = base  # one tile is 100 mm wide at scale 1
+            if t.get("rotate", 0.0):
+                U, V = _rotated(xs, ys, t["rotate"])
+                ix = np.floor(U / tile_px * tw).astype(np.int64) % tw
+                iy = np.floor(V / tile_px * tw).astype(np.int64) % th
+                remove |= tex[iy, ix] < s * 0.75
+                continue
             ix = (np.floor(np.asarray(xs) / tile_px * tw).astype(np.int64)) % tw
             iy = (np.floor(np.asarray(ys) / tile_px * tw).astype(np.int64)) % th
             remove |= tex[iy[:, None], ix[None, :]] < s * 0.75

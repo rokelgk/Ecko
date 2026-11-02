@@ -52,7 +52,8 @@ def test_scan_textures_match_between_python_and_js():
     import numpy as np
 
     from ecko.tone import engine as E
-    o = {"dpi": 300, "seed": 3, "textures": [{"type": sc["id"], "strength": 0.6, "scale": 0.7} for sc in E.SCANS[:8]]}
+    o = {"dpi": 300, "seed": 3, "textures": [{"type": sc["id"], "strength": 0.6, "scale": 0.7, "rotate": i * 47}
+                                             for i, sc in enumerate(E.SCANS[:8])]}
     xs = (np.arange(0, 900, 1.7) + 0.5).tolist()
     ys = (np.arange(0, 600, 2.3) + 0.5).tolist()
     remove, _ = E.texture_masks(np.array(xs), np.array(ys), E.parse_options(o))

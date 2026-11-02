@@ -93,7 +93,9 @@
       if (!(strength >= 0 && strength <= 1 && scale >= 0.1 && scale <= 8)) {
         throw new OptionError("Texture strength must be 0-1 and scale 0.1-8.");
       }
-      return { type: t.type, strength, scale, image_id: t.image_id || null };
+      const rotate = Number(t.rotate ?? 0);
+      if (!(Number.isFinite(rotate) && rotate >= -360 && rotate <= 360)) throw new OptionError("Texture rotation must be between -360 and 360 degrees.");
+      return { type: t.type, strength, scale, rotate: ((rotate % 360) + 360) % 360, image_id: t.image_id || null };
     });
     o.text = parseText(o.text);
     o.ink_edits = parseInkEdits(o.ink_edits);
@@ -1460,11 +1462,23 @@
     return v;
   }
 
-  function sampleScan(id, xs, ys, tilePx) {   // bilinear, mirrored tiles; same maths as the Python engine
+  function sampleScan(id, xs, ys, tilePx, angle = 0) {   // bilinear, mirrored tiles; same maths as the Python engine
     const T = scanLevels(id);
     if (!T) return null;
     const { q, w: tw, h: th } = T, k = tw / tilePx, gw = xs.length, gh = ys.length, out = new Float64Array(gw * gh);
     const mir = (i, n) => { const t = ((i % (2 * n)) + 2 * n) % (2 * n); return t < n ? t : 2 * n - 1 - t; };
+    if (angle) {   // turned: every pixel has its own texture position
+      const a = angle * Math.PI / 180, c = Math.cos(a), sn = Math.sin(a);
+      for (let i = 0; i < gh; i++) for (let j = 0; j < gw; j++) {
+        const U = xs[j] * c + ys[i] * sn, V = ys[i] * c - xs[j] * sn;
+        const u = U * k - 0.5, v = V * k - 0.5, x0 = Math.floor(u), y0 = Math.floor(v), fx = u - x0, fy = v - y0;
+        const xa = mir(x0, tw), xb = mir(x0 + 1, tw), ra = mir(y0, th) * tw, rb = mir(y0 + 1, th) * tw;
+        const t00 = q[ra + xa] / 7, t01 = q[ra + xb] / 7, t10 = q[rb + xa] / 7, t11 = q[rb + xb] / 7;
+        const ta = t00 + (t01 - t00) * fx, tb = t10 + (t11 - t10) * fx;
+        out[i * gw + j] = ta + (tb - ta) * fy;
+      }
+      return out;
+    }
     const xa = new Int32Array(gw), xb = new Int32Array(gw), fx = new Float64Array(gw);
     for (let j = 0; j < gw; j++) { const u = xs[j] * k - 0.5, x0 = Math.floor(u); fx[j] = u - x0; xa[j] = mir(x0, tw); xb[j] = mir(x0 + 1, tw); }
     for (let i = 0; i < gh; i++) {
@@ -1522,12 +1536,21 @@
         const a = fbm(xs, ys, Math.max(base * 0.08, 0.7), seed, 2);
         for (let k = 0; k < n; k++) if (a[k] > 1 - s * 0.06) remove[k] = 1;
       } else if (TEXTURES[kind].scan) {
-        const v = sampleScan(kind, xs, ys, base);
+        const v = sampleScan(kind, xs, ys, base, t.rotate || 0);
         if (v) for (let k = 0; k < n; k++) if (v[k] < s) remove[k] = 1;   // strength 1 = all but clean areas
       } else if (kind === "image") {
         const tex = (textureImages || {})[t.image_id];
         if (!tex) return;
         const tw = tex.w, th = tex.h, gw = xs.length;
+        if (t.rotate) {
+          const a = t.rotate * Math.PI / 180, c = Math.cos(a), sn = Math.sin(a), md = (v, n) => ((v % n) + n) % n;
+          for (let i2 = 0; i2 < ys.length; i2++) for (let j = 0; j < gw; j++) {
+            const U = xs[j] * c + ys[i2] * sn, V = ys[i2] * c - xs[j] * sn;
+            const ix = md(Math.floor(U / base * tw), tw), iy = md(Math.floor(V / base * tw), th);
+            if (tex.data[iy * tw + ix] < s * 0.75) remove[i2 * gw + j] = 1;
+          }
+          return;
+        }
         for (let i2 = 0; i2 < ys.length; i2++) {
           const iy = (((Math.floor(ys[i2] / base * tw)) % th) + th) % th;
           for (let j = 0; j < gw; j++) {

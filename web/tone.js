@@ -84,7 +84,7 @@
     o.width_in = Math.min(60, Math.max(0.5, widthIn()));
     o.dpi = parseInt($("dpi").value, 10);
     o.textures = Object.entries(tex).filter(([, t]) => t.on && (t.type !== "image" || t.image_id))
-      .map(([type, t]) => ({ type, strength: t.strength, scale: t.scale, image_id: t.image_id || null }));
+      .map(([type, t]) => ({ type, strength: t.strength, scale: t.scale, rotate: t.rotate || 0, image_id: t.image_id || null }));
     if (o.mode === "spot") o.inks = spotInks && spotInks.length === o.spot_colors ? spotInks : ["#000000"];
     if (o.mode === "mono") o.inks = [o.inks[0]];
     if (o.mode === "duotone") o.inks = [o.inks[0], o.inks[1] || "#e94e77"];
@@ -108,51 +108,84 @@
     $(id).innerHTML = items.map((i) => `<option value="${i.id}">${i.name}</option>`).join("");
   }
 
-  function buildPresets() {
-    $("presets").innerHTML = "";
-    for (const p of catalog.presets) {
-      const b = document.createElement("button");
-      b.type = "button";
-      b.dataset.id = p.id;
-      b.innerHTML = `${p.name}<small>${p.blurb}</small>`;
-      b.addEventListener("click", () => applyPreset(p));
-      $("presets").appendChild(b);
-    }
+  function buildPresets() {   // one dropdown; the chosen look's description shows underneath
+    $("presetSel").innerHTML = `<option value="">Custom (your own settings)</option>` +
+      catalog.presets.map((p) => `<option value="${p.id}">${esc(p.name)}</option>`).join("");
+    $("presetSel").addEventListener("change", () => {
+      const p = catalog.presets.find((x) => x.id === $("presetSel").value);
+      if (p) applyPreset(p);
+    });
+  }
+
+  // Textures work like a pattern overlay: pick one from the dropdown, then set its strength, size and
+  // rotation on its card. Pick again to stack another; the x removes one.
+  function textureName(id) {
+    if (id === "image") return "Your texture";
+    const t = catalog.textures.find((x) => x.id === id);
+    const n = t ? t.name.replace(/^Scan: /, "") : id;
+    return n.charAt(0).toUpperCase() + n.slice(1);
+  }
+  const canRotate = (id) => id === "image" || !!(catalog.textures.find((x) => x.id === id) || {}).scan;
+
+  function buildTexturePicker() {
+    const gen = catalog.textures.filter((t) => !t.scan && t.id !== "image");
+    const scans = catalog.textures.filter((t) => t.scan);
+    const opt = (t) => `<option value="${t.id}"${tex[t.id] && tex[t.id].on ? " disabled" : ""}>${esc(textureName(t.id))}${tex[t.id] && tex[t.id].on ? " (applied)" : ""}</option>`;
+    $("texAdd").innerHTML = `<option value="">Choose a texture…</option>` +
+      `<optgroup label="Scanned from real worn prints">${scans.map(opt).join("")}</optgroup>` +
+      `<optgroup label="Generated wear">${gen.map(opt).join("")}</optgroup>` +
+      (tex.image ? `<optgroup label="Yours">${opt({ id: "image" })}</optgroup>` : "");
+    $("texAdd").value = "";
   }
 
   function buildTextures() {
+    buildTexturePicker();
     const box = $("textures");
     box.innerHTML = "";
-    let scanHead = false;
-    for (const t of catalog.textures) {
-      if (t.id === "image" && !tex.image) continue;
-      if (t.scan && !scanHead) {   // the built-in scans of real worn prints get their own heading
-        scanHead = true;
-        const h = document.createElement("p");
-        h.className = "hint texHead";
-        h.textContent = "Scanned from real worn prints (dark = ink knocked out, so the shirt shows through on any colour):";
-        box.appendChild(h);
-      }
-      tex[t.id] = tex[t.id] || { type: t.id, on: false, strength: 0.4, scale: 1 };
-      const st = tex[t.id];
+    const applied = Object.entries(tex).filter(([, t]) => t.on);
+    $("texEmpty").hidden = applied.length > 0;
+    for (const [id, st] of applied) {
       const el = document.createElement("div");
-      el.className = "tex" + (st.on ? " on" : "");
-      el.innerHTML = `<label class="check"><input type="checkbox" ${st.on ? "checked" : ""}> ${t.scan ? t.name.replace(/^Scan: /, "") : t.name}</label>
-        <div class="sliders">
-          <label>Strength <input type="range" min="0" max="1" step="0.02" value="${st.strength}" data-k="strength"></label>
-          <label>Size <input type="range" min="0.25" max="4" step="0.05" value="${st.scale}" data-k="scale"></label>
-        </div>`;
-      el.querySelector("input[type=checkbox]").addEventListener("change", (e) => {
-        st.on = e.target.checked;
-        el.classList.toggle("on", st.on);
+      el.className = "tex on texCard";
+      el.innerHTML = `<div class="texTop"><b>${esc(textureName(id))}</b>
+          <button type="button" class="link" data-remove title="Remove this texture">Remove</button></div>
+        <label>Strength <output>${Math.round(st.strength * 100)}%</output>
+          <input type="range" min="0" max="1" step="0.02" value="${st.strength}" data-k="strength"></label>
+        <label>Size <output>${fmt(st.scale)}×</output>
+          <input type="range" min="0.25" max="4" step="0.05" value="${st.scale}" data-k="scale"></label>
+        ${canRotate(id) ? `<label>Rotation <output>${Math.round(st.rotate || 0)}°</output>
+          <input type="range" min="0" max="360" step="1" value="${st.rotate || 0}" data-k="rotate"></label>` : ""}`;
+      el.querySelector("[data-remove]").addEventListener("click", () => {
+        st.on = false;
+        buildTextures();
         changed();
       });
       el.querySelectorAll("input[type=range]").forEach((inp) => inp.addEventListener("input", () => {
-        st[inp.dataset.k] = parseFloat(inp.value);
+        const k = inp.dataset.k, v = parseFloat(inp.value);
+        st[k] = v;
+        inp.previousElementSibling.textContent = k === "strength" ? `${Math.round(v * 100)}%` : k === "scale" ? `${fmt(v)}×` : `${Math.round(v)}°`;
         changed();
       }));
       box.appendChild(el);
     }
+  }
+
+  function addTexture(id) {
+    if (!id) return;
+    const old = tex[id] || { type: id, strength: 0.5, scale: 1, rotate: 0 };
+    delete tex[id];   // re-adding puts it at the end of the stack
+    tex[id] = { ...old, type: id, on: true };
+    opts._preset = null;
+    buildTextures();
+    changed();
+  }
+
+  // Fold-out boards: opening one closes the others in the left column, so it never gets long.
+  function bindBoards() {
+    const boards = Array.from(document.querySelectorAll(".psLeft details.board"));
+    for (const d of boards) d.addEventListener("toggle", () => {
+      if (d.open) for (const o of boards) if (o !== d && o.open) o.open = false;
+    });
   }
 
   function buildGarments() {
@@ -385,7 +418,7 @@
     $("paletteRow").hidden = !(opts.mode === "spot" || opts.mode === "index" || (thr && opts.threshold_colors === "palette"));
     buildCuts();
     $("borderOpts").hidden = opts.border === "none";
-    document.querySelectorAll("#borderPicks button").forEach((b) => b.classList.toggle("on", b.dataset.id === opts.border));
+    $("borderSel").value = opts.border;
     $("bgTolRow").hidden = !opts.remove_background;
     buildInks();
     buildTextures();
@@ -415,7 +448,9 @@
     $("ghostOut").textContent = opts.ghost_mm > 0 ? `${fmt(opts.ghost_mm)} mm` : "off";
     $("ghostSOut").textContent = `${Math.round(opts.ghost_strength * 100)}%`;
     $("dpiNote").textContent = $("dpi").value;
-    document.querySelectorAll("#presets button").forEach((b) => b.classList.toggle("on", b.dataset.id === opts._preset));
+    $("presetSel").value = opts._preset || "";
+    const pr = catalog.presets.find((x) => x.id === opts._preset);
+    $("presetBlurb").textContent = pr ? pr.blurb : "Your own settings. Pick a look to start from it.";
   }
 
   function applyPreset(p) {
@@ -424,7 +459,8 @@
       text: opts.text, shirt_fit: opts.shirt_fit, underbase: opts.underbase, choke_mm: opts.choke_mm };
     opts = { ...structuredClone(catalog.defaults), ...keep, ...structuredClone(p.options), _preset: p.id };
     for (const t of Object.values(tex)) t.on = false;
-    for (const t of p.options.textures || []) tex[t.type] = { type: t.type, on: true, strength: t.strength, scale: t.scale };
+    for (const t of p.options.textures || []) delete tex[t.type];   // keep the preset's order
+    for (const t of p.options.textures || []) tex[t.type] = { type: t.type, on: true, strength: t.strength, scale: t.scale, rotate: t.rotate || 0 };
     if (!p.options.garment) opts.garment = $("garment").value || "#ffffff";
     spotInks = null;
     syncUI();
@@ -1034,15 +1070,10 @@
       .map((g) => `<optgroup label="${g.name}">${g.styles.map((id) => `<option value="${id}">${names[id]}</option>`).join("")}</optgroup>`).join("");
     buildSelect("palette", [{ id: "image", name: "From the picture" }, ...(catalog.palettes || [])]);
     buildSelect("border_shape", catalog.border_shapes || []);
-    $("borderPicks").innerHTML = "";
-    for (const b of catalog.borders || []) {
-      const btn = document.createElement("button");
-      btn.type = "button";
-      btn.dataset.id = b.id;
-      btn.textContent = b.name;
-      btn.addEventListener("click", () => { opts.border = b.id; opts._preset = null; syncUI(); changed(); });
-      $("borderPicks").appendChild(btn);
-    }
+    buildSelect("borderSel", catalog.borders || []);
+    $("borderSel").addEventListener("change", () => { opts.border = $("borderSel").value; opts._preset = null; syncUI(); changed(); });
+    $("texAdd").addEventListener("change", () => addTexture($("texAdd").value));
+    bindBoards();
     buildSelect("target", catalog.targets);
     buildSelect("shirt_fit", catalog.shirt_fits);
     buildPresets();
@@ -1065,7 +1096,7 @@
     if (firstVisit) {
       const first = catalog.presets[0];
       opts = { ...opts, ...structuredClone(first.options), _preset: first.id };
-      for (const t of first.options.textures || []) tex[t.type] = { type: t.type, on: true, strength: t.strength, scale: t.scale };
+      for (const t of first.options.textures || []) tex[t.type] = { type: t.type, on: true, strength: t.strength, scale: t.scale, rotate: t.rotate || 0 };
     }
     bind();
     syncUI();

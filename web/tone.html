@@ -38,7 +38,7 @@
 
 <main class="psLayout">
   <aside class="psSide psLeft" aria-label="Settings">
-    <details class="step" open>
+    <details class="step board" open>
       <summary><h2>Art</h2></summary>
       <label class="drop" id="drop">
         <input type="file" id="file" accept="image/png,image/jpeg,image/webp,image/gif,image/bmp,image/tiff" hidden>
@@ -53,24 +53,13 @@
       <button type="button" class="link" id="clearPicture" hidden>Remove picture</button>
     </details>
 
-    <details class="step" open>
-      <summary><h2>Border</h2></summary>
-      <div class="presets" id="borderPicks"></div>
-      <div id="borderOpts">
-        <div class="row">
-          <label>Shape <select id="border_shape"></select></label>
-        </div>
-        <label>Width <output id="borderOut"></output> <input type="range" id="border_mm" min="2" max="80" step="1"></label>
-      </div>
-      <p class="hint">Knocks the edge of the design out to the shirt, great for square photos. Fades shrink the dots, so the print stays DTF-safe.</p>
-    </details>
-
-    <details class="step" open>
+    <details class="step board">
       <summary><h2>Look</h2></summary>
-      <div class="presets" id="presets"></div>
+      <label>Look <select id="presetSel"></select></label>
+      <p class="hint" id="presetBlurb"></p>
     </details>
 
-    <details class="step" open>
+    <details class="step board">
       <summary><h2>Screen</h2></summary>
       <button type="button" class="primary" id="simpleProcess">Simple process</button>
       <p class="hint" id="simpleHint">Full colour in 4 screens. On a dark shirt: white base + cyan, magenta, yellow (the shirt is the black). On a light shirt: C, M, Y, K.</p>
@@ -121,14 +110,7 @@
       </div>
     </details>
 
-    <details class="step" open>
-      <summary><h2>Text</h2></summary>
-      <div id="textLayers" class="layers"></div>
-      <button type="button" class="ghost" id="addText">+ Add text</button>
-      <p class="hint">Curve bends a line into an arch (right) or a smile (left).</p>
-    </details>
-
-    <details class="step">
+    <details class="step board">
       <summary><h2>Tone</h2></summary>
       <label>Brightness <input type="range" id="brightness" min="-1" max="1" step="0.02"></label>
       <label>Contrast <input type="range" id="contrast" min="-1" max="1" step="0.02"></label>
@@ -142,15 +124,17 @@
       <button type="button" class="link" id="resetTone">Reset tone</button>
     </details>
 
-    <details class="step" open>
+    <details class="step board">
       <summary><h2>Texture</h2></summary>
-      <label class="ghost fileBtn addTexture">+ Add your own texture (image)<input type="file" id="texFile" accept="image/*" hidden></label>
-      <p class="hint">Any grunge, paper or distress image. Dark parts wear the print away. It appears in the list below with its own strength and size.</p>
+      <label>Add a texture <select id="texAdd"></select></label>
+      <p class="hint" id="texEmpty">No texture yet. Pick one, then set its strength, size and rotation on its card. Pick again to stack another.</p>
       <div id="textures" class="texList"></div>
-      <button type="button" class="ghost block" id="reseed" title="New random variation of every texture">Shuffle textures</button>
+      <label class="ghost fileBtn addTexture">+ Use your own texture image<input type="file" id="texFile" accept="image/*" hidden></label>
+      <p class="hint">Any grunge, paper or distress image: dark parts wear the print away, on any shirt colour.</p>
+      <button type="button" class="ghost block" id="reseed" title="New random variation of the generated textures">Shuffle generated textures</button>
     </details>
 
-    <details class="step" open>
+    <details class="step board">
       <summary><h2>Vintage &amp; bootleg</h2></summary>
       <label>Keyline (outline) <output id="outlineOut"></output> <input type="range" id="outline" min="0" max="0.06" step="0.002"></label>
       <label>Drop shadow <output id="shadowOut"></output> <input type="range" id="shadow" min="0" max="0.1" step="0.002"></label>
@@ -163,7 +147,26 @@
       <p class="hint">Keyline and shadow wrap the whole design in one ink, like a 90s bootleg. Ghost is a faint, broken second print offset from the first, like a screen that slipped. For worn-out ink, try Washed out, Fabric weave, Squeegee streaks and Screen pinholes in Texture, or the Bootleg, Flea-market, Sun-faded and Thrashed looks.</p>
     </details>
 
-    <details class="step" open>
+    <details class="step board">
+      <summary><h2>Border</h2></summary>
+      <label>Border <select id="borderSel"></select></label>
+      <div id="borderOpts">
+        <div class="row">
+          <label>Shape <select id="border_shape"></select></label>
+        </div>
+        <label>Width <output id="borderOut"></output> <input type="range" id="border_mm" min="2" max="80" step="1"></label>
+      </div>
+      <p class="hint">Knocks the edge of the design out to the shirt, great for square photos. Fades shrink the dots, so the print stays DTF-safe.</p>
+    </details>
+
+    <details class="step board">
+      <summary><h2>Text</h2></summary>
+      <div id="textLayers" class="layers"></div>
+      <button type="button" class="ghost" id="addText">+ Add text</button>
+      <p class="hint">Curve bends a line into an arch (right) or a smile (left).</p>
+    </details>
+
+    <details class="step board">
       <summary><h2>Print size</h2></summary>
       <label>Printing on <select id="target"></select></label>
       <div class="row">
@@ -174,7 +177,7 @@
       <p class="hint" id="sizeHint"></p>
     </details>
 
-    <details class="step">
+    <details class="step board">
       <summary><h2>Press control</h2></summary>
       <label>Smallest dot <output id="minOut"></output> <input type="range" id="min_dot" min="0" max="0.3" step="0.01"></label>
       <label>Largest dot before solid <output id="maxOut"></output> <input type="range" id="max_dot" min="0.6" max="1" step="0.01"></label>
@@ -205,13 +208,13 @@
   <aside class="psSide psRight" aria-label="Inks and output">
     <p class="hint sideEmpty" id="rightEmpty">Inks, print check and downloads show up here once there's a design.</p>
     <div id="results" hidden>
-      <details class="step" open>
+      <details class="step board" open>
         <summary><h2>Inks</h2></summary>
         <ol class="inkPanel" id="inkList"></ol>
         <p class="hint" id="soloNote" hidden></p>
         <p class="hint">Click a name to see that ink alone. Eye: print it or not. Slider: <b>choke</b> (right) shrinks the dots, <b>spread</b> (left) grows them.</p>
       </details>
-      <details class="step" open>
+      <details class="step board" open>
         <summary><h2>Download</h2></summary>
         <label>File name <input type="text" id="name" value="ecko-tone"></label>
         <button type="button" class="primary" id="dlPng">Print PNG (DTF / DTG)</button>
@@ -223,12 +226,12 @@
         </div>
         <p class="hint">Made for the shirt colour you picked. Real <span id="dpiNote">300</span> DPI, pure on/off transparency. The ZIP adds one 1-bit film per ink.</p>
       </details>
-      <details class="step" open>
+      <details class="step board">
         <summary><h2>Print check</h2></summary>
         <ul class="stats" id="stats"></ul>
         <ul class="warnings" id="warnings"></ul>
       </details>
-      <details class="step" id="batchCard">
+      <details class="step board" id="batchCard">
         <summary><h2>Batch</h2></summary>
         <p class="hint">Many designs × many shirt colours, same settings. The current design is included.</p>
         <label class="ghost fileBtn">Add more designs…<input type="file" id="batchFiles" multiple accept="image/*" hidden></label>

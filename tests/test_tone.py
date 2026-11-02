@@ -670,3 +670,14 @@ def test_scans_work_on_light_and_dark_shirts(logo):
         plain = E.parse_options({"width_in": 3, "garment": shirt})
         prep = E.prepare(logo, plain)
         assert (_alpha_of(prep, o) > 0).sum() < (_alpha_of(prep, plain) > 0).sum()
+
+
+def test_textures_rotate():
+    xs, ys = np.arange(0, 400, 2.0) + 0.5, np.arange(0, 300, 2.0) + 0.5
+    def mask(rot):
+        o = E.parse_options({"textures": [{"type": "scan_crackle", "strength": 0.7, "scale": 0.3, "rotate": rot}]})
+        return E.texture_masks(xs, ys, o)[0]
+    assert (mask(0) == mask(360)).all()
+    assert (mask(0) != mask(90)).mean() > 0.01
+    with pytest.raises(ValueError):
+        E.parse_options({"textures": [{"type": "worn", "rotate": 1000}]})
