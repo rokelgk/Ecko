@@ -3,48 +3,75 @@
 <head>
   <meta charset="utf-8">
   <style>
-    /* Plain flowing layout: Photoshop's panel engine is not a full browser. The settings sit in a
-       fixed-height box with its own scroll bar (S / M / L buttons change the height). */
-    body { font-family: sans-serif; font-size: 12px; color: var(--uxp-host-text-color, #e6e6e6); background-color: var(--uxp-host-background-color, #323232); margin: 0; padding: 8px 10px; }
-    .top { padding-bottom: 8px; border-bottom: 1px solid rgba(128, 128, 128, 0.45); margin-bottom: 6px; }
-    .brand { font-weight: bold; font-size: 13px; margin-bottom: 6px; }
+    /* Same look as the web app (dark theme): plain flowing layout, because Photoshop's panel engine is not
+       a full browser. Settings scroll inside fixed-height boxes; S / M / L / XL pick the height.
+       Full view: three columns like the web app (settings | preview | inks + output). */
+    body { font-family: sans-serif; font-size: 12px; color: #ececef; background-color: #141416; margin: 0; padding: 8px; }
+    .top { background-color: #1d1d20; border: 1px solid #2e2e33; border-radius: 6px; padding: 8px; margin-bottom: 6px; }
+    .brandRow { display: flex; flex-direction: row; align-items: center; margin-bottom: 6px; }
+    .brand { font-weight: bold; font-size: 14px; flex: 1 1 auto; color: #ececef; }
+    .brand span { color: #f97316; }
+    #viewBtn { padding: 3px 8px; font-size: 11px; }
     #run { width: 100%; padding: 7px; font-weight: bold; }
     button.wide { width: 100%; margin-top: 6px; padding: 5px; }
-    #liveBtn.on { border: 1px solid #22c55e; }
-    #liveBtn.off { border: 1px solid #f59e0b; }
+    #liveBtn.on { border: 1px solid #4ade80; }
+    #liveBtn.off { border: 1px solid #fbbf24; }
     .row2 { margin-top: 6px; display: flex; flex-direction: row; align-items: center; }
-    .row2 .lbl { font-size: 11px; margin-right: 4px; }
+    .row2 .lbl { font-size: 11px; margin-right: 4px; color: #9c9ca3; }
     .row2 button { flex: 1 1 0; margin-left: 4px; padding: 4px 2px; }
-    .sizes { margin-top: 6px; font-size: 11px; opacity: 0.85; }
-    .size { min-width: 30px; margin-left: 4px; padding: 2px 6px; }
-    #steps { height: 240px; overflow-y: scroll; padding-right: 6px; }
-    #status { margin-top: 6px; font-size: 11px; line-height: 1.35; }
+    .sizes { margin-top: 6px; font-size: 11px; color: #9c9ca3; }
+    .size { min-width: 28px; margin-left: 3px; padding: 2px 5px; }
+    #status { margin-top: 6px; font-size: 11px; line-height: 1.35; color: #ececef; }
     .err { color: #f87171; }
-    .sec { border-bottom: 1px solid rgba(128, 128, 128, 0.3); }
-    .head { padding: 8px 0; font-weight: bold; cursor: pointer; text-transform: uppercase; font-size: 11px; letter-spacing: 1px; }
+    #shirtBar { display: none; flex-direction: row; align-items: center; flex-wrap: wrap; margin-top: 6px; }
+    #shirtBar .lbl { font-size: 11px; color: #9c9ca3; margin-right: 6px; }
+    .swatch { width: 20px; height: 20px; border-radius: 10px; border: 2px solid #2e2e33; margin-right: 5px; cursor: pointer; }
+    .swatch.on { border-color: #f97316; }
+    #layout { display: flex; flex-direction: row; align-items: flex-start; }
+    #colLeft { flex: 1 1 auto; }
+    #center, #colRight { display: none; }
+    #steps, #stepsRight { height: 240px; overflow-y: scroll; padding-right: 4px; }
+    .sec { background-color: #2e2e32; border: 1px solid #3a3a40; border-radius: 6px; padding: 0 9px; margin-bottom: 6px; }
+    .head { padding: 8px 0; font-weight: bold; cursor: pointer; text-transform: uppercase; font-size: 11px; letter-spacing: 1px; color: #9c9ca3; }
     .body { padding: 0 0 10px; }
     .field { margin: 0 0 9px; }
-    .title { margin-bottom: 3px; }
-    .value { opacity: 0.8; margin-left: 6px; }
+    .title { margin-bottom: 3px; color: #ececef; }
+    .value { color: #9c9ca3; margin-left: 6px; }
     select, input[type=range] { width: 100%; }
     input[type=text] { width: 100%; }
     .check { margin: 4px 0 8px; }
-    .hint { opacity: 0.7; margin: 2px 0 8px; font-size: 11px; }
-    .foot { margin-top: 10px; font-size: 11px; opacity: 0.8; }
-    .link { text-decoration: underline; cursor: pointer; }
+    .hint { color: #9c9ca3; margin: 2px 0 8px; font-size: 11px; }
+    .foot { margin-top: 4px; font-size: 11px; color: #9c9ca3; }
+    .link { text-decoration: underline; cursor: pointer; color: #f97316; }
     .colourRow { display: flex; flex-direction: row; align-items: center; margin: 3px 0; }
-    .sw { width: 18px; height: 18px; border: 1px solid rgba(128, 128, 128, 0.8); margin-right: 6px; flex: 0 0 auto; }
+    .sw { width: 18px; height: 18px; border: 1px solid #55555c; border-radius: 4px; margin-right: 6px; flex: 0 0 auto; }
     .colourRow input { flex: 1 1 auto; }
-    .colourRow .tag { width: 64px; flex: 0 0 auto; font-size: 11px; opacity: 0.85; }
-    .ink { border: 1px solid rgba(128, 128, 128, 0.35); padding: 6px; margin: 0 0 6px; }
+    .colourRow .tag { width: 64px; flex: 0 0 auto; font-size: 11px; color: #9c9ca3; }
+    .ink { background-color: #1d1d20; border: 1px solid #3a3a40; border-radius: 6px; padding: 7px; margin: 0 0 6px; }
     .ink.off { opacity: 0.5; }
-    .ink.solo { border-color: #f59e0b; }
+    .ink.solo { border-color: #f97316; }
     .inkTop { display: flex; flex-direction: row; align-items: center; }
-    .inkTop .nm { flex: 1 1 auto; font-weight: bold; }
+    .inkTop .nm { flex: 1 1 auto; font-weight: bold; color: #ececef; }
     .inkTop button { margin-left: 4px; padding: 2px 6px; font-size: 11px; }
-    .small { font-size: 11px; opacity: 0.8; }
+    .small { font-size: 11px; color: #9c9ca3; }
     .warn { color: #fbbf24; }
     .ok { color: #4ade80; }
+    /* full view */
+    body.studio #actions { display: flex; flex-direction: row; align-items: center; }
+    body.studio #actions #run { flex: 0 0 220px; width: 220px; }
+    body.studio #actions #liveBtn { flex: 0 0 230px; width: 230px; margin: 0 0 0 6px; }
+    body.studio #actions .row2 { flex: 1 1 auto; margin: 0 0 0 10px; }
+    body.studio #shirtBar { display: flex; }
+    body.studio #colLeft { flex: 0 0 300px; width: 300px; }
+    body.studio #center { display: block; flex: 1 1 auto; margin: 0 6px; }
+    body.studio #colRight { display: block; flex: 0 0 290px; width: 290px; }
+    .tabs { display: flex; flex-direction: row; margin-bottom: 6px; }
+    .tab { padding: 4px 12px; margin-right: 4px; font-size: 12px; }
+    .tab.on { border: 1px solid #f97316; }
+    #stage { background-color: #ffffff; border: 1px solid #2e2e33; border-radius: 6px; display: flex; flex-direction: column;
+      align-items: center; justify-content: center; overflow: hidden; }
+    #previewImg { max-width: 100%; max-height: 100%; }
+    #stageEmpty { color: #6b6b70; font-size: 13px; text-align: center; padding: 20px; }
     #notPhotoshop { display: none; padding: 12px; font-size: 14px; line-height: 1.5; }
   </style>
 </head>
@@ -56,28 +83,25 @@
   </div>
   <div id="panel">
     <div class="top">
-      <div class="brand">Ecko Tone</div>
-      <button id="run">Apply to selected layer</button>
+      <div class="brandRow"><div class="brand">Ecko <span>Tone</span></div>
+        <button id="viewBtn" title="Switch between the compact panel and the full web-app layout">Full view</button></div>
+      <div id="actions">
+      <button id="run" uxp-variant="cta">Apply to selected layer</button>
       <button id="liveBtn" class="wide">Live editing: ON · click to pause</button>
       <div class="row2"><span class="lbl">Separations:</span>
         <button id="sepLayers">Make layers</button><button id="saveFilms">Save films…</button></div>
-      <div class="sizes">Settings height:
-        <button id="sizeS" class="size">S</button><button id="sizeM" class="size">M</button><button id="sizeL" class="size">L</button>
       </div>
+      <div class="sizes">Height:
+        <button id="sizeS" class="size">S</button><button id="sizeM" class="size">M</button><button id="sizeL" class="size">L</button><button id="sizeXL" class="size">XL</button>
+      </div>
+      <div id="shirtBar"><span class="lbl">Shirt</span><span id="swatches"></span></div>
       <div id="status">Select a layer, then Apply once. With Live on, every setting updates the result straight away.</div>
     </div>
 
+    <div id="layout">
+    <div id="colLeft">
     <div id="steps">
-    <div class="sec">
-      <div class="head">Look</div>
-      <div class="body">
-        <div class="field"><div class="title">Preset</div><select id="preset"></select></div>
-        <button id="simpleProcess" class="wide">Simple process (white base + 3 colours)</button>
-        <div class="hint">A starting point: everything below stays editable.</div>
-      </div>
-    </div>
-
-    <div class="sec">
+    <div class="sec" data-group="left">
       <div class="head">Art</div>
       <div class="body">
         <div class="check"><input type="checkbox" data-k="remove_background"> Remove flat background</div>
@@ -93,7 +117,16 @@
       </div>
     </div>
 
-    <div class="sec">
+    <div class="sec" data-group="left">
+      <div class="head">Look</div>
+      <div class="body">
+        <div class="field"><div class="title">Preset</div><select id="preset"></select></div>
+        <button id="simpleProcess" class="wide">Simple process (white base + 3 colours)</button>
+        <div class="hint">A starting point: everything below stays editable.</div>
+      </div>
+    </div>
+
+    <div class="sec" data-group="left">
       <div class="head">Screen</div>
       <div class="body">
         <div class="field"><div class="title">Colour</div><select data-k="mode" id="mode"></select></div>
@@ -140,16 +173,7 @@
       </div>
     </div>
 
-    <div class="sec">
-      <div class="head">Inks</div>
-      <div class="body">
-        <div id="inkList" class="hint">Apply once to see each ink here.</div>
-        <div class="hint">Eye: print it or not. Solo: show that ink alone (files always include every ink that's on).
-          Slider: spread (left) grows the dots, choke (right) shrinks them. Name: used on films and in the README.</div>
-      </div>
-    </div>
-
-    <div class="sec">
+    <div class="sec" data-group="left">
       <div class="head">Tone</div>
       <div class="body">
         <div class="field"><div class="title">Brightness</div><input type="range" data-k="brightness" min="-1" max="1" step="0.02"></div>
@@ -162,7 +186,7 @@
       </div>
     </div>
 
-    <div class="sec">
+    <div class="sec" data-group="left">
       <div class="head">Texture</div>
       <div class="body">
         <div class="field"><div class="title">Add a texture</div><select id="texAdd"></select></div>
@@ -175,7 +199,7 @@
       </div>
     </div>
 
-    <div class="sec">
+    <div class="sec" data-group="left">
       <div class="head">Vintage &amp; bootleg</div>
       <div class="body">
         <div class="field"><div class="title">Keyline (outline)</div>
@@ -196,7 +220,7 @@
       </div>
     </div>
 
-    <div class="sec">
+    <div class="sec" data-group="left">
       <div class="head">Shirt</div>
       <div class="body">
         <div class="field"><div class="title">Shirt colour</div><select id="garmentSel"></select></div>
@@ -208,7 +232,7 @@
       </div>
     </div>
 
-    <div class="sec">
+    <div class="sec" data-group="left">
       <div class="head">Border</div>
       <div class="body">
         <div class="field"><div class="title">Border</div><select data-k="border" id="border"></select></div>
@@ -219,7 +243,7 @@
       </div>
     </div>
 
-    <div class="sec">
+    <div class="sec" data-group="left">
       <div class="head">Press control</div>
       <div class="body">
         <div class="field"><div class="title">Printing on</div><select data-k="target" id="target"></select></div>
@@ -233,20 +257,42 @@
       </div>
     </div>
 
-    <div class="sec">
-      <div class="head">Output</div>
+    <div class="sec" data-group="right">
+      <div class="head">Inks</div>
+      <div class="body">
+        <div id="inkList" class="hint">Apply once to see each ink here.</div>
+        <div class="hint">Eye: print it or not. Solo: show that ink alone (files always include every ink that's on).
+          Slider: spread (left) grows the dots, choke (right) shrinks them. Name: used on films and in the README.</div>
+      </div>
+    </div>
+
+    <div class="sec" data-group="right">
+      <div class="head">Download</div>
       <div class="body">
         <button id="sepLayers2" class="wide">Make separation layers</button>
         <button id="saveFilms2" class="wide">Save separation films to a folder…</button>
         <div class="hint"><b>Layers</b>: one layer per ink in a group, in print order (first ink at the bottom), named with the ink name and colour.<br>
           <b>Films</b>: one 1-bit PNG per ink (black = ink) at your document's DPI, named with the ink name and colour, plus a README with each ink's name, hex, RGB, angle and coverage.<br>
           Inks switched off are skipped. For the full-colour print file, use File › Export on the result layer.</div>
-        <div class="title">Print check</div>
-        <div id="check" class="small">Apply once to check the print.</div>
       </div>
     </div>
 
+    <div class="sec" data-group="right">
+      <div class="head">Print check</div>
+      <div class="body">
+        <div id="check" class="small">Apply once to check the print.</div>
+      </div>
+    </div>
     <div class="foot">Settings are remembered. <span class="link" id="reset">Reset settings</span></div>
+    </div>
+    </div>
+
+    <div id="center">
+      <div class="tabs"><button id="tabPrint" class="tab on">Print</button><button id="tabOriginal" class="tab">Original</button></div>
+      <div id="stage"><img id="previewImg" alt="" style="display:none"><div id="stageEmpty">Select a layer and click Apply.<br>The preview shows here, on the shirt colour.</div></div>
+    </div>
+
+    <div id="colRight"><div id="stepsRight"></div></div>
     </div>
   </div>
   <script src="index.js"></script>

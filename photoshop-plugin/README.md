@@ -20,6 +20,11 @@ See [the sample sheet](../docs/vintage-looks.png).
 
 **Scanned textures**: 16 knockouts made from scans of real worn prints (cracks, crackle, crazing, scuffs, heather and linen). They tile without seams and work the same on light and dark shirts. See [the scanned textures sheet](../docs/scanned-textures.png).
 
+**Full view** (button at the top right of the panel) switches to the web app's layout: settings on the left,
+a live preview on the shirt colour in the middle (Print / Original tabs), and Inks, Download and Print check on
+the right, with shirt swatches on top. Float the panel (drag its tab out) and make it as big as you like; XL
+makes the columns tall. **Compact** switches back.
+
 After Apply, the **Inks** list works like the web page's: switch each ink on or off, solo it, choke or
 spread it, recolour spot inks, and give each ink your own name. Inks are named by colour
 ("Red", "Navy", "Athletic gold"…) until you rename them.

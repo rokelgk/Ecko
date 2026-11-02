@@ -95,7 +95,12 @@
     const h = sec.querySelector(".head");
     h.textContent = (open ? "▾ " : "▸ ") + h.textContent.replace(/^[▸▾] /, "");
   }
-  // Fold-out boards: one open at a time, so the panel never gets long. The first (Look) starts open.
+  // Fold-out boards, like the web app: one open at a time per column, so nothing gets long.
+  // In Full view the left (settings) and right (inks, download, check) columns fold separately.
+  let studio = false;
+  const rightSecs = sections.filter((x) => x.getAttribute("data-group") === "right");
+  const groupOf = (x) => (studio ? x.getAttribute("data-group") : "all");
+  const isOpen = (x) => x.querySelector(".body").style.display !== "none";
   function openSection(sec, open) {
     sec.querySelector(".body").style.display = open ? "block" : "none";
     markHead(sec, open);
@@ -103,10 +108,11 @@
   sections.forEach((s, i) => {
     openSection(s, i === 0);
     s.querySelector(".head").addEventListener("click", () => {
-      const open = s.querySelector(".body").style.display === "none";
-      for (const o of sections) if (o !== s) openSection(o, false);
+      const open = !isOpen(s);
+      for (const o of sections) if (o !== s && groupOf(o) === groupOf(s)) openSection(o, false);
       openSection(s, open);
-      if (open) $("steps").scrollTop = s.offsetTop - $("steps").offsetTop;
+      const box = s.parentNode;
+      if (open && box) box.scrollTop = s.offsetTop - box.offsetTop;
     });
   });
 
@@ -358,6 +364,7 @@
     $("garmentSw").style.backgroundColor = h;
     const match = cat.garments.find((g) => g.hex.toLowerCase() === h);
     setSel($("garmentSel"), match ? match.hex : "custom");
+    syncSwatches();
   }
   function syncOutline() {
     const auto = opts.outline_color === "auto";
@@ -366,7 +373,7 @@
     $("outlineSw").style.backgroundColor = auto ? E.toHex(E.contrastInk(E.hex(opts.garment))) : opts.outline_color;
     $("outlineRow").style.display = auto ? "none" : "flex";
   }
-  function setGarment(h) { opts.garment = h; syncGarment(); syncOutline(); save(); scheduleLive(50); }
+  function setGarment(h) { opts.garment = h; syncGarment(); syncOutline(); syncSwatches(); showPreview(); save(); scheduleLive(50); }
 
   // ---------------------------------------------------------------- presets, save, restore
 
@@ -599,7 +606,9 @@
       if (opts.thresholds.length !== autoCuts.length && was !== autoCuts.join()) buildCuts();
     }
     r.seps = null;
+    lastPreview = shrink(r.rgba, r.width, r.height);
     buildInkList();
+    showPreview();
   }
 
   async function paint(doc, s, out) {
@@ -784,6 +793,35 @@
     return concat([new Uint8Array([137, 80, 78, 71, 13, 10, 26, 10]), ...chunk("IHDR", ihdr),
       ...chunk("pHYs", new Uint8Array([...be32(ppm), ...be32(ppm), 1])), ...chunk("IDAT", concat(blocks)), ...chunk("IEND", new Uint8Array(0))]);
   }
+  function zlibStored(raw) {   // zlib stream with uncompressed blocks
+    const blocks = [new Uint8Array([0x78, 0x01])], MAX = 65535;
+    let a = 1, b = 0;
+    for (let i = 0; i < raw.length; i++) { a = (a + raw[i]) % 65521; b = (b + a) % 65521; }
+    for (let i = 0; i < raw.length; i += MAX) {
+      const n = Math.min(MAX, raw.length - i), last = i + MAX >= raw.length ? 1 : 0;
+      blocks.push(new Uint8Array([last, n & 255, n >> 8, ~n & 255, (~n >> 8) & 255]), raw.subarray(i, i + n));
+    }
+    blocks.push(new Uint8Array(be32(((b << 16) | a) >>> 0)));
+    return concat(blocks);
+  }
+  function pngRGB(rgb, w, h) {   // 8-bit RGB PNG, for the preview
+    const raw = new Uint8Array((w * 3 + 1) * h);
+    for (let y = 0; y < h; y++) raw.set(rgb.subarray(y * w * 3, (y + 1) * w * 3), y * (w * 3 + 1) + 1);
+    const ihdr = new Uint8Array([...be32(w), ...be32(h), 8, 2, 0, 0, 0]);
+    return concat([new Uint8Array([137, 80, 78, 71, 13, 10, 26, 10]), ...chunk("IHDR", ihdr), ...chunk("IDAT", zlibStored(raw)),
+      ...chunk("IEND", new Uint8Array(0))]);
+  }
+  function toBase64(bytes) {
+    const A = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/", parts = [];
+    let chunkStr = "";
+    for (let i = 0; i < bytes.length; i += 3) {
+      const n = (bytes[i] << 16) | ((bytes[i + 1] || 0) << 8) | (bytes[i + 2] || 0);
+      chunkStr += A[(n >> 18) & 63] + A[(n >> 12) & 63] + (i + 1 < bytes.length ? A[(n >> 6) & 63] : "=") + (i + 2 < bytes.length ? A[n & 63] : "=");
+      if (chunkStr.length > 65536) { parts.push(chunkStr); chunkStr = ""; }
+    }
+    parts.push(chunkStr);
+    return parts.join("");
+  }
   const safeName = (t) => String(t || "").replace(/[^A-Za-z0-9_-]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 40) || "ecko-tone";
 
   async function separations(kind) {
@@ -860,13 +898,104 @@
 
   // The settings live in a scrolling box with its own height, so a scroll bar always appears when they
   // don't fit. S / M / L picks the height (remembered); it never depends on Photoshop reporting sizes.
-  const SIZES = { S: 240, M: 420, L: 640 };
+  const SIZES = { S: 240, M: 420, L: 640, XL: 860 };
   let boxSize = "S";
   function fitPanel() {
-    const steps = $("steps");
-    steps.style.height = `${SIZES[boxSize] || SIZES.S}px`;
-    steps.style.overflowY = "scroll";
+    const h = SIZES[boxSize] || SIZES.S;
+    for (const id of ["steps", "stepsRight"]) { $(id).style.height = `${h}px`; $(id).style.overflowY = "scroll"; }
+    $("stage").style.height = `${Math.max(160, h - 34)}px`;
     for (const k of Object.keys(SIZES)) $(`size${k}`).style.fontWeight = k === boxSize ? "bold" : "normal";
+  }
+
+  // ---------------------------------------------------------------- Full view (the web app's layout)
+
+  function setStudio(on, quiet) {
+    studio = !!on;
+    document.body.className = studio ? "studio" : "";
+    const foot = $("steps").querySelector(".foot");
+    for (const x of rightSecs) {
+      if (studio) $("stepsRight").appendChild(x);
+      else $("steps").insertBefore(x, foot);
+    }
+    $("viewBtn").textContent = studio ? "Compact" : "Full view";
+    if (studio && !rightSecs.some(isOpen)) openSection(rightSecs[0], true);
+    if (!studio) {   // one column again: keep just one board open
+      const open = sections.filter(isOpen);
+      open.slice(1).forEach((x) => openSection(x, false));
+    }
+    fitPanel();
+    syncSwatches();
+    showPreview();
+    try { localStorage.setItem(`${STORE}-view`, studio ? "full" : "compact"); } catch (e) { /* ignore */ }
+    if (!quiet) {
+      status(studio ? "Full view: drag this panel's tab out to float it, then make it as wide and tall as you like (XL for tall screens)."
+        : "Compact view.");
+    }
+  }
+
+  function buildSwatches() {
+    const box = $("swatches");
+    while (box.firstChild) box.removeChild(box.firstChild);
+    for (const g of cat.garments) {
+      const d = document.createElement("span");
+      d.className = "swatch";
+      d.title = g.name;
+      d.setAttribute("data-hex", g.hex.toLowerCase());
+      d.style.backgroundColor = g.hex;
+      d.style.display = "inline-block";
+      d.addEventListener("click", () => setGarment(g.hex.toLowerCase()));
+      box.appendChild(d);
+    }
+    syncSwatches();
+  }
+  function syncSwatches() {
+    for (const d of $("swatches").children) d.className = d.getAttribute("data-hex") === (opts.garment || "").toLowerCase() ? "swatch on" : "swatch";
+  }
+
+  // Preview: a small copy of the result (or the original layer) on the shirt colour, like the web app.
+  let previewTab = "print", lastPreview = null, previewSeq = 0;
+  function shrink(rgba, w, h, max = 900) {
+    const k = Math.max(1, Math.max(w, h) / max), W = Math.max(1, Math.round(w / k)), H = Math.max(1, Math.round(h / k));
+    const out = new Uint8Array(W * H * 4);
+    for (let y = 0; y < H; y++) {
+      const sy = Math.min(h - 1, Math.floor((y + 0.5) * k));
+      for (let x = 0; x < W; x++) {
+        const sx = Math.min(w - 1, Math.floor((x + 0.5) * k)), q = (sy * w + sx) * 4, o = (y * W + x) * 4;
+        out[o] = rgba[q]; out[o + 1] = rgba[q + 1]; out[o + 2] = rgba[q + 2]; out[o + 3] = rgba[q + 3];
+      }
+    }
+    return { rgba: out, w: W, h: H };
+  }
+  async function showPreview() {
+    if (!studio) return;
+    const my = ++previewSeq;
+    for (const [id, t] of [["tabPrint", "print"], ["tabOriginal", "original"]]) $(id).className = previewTab === t ? "tab on" : "tab";
+    const g = E.hex(opts.garment);
+    $("stage").style.backgroundColor = opts.garment;
+    let src = null;
+    if (previewTab === "print") src = lastPreview;
+    else if (session) src = session.small || (session.small = shrink(session.rgba, session.w, session.h));
+    if (!src) { $("previewImg").style.display = "none"; $("stageEmpty").style.display = "block"; return; }
+    const rgb = new Uint8Array(src.w * src.h * 3);
+    for (let p = 0; p < src.w * src.h; p++) {   // over the shirt colour
+      const a = src.rgba[p * 4 + 3] / 255;
+      for (let c = 0; c < 3; c++) rgb[p * 3 + c] = Math.round(src.rgba[p * 4 + c] * a + g[c] * (1 - a));
+    }
+    let url = null;
+    try {   // Photoshop's own JPEG encoder when it has one (fast), else our PNG writer
+      if (imaging.encodeImageData) {
+        const img = await imaging.createImageDataFromBuffer(rgb, { width: src.w, height: src.h, components: 3, chunky: true,
+          colorSpace: "RGB", colorProfile: "sRGB IEC61966-2.1" });
+        const b64 = await imaging.encodeImageData({ imageData: img, base64: true });
+        img.dispose();
+        if (typeof b64 === "string" && b64.length) url = `data:image/jpeg;base64,${b64}`;
+      }
+    } catch (e) { url = null; }
+    if (!url) url = `data:image/png;base64,${toBase64(pngRGB(rgb, src.w, src.h))}`;
+    if (my !== previewSeq) return;
+    $("previewImg").src = url;
+    $("previewImg").style.display = "block";
+    $("stageEmpty").style.display = "none";
   }
   function setSize(k) {
     boxSize = k;
@@ -930,6 +1059,10 @@
     for (const id of ["saveFilms", "saveFilms2"]) $(id).addEventListener("click", () => separations("films"));
     try { boxSize = localStorage.getItem(`${STORE}-size`) || localStorage.getItem("ecko-tone-panel-size") || "S"; } catch (e) { boxSize = "S"; }
     for (const k of Object.keys(SIZES)) $(`size${k}`).addEventListener("click", () => setSize(k));
+    buildSwatches();
+    $("viewBtn").addEventListener("click", () => setStudio(!studio));
+    $("tabPrint").addEventListener("click", () => { previewTab = "print"; showPreview(); });
+    $("tabOriginal").addEventListener("click", () => { previewTab = "original"; showPreview(); });
     fitPanel();
     $("reset").addEventListener("click", () => {
       try { localStorage.removeItem(STORE); } catch (e) { /* ignore */ }
@@ -939,6 +1072,9 @@
       status("Settings reset.");
     });
     restore();
+    let view = "compact";
+    try { view = localStorage.getItem(`${STORE}-view`) || "compact"; } catch (e) { /* ignore */ }
+    setStudio(view === "full", true);
   } catch (e) {
     status(`Couldn't start: ${e.message || e}`, true);
   }
