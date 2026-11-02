@@ -123,7 +123,7 @@
   }
   function save() {
     try {
-      const s = { preset: sel("preset"), shirtLayer: $("shirtLayer").checked, live: $("live").checked };
+      const s = { preset: sel("preset"), shirtLayer: $("shirtLayer").checked, live };
       for (const id of Object.keys(FIELDS)) s[id] = num(id);
       for (const id of Object.keys(SELECTS)) s[id] = sel(id);
       localStorage.setItem(STORE, JSON.stringify(s));
@@ -137,7 +137,7 @@
     for (const id of Object.keys(FIELDS)) if (s[id] !== undefined) setSlider(id, s[id]);
     for (const id of Object.keys(SELECTS)) if (s[id] !== undefined) setSelect(id, s[id]);
     $("shirtLayer").checked = s.shirtLayer !== false;
-    $("live").checked = s.live !== false;
+    setLive(s.live !== false);
     labels();
   }
 
@@ -171,6 +171,15 @@
 
   // One "session" per Apply: the source pixels are kept so Live updates only re-render and
   // repaint the same result layer (no re-reading the layer, no new layers).
+  let live = true;
+  function setLive(on) {
+    live = !!on;
+    const b = $("liveBtn");
+    b.textContent = live ? "Live editing: ON · click to pause" : "Live editing: PAUSED · click to resume";
+    b.className = `wide ${live ? "on" : "off"}`;
+    if (!live) clearTimeout(liveTimer);
+  }
+
   let session = null;   // {docId, srcId, bounds, rgba, w, h, opaque, resultId, shirtId, prepKey, prep, rect}
   let busy = false, pending = false, liveTimer = null;
 
@@ -265,7 +274,7 @@
         notes = [...E.resolveFit(prep, o).notes, ...notes];
         session = s;
       }, { commandName: "Ecko Tone" });
-      status([$("live").checked ? "Done. Live is on: change any setting and this layer updates." : "Done. The result is on a new layer.", ...notes].join(" "));
+      status([live ? "Done. Live is on: change any setting and this layer updates." : "Done. The result is on a new layer.", ...notes].join(" "));
     } catch (e) {
       status(e.message || String(e), true);
     } finally {
@@ -276,14 +285,14 @@
 
   // Live: re-render into the same result layer after each change (coalesced while one is running).
   function scheduleLive(delay) {
-    if (!session || !$("live").checked) return;
+    if (!session || !live) return;
     clearTimeout(liveTimer);
     liveTimer = setTimeout(liveUpdate, delay);
   }
 
   async function liveUpdate() {
     const s = session;
-    if (!s || !$("live").checked) return;
+    if (!s || !live) return;
     if (busy) { pending = true; return; }
     const doc = app.activeDocument;
     if (!doc || doc.id !== s.docId || !findLayer(doc.layers, s.resultId)) {
@@ -309,6 +318,132 @@
       busy = false;
     }
     if (pending) { pending = false; liveUpdate(); }
+  }
+
+  // ---------------------------------------------------------------- separations
+
+  function film(bitmap, w, h, o) {   // same films as the web app: optional registration marks in a 0.5 in margin
+    if (!o.registration_marks) return { data: bitmap, w, h };
+    const m = Math.round(o.dpi * 0.5), W = w + 2 * m, H = h + 2 * m, out = new Uint8Array(W * H);
+    for (let y = 0; y < h; y++) out.set(bitmap.subarray(y * w, (y + 1) * w), (y + m) * W + m);
+    const r = Math.max(6, Math.round(o.dpi * 0.12)), lw = Math.max(1, Math.round(o.dpi / 150));
+    const marks = [[m / 2, m + h / 2], [w + m + m / 2, m + h / 2], [m + w / 2, m / 2], [m + w / 2, h + m + m / 2]];
+    for (const [cx, cy] of marks) {
+      for (let y = Math.floor(cy - r * 1.5); y <= cy + r * 1.5; y++) for (let x = Math.floor(cx - r * 1.5); x <= cx + r * 1.5; x++) {
+        if (x < 0 || y < 0 || x >= W || y >= H) continue;
+        const d = Math.hypot(x - cx, y - cy);
+        if (Math.abs(d - r) < lw / 2 + 0.5 || Math.abs(y - cy) < lw / 2 + 0.5 || Math.abs(x - cx) < lw / 2 + 0.5) out[y * W + x] = 1;
+      }
+    }
+    return { data: out, w: W, h: H };
+  }
+
+  // 1-bit PNG writer (Photoshop panels have no canvas). Rows are packed 8 px per byte and stored
+  // without compression: at 1 bit a film is still small, and this is exact and fast.
+  const CRC = (() => { const t = new Uint32Array(256); for (let n = 0; n < 256; n++) { let c = n; for (let k = 0; k < 8; k++) c = c & 1 ? 0xEDB88320 ^ (c >>> 1) : c >>> 1; t[n] = c >>> 0; } return t; })();
+  function crc32(parts) { let c = 0xFFFFFFFF; for (const b of parts) for (let i = 0; i < b.length; i++) c = CRC[(c ^ b[i]) & 255] ^ (c >>> 8); return (c ^ 0xFFFFFFFF) >>> 0; }
+  const be32 = (v) => [(v >>> 24) & 255, (v >>> 16) & 255, (v >>> 8) & 255, v & 255];
+  function chunk(type, data) {
+    const t = new Uint8Array([...type].map((ch) => ch.charCodeAt(0)));
+    return [new Uint8Array(be32(data.length)), t, data, new Uint8Array(be32(crc32([t, data])))];
+  }
+  function png1bit(bits, w, h, dpi) {   // bits: 1 = ink -> black
+    const rowLen = Math.ceil(w / 8) + 1, raw = new Uint8Array(rowLen * h);
+    for (let y = 0; y < h; y++) {
+      const o = y * rowLen; raw[o] = 0;
+      for (let x = 0; x < w; x++) if (!bits[y * w + x]) raw[o + 1 + (x >> 3)] |= 0x80 >> (x & 7);   // 1 = white
+    }
+    const blocks = [], MAX = 65535;
+    let a = 1, b = 0;
+    for (let i = 0; i < raw.length; i++) { a = (a + raw[i]) % 65521; b = (b + a) % 65521; }
+    blocks.push(new Uint8Array([0x78, 0x01]));
+    for (let i = 0; i < raw.length; i += MAX) {
+      const n = Math.min(MAX, raw.length - i), last = i + MAX >= raw.length ? 1 : 0;
+      blocks.push(new Uint8Array([last, n & 255, n >> 8, ~n & 255, (~n >> 8) & 255]), raw.subarray(i, i + n));
+    }
+    blocks.push(new Uint8Array(be32(((b << 16) | a) >>> 0)));
+    let len = 0; for (const x of blocks) len += x.length;
+    const z = new Uint8Array(len); let off = 0; for (const x of blocks) { z.set(x, off); off += x.length; }
+    const ihdr = new Uint8Array([...be32(w), ...be32(h), 1, 0, 0, 0, 0]);   // 1-bit greyscale
+    const ppm = Math.round(dpi / 0.0254);
+    const parts = [new Uint8Array([137, 80, 78, 71, 13, 10, 26, 10]), ...chunk("IHDR", ihdr),
+      ...chunk("pHYs", new Uint8Array([...be32(ppm), ...be32(ppm), 1])), ...chunk("IDAT", z), ...chunk("IEND", new Uint8Array(0))];
+    let total = 0; for (const x of parts) total += x.length;
+    const out = new Uint8Array(total); off = 0; for (const x of parts) { out.set(x, off); off += x.length; }
+    return out;
+  }
+  const safeName = (t) => String(t || "").replace(/[^A-Za-z0-9_-]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 40) || "ecko-tone";
+
+  async function separations(kind) {
+    const doc = app.activeDocument;
+    if (!doc) return status("Open a document first.", true);
+    if (busy) return status("Still working on the last change… try again in a moment.");
+    let folder = null;
+    if (kind === "films") {
+      try { folder = await require("uxp").storage.localFileSystem.getFolder(); }
+      catch (e) { return status(`Couldn't open a folder picker: ${e.message || e}`, true); }
+      if (!folder) return status("No folder chosen: nothing saved.");
+    }
+    // Use the layer from the last Apply (so it matches what you see); otherwise the selected layer.
+    let s = session && session.docId === doc.id && findLayer(doc.layers, session.srcId) ? session : null;
+    const layer = s ? null : doc.activeLayers[0];
+    if (!s && !layer) return status("Select a layer first.", true);
+    busy = true;
+    status(kind === "films" ? "Making films…" : "Making separation layers…");
+    try {
+      let msg = "";
+      await core.executeAsModal(async () => {
+        if (!s) s = await readSource(doc, layer);
+        let o = options(doc, s.w);
+        o.remove_background = o.remove_background && s.opaque;
+        const key = E.prepareKey(o);
+        if (!s.prep || s.prepKey !== key) { s.prep = E.prepare(s.rgba, s.w, s.h, o, null); s.prepKey = key; }
+        o = E.parseOptions({ ...o, width_in: Math.max(0.5, s.prep.crop[2] / o.dpi) });
+        const r = E.renderFull(s.prep, o, null, true);
+        const kept = r.plates.map((p, i) => [p, r.seps[i]]).filter(([p]) => p.on);
+        if (!kept.length) throw new Error("Every ink is switched off: nothing to separate.");
+        const left = s.bounds.left + s.prep.crop[0], top = s.bounds.top + s.prep.crop[1];
+        if (kind === "layers") {
+          let group = null;
+          try { group = await doc.createLayerGroup({ name: `Ecko separations (${kept.length})` }); } catch (e) { group = null; }
+          for (let i = 0; i < kept.length; i++) {
+            const [p, sep] = kept[i], n = String(i + 1).padStart(2, "0");
+            const lay = await doc.createLayer({ name: `${n} ${p.name} ${E.toHex(p.rgb)}` });
+            const buf = new Uint8Array(r.width * r.height * 4);
+            for (let k = 0; k < sep.length; k++) if (sep[k]) { buf[k * 4] = p.rgb[0]; buf[k * 4 + 1] = p.rgb[1]; buf[k * 4 + 2] = p.rgb[2]; buf[k * 4 + 3] = 255; }
+            const img = await imaging.createImageDataFromBuffer(buf, { width: r.width, height: r.height, components: 4, chunky: true,
+              colorSpace: "RGB", colorProfile: "sRGB IEC61966-2.1" });
+            await imaging.putPixels({ documentID: doc.id, layerID: lay.id, imageData: img, targetBounds: { left, top } });
+            img.dispose();
+            if (group) { try { await lay.move(group, constants.ElementPlacement.PLACEINSIDE); } catch (e) { /* stays loose */ } }
+          }
+          msg = `Done: ${kept.length} separation layer(s)${group ? " in the group \"Ecko separations\"" : ""}, first ink at the bottom.`;
+        } else {
+          const base = safeName((doc.title || doc.name || "ecko-tone").replace(/\.[^.]+$/, ""));
+          const rep = E.report(s.prep, o, r.plates, r.seps);
+          const lines = [`${base}: ${kept.length} separation(s)`, "",
+            `Print size: ${rep.inches[0]} x ${rep.inches[1]} in (${rep.cm[0]} x ${rep.cm[1]} cm) at ${o.dpi} DPI`,
+            `Screen: ${E.STYLES[o.style]}` + (E.GRAIN_STYLES.includes(o.style) ? `, grain ${o.grain_mm} mm` : `, ${o.lpi} LPI`), ""];
+          for (let i = 0; i < kept.length; i++) {
+            const [p, sep] = kept[i], f = film(sep, r.width, r.height, o), n = String(i + 1).padStart(2, "0");
+            const file = await folder.createFile(`${base}-${n}-${p.name.replace(/[^A-Za-z0-9]/g, "-")}.png`, { overwrite: true });
+            await file.write(png1bit(f.data, f.w, f.h, o.dpi), { format: require("uxp").storage.formats.binary });
+            let on = 0; for (const v of sep) on += v;
+            lines.push(`${n} ${p.name.padEnd(16)} ${E.toHex(p.rgb)}  angle ${(((p.angle % 180) + 180) % 180).toFixed(1).padStart(5)}  coverage ${(on / sep.length * 100).toFixed(1)}%`);
+          }
+          lines.push("", o.registration_marks ? "Films are black = ink, 1-bit, with registration marks in a 0.5 in margin." : "Films are black = ink, 1-bit.",
+            "Print order: as numbered (light inks first).");
+          const readme = await folder.createFile(`${base}-README.txt`, { overwrite: true });
+          await readme.write(lines.join("\n") + "\n");
+          msg = `Saved ${kept.length} film(s) + README to "${folder.name}".`;
+        }
+      }, { commandName: kind === "films" ? "Ecko Tone films" : "Ecko Tone separations" });
+      status(msg);
+    } catch (e) {
+      status(e.message || String(e), true);
+    } finally {
+      busy = false;
+    }
   }
 
   // ---------------------------------------------------------------- fit the panel / full window
@@ -352,7 +487,13 @@
     for (const id of Object.keys(SELECTS)) $(id).addEventListener("change", () => { labels(); save(); scheduleLive(50); });
     $("shirtLayer").addEventListener("change", save);
     $("preset").addEventListener("change", () => { applyPreset(); scheduleLive(50); });
-    $("live").addEventListener("change", () => { save(); if ($("live").checked) scheduleLive(50); });
+    $("liveBtn").addEventListener("click", () => {
+      setLive(!live); save();
+      if (live) { status(session ? "Live editing on: catching up with your changes…" : "Live editing on. Click Apply once to start."); scheduleLive(50); }
+      else status("Live editing paused. Change settings freely, then click the button again (or Apply) to update.");
+    });
+    for (const id of ["sepLayers", "sepLayers2"]) $(id).addEventListener("click", () => separations("layers"));
+    for (const id of ["saveFilms", "saveFilms2"]) $(id).addEventListener("click", () => separations("films"));
     $("run").addEventListener("click", run);
     try { boxSize = localStorage.getItem(`${STORE}-size`) || "S"; } catch (e) { boxSize = "S"; }
     for (const k of Object.keys(SIZES)) $(`size${k}`).addEventListener("click", () => setSize(k));

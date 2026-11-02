@@ -6,7 +6,7 @@ same engine as the stand-alone web page (`dist/ecko-tone.html`), and your docume
 resolution as the DPI.
 
 Includes the presets, all 10 patterns, the procedural textures, shirt colours and Fit to shirt.
-Text, mockups, batch and separations are in the web page.
+Separations: "Make layers" puts one layer per ink in a group; "Save films…" writes 1-bit film PNGs and a README to a folder you pick. "Live editing" (pause or resume with its button) repaints the result as you change settings. Text, mockups and batch are in the web page.
 
 **Status: experimental.** It hasn't been run inside Photoshop yet. The engine it uses is tested
 (`node --test tests/js/engine.test.js`) and matches the Python engine's results.

@@ -12,7 +12,12 @@
     .sizes { margin-top: 6px; font-size: 11px; opacity: 0.85; }
     .size { min-width: 30px; margin-left: 4px; padding: 2px 6px; }
     #steps { height: 240px; overflow-y: scroll; padding-right: 6px; }
-    #live { margin-right: 4px; }
+    button.wide { width: 100%; margin-top: 6px; padding: 5px; }
+    #liveBtn.on { border: 1px solid #22c55e; }
+    #liveBtn.off { border: 1px solid #f59e0b; }
+    .row2 { margin-top: 6px; display: flex; flex-direction: row; align-items: center; }
+    .row2 .lbl { font-size: 11px; margin-right: 4px; }
+    .row2 button { flex: 1 1 0; margin-left: 4px; padding: 4px 2px; }
     #status { margin-top: 6px; font-size: 11px; line-height: 1.35; }
     .err { color: #f87171; }
     .sec { border-bottom: 1px solid rgba(128, 128, 128, 0.3); }
@@ -39,7 +44,9 @@
     <div class="top">
       <div class="brand">Ecko Tone</div>
       <button id="run">Apply to selected layer</button>
-      <div class="check"><input type="checkbox" id="live" checked> Live: the result updates as you change any setting</div>
+      <button id="liveBtn" class="wide">Live editing: ON · click to pause</button>
+      <div class="row2"><span class="lbl">Separations:</span>
+        <button id="sepLayers">Make layers</button><button id="saveFilms">Save films…</button></div>
       <div class="sizes">Settings height:
         <button id="sizeS" class="size">S</button><button id="sizeM" class="size">M</button><button id="sizeL" class="size">L</button>
       </div>
@@ -117,6 +124,12 @@
       <div class="body">
         <div class="field"><div class="title">Printing on</div><select id="target"></select></div>
         <div class="hint">Uses your document's resolution as the DPI, so the pattern matches the web app at that size.</div>
+        <div class="field"><div class="title">Separations</div>
+          <button id="sepLayers2" class="wide">Make separation layers</button>
+          <button id="saveFilms2" class="wide">Save separation films to a folder…</button></div>
+        <div class="hint"><b>Layers</b>: one layer per ink in a group, in print order (first ink at the bottom), each in its ink colour.<br>
+          <b>Films</b>: one 1-bit PNG per ink (black = ink) at your document's DPI with registration marks, plus a README with angles and coverage. Ready for film output or a RIP.<br>
+          Inks switched off are skipped. For the full-colour print file, use File › Export on the result layer.</div>
       </div>
     </div>
 
