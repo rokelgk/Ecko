@@ -445,6 +445,7 @@
   async function render() {
     if (!hasDesign()) {
       $("preview").hidden = $("mockup").hidden = true;
+      drawView();
       $("empty").hidden = false;
       $("results").hidden = true;
       $("rightEmpty").hidden = false;
@@ -529,6 +530,7 @@
     if (v === "shirt" && was !== "shirt") renderMockup();
     if (v !== "print") $("loupe").hidden = true;
     else if (loupeAt && $("loupeImg").src) $("loupe").hidden = false;
+    drawView();
   }
 
   function showReport() {
@@ -689,8 +691,7 @@
   const view_ = { zoom: 1, x: 0, y: 0, renderedPx: 0 };
 
   function applyView() {
-    const t = `translate(${view_.x}px, ${view_.y}px) scale(${view_.zoom})`;
-    for (const id of ["preview", "original", "mockup"]) $(id).style.transform = t;
+    drawView();
     $("zoomBadge").textContent = Math.abs(view_.zoom - 1) < 0.01 ? "" : `${Math.round(view_.zoom * 100)}%`;
     // sharper preview when zoomed in (re-render at higher resolution, up to the limit)
     const st = $("stage"), want = Math.min(1600, Math.max(st.clientWidth, st.clientHeight) * (window.devicePixelRatio || 1) * Math.min(view_.zoom, 2));
@@ -707,14 +708,56 @@
 
   function fitView() { view_.zoom = 1; view_.x = 0; view_.y = 0; applyView(); }
 
-  function drawnRect(img) {   // where object-fit: contain actually drew the picture
-    const r = img.getBoundingClientRect(), nw = img.naturalWidth || 1, nh = img.naturalHeight || 1;
-    const s = Math.min(r.width / nw, r.height / nh), w = nw * s, h = nh * s;
-    return { left: r.left + (r.width - w) / 2, top: r.top + (r.height - h) / 2, width: w, height: h };
+  // Where a picture sits on the stage (stage pixels) at the current zoom and pan: fitted inside its box,
+  // then scaled about the box centre and moved, as a CSS transform would.
+  function viewRect(img) {
+    const bw = img.offsetWidth, bh = img.offsetHeight, nw = img.naturalWidth || 1, nh = img.naturalHeight || 1;
+    const s = Math.min(bw / nw, bh / nh), w = nw * s, h = nh * s;
+    const cx = img.offsetLeft + bw / 2, cy = img.offsetTop + bh / 2, z = view_.zoom;
+    return { left: cx + view_.x - (w / 2) * z, top: cy + view_.y - (h / 2) * z, width: w * z, height: h * z };
+  }
+
+  function shownImage() {   // the picture for the current view: null = nothing to show, false = still loading
+    for (const id of ["preview", "mockup", "original"]) {
+      const im = $(id);
+      if (!im.hidden) return im.complete && im.naturalWidth ? im : false;
+    }
+    return null;
+  }
+
+  // Draw only the visible part of the picture into a canvas the size of the stage: fixed memory at any zoom.
+  let drawQueued = false;
+  function drawView() {
+    if (drawQueued) return;
+    drawQueued = true;
+    requestAnimationFrame(() => { drawQueued = false; paintView(); });
+  }
+  function paintView() {
+    const c = $("viewCanvas"), st = $("stage"), dpr = Math.min(2, window.devicePixelRatio || 1);
+    const SW = st.clientWidth, SH = st.clientHeight;
+    const W = Math.max(1, Math.round(SW * dpr)), H = Math.max(1, Math.round(SH * dpr));
+    const img = shownImage();
+    if (img === false) return;   // a new picture is loading: keep showing the last one
+    if (c.width !== W) c.width = W;
+    if (c.height !== H) c.height = H;
+    const ctx = c.getContext("2d");
+    if (!ctx) return;
+    ctx.clearRect(0, 0, W, H);
+    if (!img) return;
+    const r = viewRect(img), nw = img.naturalWidth, nh = img.naturalHeight;
+    const x0 = Math.max(0, r.left), y0 = Math.max(0, r.top);
+    const x1 = Math.min(SW, r.left + r.width), y1 = Math.min(SH, r.top + r.height);
+    if (x1 <= x0 || y1 <= y0) return;
+    const sx = (x0 - r.left) / r.width * nw, sy = (y0 - r.top) / r.height * nh;
+    const sw = (x1 - x0) / r.width * nw, sh = (y1 - y0) / r.height * nh;
+    ctx.imageSmoothingEnabled = r.width * dpr / nw < 2;   // zoomed in: crisp pixels, like the print
+    ctx.imageSmoothingQuality = "high";
+    ctx.drawImage(img, sx, sy, sw, sh, x0 * dpr, y0 * dpr, (x1 - x0) * dpr, (y1 - y0) * dpr);
   }
 
   function togglePanels() {
     document.body.classList.toggle("panelsHidden");
+    drawView();
     $("togglePanels").classList.toggle("on", document.body.classList.contains("panelsHidden"));
   }
 
@@ -746,14 +789,17 @@
       const d = drag;
       drag = null;
       if (!d || d.moved || view !== "print" || $("preview").hidden) return;
-      const r = drawnRect($("preview"));
-      const fx = (e.clientX - r.left) / r.width, fy = (e.clientY - r.top) / r.height;
+      const sr = st.getBoundingClientRect(), r = viewRect($("preview"));
+      const fx = (e.clientX - sr.left - st.clientLeft - r.left) / r.width, fy = (e.clientY - sr.top - st.clientTop - r.top) / r.height;
       if (fx < 0 || fy < 0 || fx > 1 || fy > 1) return;
       loupeAt = { fx, fy };   // a click (not a drag) shows the real print pixels there
       $("stageHint").hidden = true;
       renderLoupe();
     });
     st.addEventListener("dblclick", fitView);
+    for (const id of ["preview", "original", "mockup"]) $(id).addEventListener("load", drawView);
+    if (typeof ResizeObserver !== "undefined") new ResizeObserver(drawView).observe(st);
+    window.addEventListener("resize", drawView);
     $("zoomIn").addEventListener("click", () => zoomAt(1.5));
     $("zoomOut").addEventListener("click", () => zoomAt(1 / 1.5));
     $("zoomFit").addEventListener("click", fitView);
