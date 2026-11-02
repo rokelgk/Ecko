@@ -9,7 +9,9 @@
   const E = window.EckoEngine;
   const host = window.EckoHost;
   const $ = (id) => document.getElementById(id);
-  const PROOF_MAX = 700;
+  // Preview detail (longest side of the live proof, in pixels).
+  const DETAIL = { fast: 700, sharp: 1200, max: 2000 };
+  const proofMax = () => DETAIL[(load('ui') || {}).detail] || DETAIL.fast;
   const PROOF_GRID = 17;
 
   const GARMENTS = [
@@ -118,10 +120,10 @@
   }
 
   function proofImage() {
-    const key = JSON.stringify(prepOpts());
+    const key = JSON.stringify(prepOpts()) + proofMax();
     if (state.proof && state.proofKey === key) return state.proof;
     const info = E.artInfo(state.art.original, state.prep);
-    const scale = Math.min(1, PROOF_MAX / Math.max(info.outWidth, info.outHeight));
+    const scale = Math.min(1, proofMax() / Math.max(info.outWidth, info.outHeight));
     state.proof = E.prepareArt(state.art.original, prepOpts(), scale);
     state.proofKey = key;
     return state.proof;
@@ -438,6 +440,7 @@
     }
     const body = $('regBody');
     body.innerHTML = '';
+    body.appendChild(fieldEl({ label: 'Mark thickness', type: 'select', opts: [['fine', 'Fine (0.5 pt)'], ['normal', 'Normal (1 pt)'], ['bold', 'Bold (2 pt)'], ['extra', 'Extra bold (3 pt)']] }, state.reg.weight || 'bold', (v) => { state.reg.weight = v; save(); afterRegChange(); }));
     body.appendChild(fieldEl({ label: 'Margin', type: 'select', opts: [[0.25, '0.25 in'], [0.5, '0.5 in'], [0.75, '0.75 in'], [1, '1 in']] }, state.reg.marginIn, (v) => { state.reg.marginIn = v; save(); afterRegChange(); }));
     if (host.name === 'photoshop') body.appendChild(fieldEl({ label: 'Add to document', type: 'check' }, state.regInDoc, (v) => { state.regInDoc = v; save(); }));
   }
@@ -838,6 +841,31 @@
     }
     host.showImage(img, rgba, ww, hh);
     $('viewHint').textContent = hint;
+    pushLive(rgba, ww, hh);
+  }
+
+  // Live view in Photoshop: the same picture, drawn into a document on the
+  // canvas, a moment after the panel updates (so dragging stays smooth).
+  let liveTimer = null, liveBusy = false, livePending = null, liveWarned = false;
+  function pushLive(rgba, w, h) {
+    if (host.name !== 'photoshop' || !host.showLive || ui.liveOff) return;
+    // Throttle, not debounce: while you drag, the canvas keeps updating
+    // (newest picture wins) instead of waiting for you to let go.
+    livePending = { rgba, w, h };
+    if (!liveBusy && !liveTimer) liveTimer = setTimeout(flushLive, 120);
+  }
+  async function flushLive() {
+    liveTimer = null;
+    if (liveBusy || !livePending) return;
+    const job = livePending;
+    livePending = null;
+    liveBusy = true;
+    try { await host.showLive(job.rgba, job.w, job.h); } catch (e) {
+      if (!liveWarned) { status('Live view in Photoshop failed: ' + e.message, true); liveWarned = true; }
+    } finally {
+      liveBusy = false;
+      if (livePending && !liveTimer) liveTimer = setTimeout(flushLive, 120);
+    }
   }
 
   // ---------- screens list ----------
@@ -852,6 +880,8 @@
     let vi = 0;
     state.inks.forEach((ink, i) => {
       const own = hasScreen(ink);
+      // A merged color is part of its target screen now: no row of its own.
+      if (!own && !ink.hidden) return;
       const s = own ? summary[vi++] : null;
       const row = document.createElement('div');
       row.className = 'scr' + (ink.role === 'underbase' ? ' ub' : '') + (ink.hidden ? ' off' : '') + (!own && !ink.hidden ? ' merged' : '');
@@ -866,19 +896,13 @@
         renderTabs(); renderMergeControls();
       });
       const meta = document.createElement('span'); meta.className = 'meta';
-      meta.textContent = (ink.hidden ? 'hidden' : !own ? `on ${ink.mergeInto}` : s ? `${(s.coverage * 100).toFixed(1)}% · ${s.mesh} mesh` : '') + (ink.erase && ink.erase.length ? ` · 🧹${ink.erase.length}` : '');
+      const mergedIn = (state.inks || []).filter((x) => x !== ink && x.mergeInto === ink.name && !x.hidden);
+      meta.textContent = (mergedIn.length ? `⊕${mergedIn.length} merged · ` : '') + (ink.hidden ? 'hidden' : s ? `${(s.coverage * 100).toFixed(1)}% · ${s.mesh} mesh` : '') + (ink.erase && ink.erase.length ? ` · 🧹${ink.erase.length}` : '');
       if (s) meta.title = `Mesh range ${s.meshRange}`;
       row.appendChild(n); row.appendChild(chip); row.appendChild(name); row.appendChild(meta);
       const btn = (txt, title, fn, on) => { const b = document.createElement('button'); b.className = 'btn ic' + (on ? ' on' : ''); b.textContent = txt; b.title = title; b.addEventListener('click', fn); row.appendChild(b); };
       btn(ink.hidden ? '◌' : '👁', ink.hidden ? 'Show this screen again' : 'Hide this screen (see the print without it)',
         () => editInks(`${ink.hidden ? 'Showed' : 'Hid'} ${ink.name}`, () => { ink.hidden = !ink.hidden; }), ink.hidden);
-      if (!own && !ink.hidden) {
-        btn('Unmerge', `Give ${ink.name} its own screen again`, () => editInks(`Unmerged ${ink.name}`, () => { delete ink.mergeInto; }));
-        row.lastChild.style.width = 'auto';
-        btn('✕', 'Remove', () => editInks(`Removed ${ink.name}`, () => { state.inks.splice(i, 1); }));
-        box.appendChild(row);
-        return;
-      }
       btn('⚙', 'Amount, levels and advanced settings for this color', () => { state.openInk = state.openInk === i ? -1 : i; renderScreens(); }, state.openInk === i);
       row.lastChild.classList.add('gear');
       if (ink.role !== 'underbase') btn(ink.locked ? '🔒' : '🔓', 'Lock this ink (kept when you start over with new inks)', () => { ink.locked = !ink.locked; renderScreens(); }, ink.locked);
@@ -1003,6 +1027,19 @@
     const lv = Object.assign({ inBlack: 0, inWhite: 1, gamma: 1, outBlack: 0, outWhite: 1 }, adj.levels || {});
     const h = (t) => { const e = document.createElement('h4'); e.textContent = t; box.appendChild(e); };
     const note = `Adjusted ${ink.name}`;
+    const mergedIn = (state.inks || []).filter((x) => x !== ink && x.mergeInto === ink.name && !x.hidden);
+    if (mergedIn.length) {
+      h('Merged into this screen');
+      for (const m of mergedIn) {
+        const r = document.createElement('div'); r.className = 'row';
+        const chip = document.createElement('span'); chip.className = 'chip'; chip.style.background = m.hex;
+        const t = document.createElement('span'); t.textContent = `${m.name} prints on this screen`;
+        const u = document.createElement('button'); u.className = 'btn small'; u.textContent = 'Unmerge';
+        u.addEventListener('click', () => editInks(`Unmerged ${m.name}`, () => { delete m.mergeInto; }));
+        r.appendChild(chip); r.appendChild(t); r.appendChild(u);
+        box.appendChild(r);
+      }
+    }
     h('How much of this color');
     box.appendChild(fieldEl({ label: 'Amount', type: 'range', min: 0, max: 2, step: 0.05, fmt: pct, tip: 'Scales this screen: under 100% prints less of the color, over 100% more.' },
       adj.amount == null ? 1 : adj.amount, (v, d) => setAdjust(ink, (a) => { a.amount = v; }, note, d)));
@@ -1253,6 +1290,18 @@
     $('popOut').textContent = '⤢ Full window';
     layout(); renderView();
   });
+  if ($('liveBtn')) {
+    const paintLive = () => { $('liveBtn').textContent = ui.liveOff ? '📺 Live: off' : '📺 Live: on'; $('liveBtn').classList.toggle('primary', !ui.liveOff); };
+    paintLive();
+    $('liveBtn').addEventListener('click', async () => {
+      ui.liveOff = !ui.liveOff; saveUi(); paintLive();
+      if (ui.liveOff) { try { await host.closeLive(); } catch (e) { /* already closed */ } } else if (state.result) renderView();
+    });
+  }
+  if ($('detailSel')) {
+    $('detailSel').value = ui.detail || 'fast';
+    $('detailSel').addEventListener('change', () => { ui.detail = $('detailSel').value; saveUi(); state.proof = null; schedule('tune', null); });
+  }
   $('togglePreview').addEventListener('click', () => { ui.previewHidden = !ui.previewHidden; saveUi(); layout(); });
   if ($('toTop')) $('toTop').addEventListener('click', () => { $('optionsPane').scrollTop = 0; });
   setupSplitter();

@@ -340,15 +340,26 @@ function setPx(img, x, y) {
   if (x >= 0 && y >= 0 && x < img.width && y < img.height) img.data[y * img.width + x] = 255;
 }
 
+// Registration target: crosshair, two rings and a solid center dot, so it
+// is easy to see and line up on a light table or pre-reg board.
 function drawTarget(img, cx, cy, r, lw) {
+  const half = lw / 2;
   for (let y = -r - lw; y <= r + lw; y++) {
     for (let x = -r - lw; x <= r + lw; x++) {
       const d = Math.hypot(x, y);
-      const ring = Math.abs(d - r * 0.6) <= lw / 2;
-      const cross = (Math.abs(x) <= lw / 2 && Math.abs(y) <= r) || (Math.abs(y) <= lw / 2 && Math.abs(x) <= r);
-      if (ring || cross) setPx(img, cx + x, cy + y);
+      const ring = Math.abs(d - r * 0.62) <= half || Math.abs(d - r * 0.32) <= half * 0.8;
+      const cross = (Math.abs(x) <= half && Math.abs(y) <= r) || (Math.abs(y) <= half && Math.abs(x) <= r);
+      const dot = d <= Math.max(lw * 0.9, r * 0.1);
+      if (ring || cross || dot) setPx(img, cx + x, cy + y);
     }
   }
+}
+
+// Mark line weight in points (1 pt = 1/72 in), at least 2 film pixels.
+const WEIGHT_PT = { fine: 0.5, normal: 1, bold: 2, extra: 3 };
+function markWidth(dpi, weight) {
+  const pt = typeof weight === 'number' ? weight : (WEIGHT_PT[weight] || WEIGHT_PT.bold);
+  return Math.max(2, Math.round((pt / 72) * dpi));
 }
 
 // Wrap a film in a margin with registration targets and a label.
@@ -363,14 +374,14 @@ function addMarks(film, o) {
     else out.data.set(row, (y + margin) * w + margin);
   }
   if (o.marks !== false && margin > 8) {
-    const r = Math.round(margin * 0.32), lw = Math.max(1, Math.round(film.dpi / 300));
+    const r = Math.round(margin * 0.38), lw = markWidth(film.dpi, o.weight);
     const m2 = Math.round(margin / 2);
     drawTarget(out, Math.round(w / 2), m2, r, lw);
     drawTarget(out, Math.round(w / 2), h - m2, r, lw);
     drawTarget(out, m2, Math.round(h / 2), r, lw);
     drawTarget(out, w - m2, Math.round(h / 2), r, lw);
   }
-  const lw = Math.max(1, Math.round(film.dpi / 300));
+  const lw = markWidth(film.dpi, o.weight);
   const line = (x0, y0, x1, y1) => {
     for (let y = Math.min(y0, y1); y <= Math.max(y0, y1); y++) for (let x = Math.min(x0, x1); x <= Math.max(x0, x1); x++) setPx(out, x, y);
   };
@@ -395,8 +406,8 @@ function addMarks(film, o) {
   }
   if (o.label && margin > 10) {
     // Bottom-left, kept clear of the centre registration target.
-    const room = Math.round(w / 2 - margin * 0.32 - margin * 0.25) - margin;
-    let scale = Math.max(1, Math.floor((margin * 0.22) / 7));
+    const room = Math.round(w / 2 - margin * 0.38 - margin * 0.25) - margin;
+    let scale = Math.max(1, Math.floor((margin * (o.weight === 'fine' ? 0.22 : 0.3)) / 7));
     let text = String(o.label);
     while (scale > 1 && text.length * 6 * scale > room) scale--;
     while (text.length > 4 && text.length * 6 * scale > room) text = text.slice(0, -1);
@@ -428,7 +439,7 @@ function recommendMesh(screen, film) {
   return { mesh: nearestMesh(lpi * 4.5), range: `${nearestMesh(lpi * 4)}–${nearestMesh(lpi * 5.5)}` };
 }
 
-module.exports = { renderFilm, renderBitmap, addMarks, thresholdMatrix, recommendMesh, drawText, MESHES };
+module.exports = { markWidth, renderFilm, renderBitmap, addMarks, thresholdMatrix, recommendMesh, drawText, MESHES };
 
   };
   defs["./image-ops"] = function (module, exports, require) {
@@ -728,7 +739,7 @@ function filmSettingsFor(screen, film) {
 
 // Pre-registration options shared by films, the Photoshop document and the
 // plate previews: { marks, crops, center, names, details, marginIn }.
-const REG_DEFAULTS = { marks: true, crops: true, center: false, names: true, details: true, marginIn: 0.5 };
+const REG_DEFAULTS = { marks: true, crops: true, center: false, names: true, details: true, marginIn: 0.5, weight: 'bold' };
 
 function filmLabel(result, screen, f, reg) {
   const r = Object.assign({}, REG_DEFAULTS, reg || {});
@@ -755,7 +766,7 @@ function renderScreenFilm(result, screen, film, reg) {
   const r = regFor(film, reg);
   const label = filmLabel(result, screen, f, r);
   const minDot = result.options && result.options.minDot ? result.options.minDot : 0;
-  return halftone.renderFilm(screen.plate, result.width, result.height, result.dpi, Object.assign({ minDot }, f, { label, marks: r.marks, crops: r.crops, center: r.center, marginIn: r.marginIn }));
+  return halftone.renderFilm(screen.plate, result.width, result.height, result.dpi, Object.assign({ minDot }, f, { label, marks: r.marks, crops: r.crops, center: r.center, marginIn: r.marginIn, weight: r.weight }));
 }
 
 // The same separation with marks and ink names drawn into every plate,
@@ -768,7 +779,7 @@ function applyRegistration(result, film, reg) {
   const screens = result.screens.map((s) => {
     const f = filmSettingsFor(s, film);
     const out = halftone.addMarks({ data: s.plate, width: result.width, height: result.height, dpi: result.dpi, bits: 8 },
-      { marks: r.marks, crops: r.crops, center: r.center, marginIn: r.marginIn, label: filmLabel(result, s, f, r) });
+      { marks: r.marks, crops: r.crops, center: r.center, marginIn: r.marginIn, weight: r.weight, label: filmLabel(result, s, f, r) });
     w = out.width; h = out.height;
     return Object.assign({}, s, { plate: out.data });
   });

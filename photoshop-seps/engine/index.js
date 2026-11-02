@@ -25,7 +25,7 @@ function filmSettingsFor(screen, film) {
 
 // Pre-registration options shared by films, the Photoshop document and the
 // plate previews: { marks, crops, center, names, details, marginIn }.
-const REG_DEFAULTS = { marks: true, crops: true, center: false, names: true, details: true, marginIn: 0.5 };
+const REG_DEFAULTS = { marks: true, crops: true, center: false, names: true, details: true, marginIn: 0.5, weight: 'bold' };
 
 function filmLabel(result, screen, f, reg) {
   const r = Object.assign({}, REG_DEFAULTS, reg || {});
@@ -52,7 +52,7 @@ function renderScreenFilm(result, screen, film, reg) {
   const r = regFor(film, reg);
   const label = filmLabel(result, screen, f, r);
   const minDot = result.options && result.options.minDot ? result.options.minDot : 0;
-  return halftone.renderFilm(screen.plate, result.width, result.height, result.dpi, Object.assign({ minDot }, f, { label, marks: r.marks, crops: r.crops, center: r.center, marginIn: r.marginIn }));
+  return halftone.renderFilm(screen.plate, result.width, result.height, result.dpi, Object.assign({ minDot }, f, { label, marks: r.marks, crops: r.crops, center: r.center, marginIn: r.marginIn, weight: r.weight }));
 }
 
 // The same separation with marks and ink names drawn into every plate,
@@ -65,7 +65,7 @@ function applyRegistration(result, film, reg) {
   const screens = result.screens.map((s) => {
     const f = filmSettingsFor(s, film);
     const out = halftone.addMarks({ data: s.plate, width: result.width, height: result.height, dpi: result.dpi, bits: 8 },
-      { marks: r.marks, crops: r.crops, center: r.center, marginIn: r.marginIn, label: filmLabel(result, s, f, r) });
+      { marks: r.marks, crops: r.crops, center: r.center, marginIn: r.marginIn, weight: r.weight, label: filmLabel(result, s, f, r) });
     w = out.width; h = out.height;
     return Object.assign({}, s, { plate: out.data });
   });

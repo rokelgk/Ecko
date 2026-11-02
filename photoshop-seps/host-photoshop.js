@@ -55,8 +55,12 @@
     onArtworkChosen: null,
 
     async getArtwork() {
-      const doc = app.activeDocument;
+      // Never read our own live-preview document as artwork: fall back to
+      // the document the art came from.
+      let doc = app.activeDocument;
+      if (doc && doc.id === this._liveId) doc = app.documents.find((d) => d.id === this._artId) || null;
       if (!doc) return null;
+      this._artId = doc.id;
       return modal('Read artwork for separation', async () => {
         const pix = await imaging.getPixels({ documentID: doc.id, componentSize: 8, colorSpace: 'RGB', colorProfile: 'sRGB IEC61966-2.1' });
         const id = pix.imageData;
@@ -70,6 +74,39 @@
         id.dispose();
         return out;
       });
+    },
+
+    // Live view on the Photoshop canvas: a document named "Ecko Seps - Live"
+    // that is redrawn after every change (whatever view the panel shows).
+    async showLive(rgba, w, h) {
+      const rgb = new Uint8Array(w * h * 3);
+      for (let p = 0; p < w * h; p++) { rgb[p * 3] = rgba[p * 4]; rgb[p * 3 + 1] = rgba[p * 4 + 1]; rgb[p * 3 + 2] = rgba[p * 4 + 2]; }
+      return modal('Update Ecko Seps live view', async () => {
+        let doc = this._liveId ? app.documents.find((d) => d.id === this._liveId) : null;
+        if (doc && (Math.round(doc.width) !== w || Math.round(doc.height) !== h)) {
+          await doc.closeWithoutSaving();
+          doc = null;
+        }
+        if (!doc) {
+          doc = await app.documents.add({ width: w, height: h, resolution: 72, mode: 'RGBColorMode', fill: 'white', name: 'Ecko Seps - Live' });
+          this._liveId = doc.id;
+          const layer = await doc.createLayer({ name: 'Ecko Seps live view' });
+          this._liveLayer = layer.id;
+        }
+        const id = await imaging.createImageDataFromBuffer(rgb, { width: w, height: h, components: 3, chunky: true, colorProfile: 'sRGB IEC61966-2.1', colorSpace: 'RGB' });
+        try {
+          await imaging.putPixels({ documentID: doc.id, layerID: this._liveLayer, imageData: id, replace: true, targetBounds: { left: 0, top: 0 } });
+        } finally {
+          id.dispose();
+        }
+      });
+    },
+
+    closeLive() {
+      const doc = this._liveId ? app.documents.find((d) => d.id === this._liveId) : null;
+      this._liveId = null;
+      if (doc) return modal('Close Ecko Seps live view', () => doc.closeWithoutSaving());
+      return null;
     },
 
     async showImage(img, rgba, w, h) {

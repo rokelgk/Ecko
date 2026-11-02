@@ -81,7 +81,7 @@ test('every glyph in the label font is 5x7', () => {
 
 test('film label stays clear of the bottom registration target', () => {
   const f = renderFilm(new Uint8Array(300 * 100), 300, 100, 100, { type: 'threshold', dpi: 100, marginIn: 0.5, label: 'A VERY LONG LABEL THAT WOULD NOT FIT ANYWHERE NEAR THE TARGET 55 LPI' });
-  const m = 50, cx = f.width / 2, r = Math.round(m * 0.32);
+  const m = 50, cx = f.width / 2, r = Math.round(m * 0.38) + engine.halftone.markWidth(100, 'bold');
   // Nothing inked between the end of the label zone and the target, on the label rows.
   for (let y = f.height - m; y < f.height; y++) {
     for (let x = cx - r - 8; x < cx - r - 1; x++) assert.strictEqual(f.data[y * f.width + x], 0, `${x},${y}`);
@@ -108,4 +108,13 @@ test('registered results keep the preview size separate from the padded plates',
   const reg = engine.applyRegistration(r, engine.presets.getPreset('spot').film, { marks: true });
   assert.ok(reg.width > r.width);
   assert.strictEqual(reg.previewWidth * reg.previewHeight * 4, reg.preview.length);
+});
+
+test('registration mark thickness follows the chosen weight in points', () => {
+  const { markWidth } = engine.halftone;
+  assert.strictEqual(markWidth(720, 'normal'), 10); // 1 pt at 720 dpi
+  assert.strictEqual(markWidth(300, 'bold'), 8); // 2 pt at 300 dpi
+  assert.ok(markWidth(300, 'fine') >= 2);
+  const ink = (wgt) => renderFilm(new Uint8Array(200 * 100), 200, 100, 300, { type: 'threshold', dpi: 300, marginIn: 0.5, weight: wgt }).data.reduce((a, v) => a + (v ? 1 : 0), 0);
+  assert.ok(ink('bold') > ink('normal') && ink('normal') > ink('fine'));
 });

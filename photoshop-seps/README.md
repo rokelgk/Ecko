@@ -29,7 +29,9 @@ Pick the job type, the shirt color and the number of screens, then press
   coordinates, so they carry to the full-size output, and the underbase
   follows. Undo or clear any time; each screen shows its 🧹 count.
 - **Merge screens:** fold any screen into another (for example Highlight
-  White into the Underbase) so both print on one screen; unmerge any time.
+  White into the Underbase): the merged color disappears as a screen and
+  film and prints on the target (shown as "⊕ merged"; unmerge from the
+  target's ⚙ panel).
   At 5 screens or fewer the highlight white is merged into the underbase
   automatically, so low counts spend screens on real colors.
 - **Colors in your art:** a strip of the art's distinct colors with their
@@ -42,6 +44,9 @@ Pick the job type, the shirt color and the number of screens, then press
   and fine-grain knockouts, or your own texture image; amount, size,
   softness, strength, invert, new pattern, and apply to all screens, the
   underbase only or the top colors only.
+- **Live view in Photoshop (📺):** a "Ecko Seps - Live" document on the
+  canvas redraws after every change, showing whatever view the panel shows.
+  **Detail** (Fast / Sharp / Max) sets how sharp the live proof is.
 - **Aztec carved theme:** stepped-fret bands, sun-stone glyph, carved card
   corners and step-pyramid dividers in obsidian, gold, terracotta and jade
   (pure CSS + inline SVG). The ◈ Theme button switches to the plain look.
