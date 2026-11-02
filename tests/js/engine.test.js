@@ -213,3 +213,16 @@ test("inks are named by colour, like the Python engine", () => {
   assert.strictEqual(p2[0].label, "Vegas Gold");
   assert.throws(() => E.parseOptions({ ink_edits: { Ink: { name: "x".repeat(41) } } }), /40 characters/);
 });
+
+test("vintage extras: wear textures, keyline + shadow, ghost print", () => {
+  const { rgba, w, h } = box();
+  const inked = (o) => { const r = E.renderFull(E.prepare(rgba, w, h, o), o); let n = 0; for (let k = 3; k < r.rgba.length; k += 4) { assert.ok(r.rgba[k] === 0 || r.rgba[k] === 255); if (r.rgba[k]) n++; } return n; };
+  const base = E.parseOptions({ width_in: 3 }), n0 = inked(base);
+  for (const type of ["washed", "fabric", "streaks", "pinholes"]) {
+    assert.ok(inked(E.parseOptions({ width_in: 3, textures: [{ type, strength: 0.8, scale: 1 }] })) < n0 * 0.97, type);
+  }
+  const p0 = E.prepare(rgba, w, h, base), o1 = E.parseOptions({ width_in: 3, outline: 0.03, shadow: 0.05 });
+  const p1 = E.prepare(rgba, w, h, o1);
+  assert.ok(p1.srcW > p0.srcW && p1.crop[0] < p0.crop[0]);
+  assert.ok(inked(E.parseOptions({ width_in: 3, ghost_mm: 1.5, ghost_strength: 0.8 })) > n0);
+});

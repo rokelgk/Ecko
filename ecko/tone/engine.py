@@ -82,6 +82,10 @@ TEXTURES = {
     "paper": {"label": "Paper fibres", "size_mm": 2.5, "adds_ink": False},
     "scratches": {"label": "Scratches", "size_mm": 30.0, "adds_ink": False},
     "toner": {"label": "Toner specks (adds ink)", "size_mm": 1.5, "adds_ink": True},
+    "washed": {"label": "Washed out (faded ink)", "size_mm": 3.0, "adds_ink": False},
+    "fabric": {"label": "Fabric weave showing through", "size_mm": 0.9, "adds_ink": False},
+    "streaks": {"label": "Squeegee streaks (uneven ink)", "size_mm": 14.0, "adds_ink": False},
+    "pinholes": {"label": "Screen pinholes", "size_mm": 4.0, "adds_ink": False},
     "image": {"label": "Your texture image", "size_mm": 100.0, "adds_ink": False},
 }
 
@@ -193,6 +197,12 @@ class ToneOptions:
     border: str = "none"             # edge knockout: none | fade | grunge | torn | storm | barbwire
     border_mm: float = 15.0          # how far in from the edge the border reaches
     border_shape: str = "rect"       # rect | oval | rounded
+    # Vintage / bootleg extras
+    outline: float = 0.0             # keyline around the whole design, as a share of its width (0 = off)
+    shadow: float = 0.0              # offset drop shadow, as a share of the design width (0 = off)
+    outline_color: str = "auto"      # auto (stands out on the shirt) or #rrggbb
+    ghost_mm: float = 0.0            # ghost / slur: a faint second print offset by this much (0 = off)
+    ghost_strength: float = 0.5      # how much of the ghost prints
 
     # Settings that change the prepared source (the slow step).
     def prepare_key(self) -> tuple:
@@ -200,7 +210,9 @@ class ToneOptions:
         return (self.remove_background, round(float(self.bg_tolerance), 2), round(float(self.sharpen), 3),
                 self.mode == "spot" and int(self.spot_colors), text,
                 text and _text_work_width(self), int(self.denoise), round(float(self.smooth_mm), 3),
-                self.smooth_mm and round(self.width_in * self.dpi))
+                self.smooth_mm and round(self.width_in * self.dpi),
+                round(float(self.outline), 4), round(float(self.shadow), 4),
+                (self.outline or self.shadow) and outline_rgb(self))
 
 
 _RANGES = {
@@ -211,7 +223,7 @@ _RANGES = {
     "min_dot": (0, 0.5), "max_dot": (0.5, 1), "dot_gain": (0, 0.4), "roughness": (0, 1),
     "misregister_mm": (0, 5), "bg_tolerance": (1, 80), "seed": (0, 2**31 - 1), "choke_mm": (0, 1),
     "threshold_levels": (2, 8), "threshold_soft": (0, 0.3), "smooth_mm": (0, 3), "denoise": (0, 3),
-    "border_mm": (1, 120),
+    "border_mm": (1, 120), "outline": (0, 0.06), "shadow": (0, 0.1), "ghost_mm": (0, 4), "ghost_strength": (0, 1),
 }
 
 
@@ -257,6 +269,8 @@ def parse_options(data: dict | None) -> ToneOptions:
     if o.mode == "duotone" and len(o.inks) < 2:
         raise ValueError("Duotone needs two ink colours.")
     _hex(o.garment)
+    if o.outline_color != "auto":
+        o.outline_color = to_hex(_hex(o.outline_color))
     if not isinstance(o.textures, list) or len(o.textures) > 8:
         raise ValueError("Up to 8 textures are supported.")
     clean = []
@@ -466,6 +480,41 @@ def _compose_text(rgb, alpha, o: ToneOptions):
     return out_rgb, out_a
 
 
+def outline_rgb(o: ToneOptions) -> tuple:
+    """The keyline / shadow colour: chosen, or whichever stands out on the shirt."""
+    return tuple(_hex(o.outline_color)) if o.outline_color != "auto" else tuple(contrast_ink(_hex(o.garment)))
+
+
+def _add_outline(rgb, alpha, o: ToneOptions):
+    """Bootleg keyline + drop shadow under the art, in one ink colour. They become part of the picture,
+    so every mode separates them like any other colour. Returns rgb, alpha and the (x, y) offset of
+    the new box relative to the old one."""
+    h, w = alpha.shape
+    r, d = o.outline * w, o.shadow * w
+    pad = int(math.ceil(r + d)) + 2
+    A = np.zeros((h + 2 * pad, w + 2 * pad), np.float32)
+    A[pad:pad + h, pad:pad + w] = alpha
+    C = np.zeros((h + 2 * pad, w + 2 * pad, 3), np.float32)
+    C[pad:pad + h, pad:pad + w] = rgb
+    under = A
+    if r > 0:
+        outside = (A <= 0.5).astype(np.uint8)
+        dist = cv2.distanceTransform(outside, cv2.DIST_L2, cv2.DIST_MASK_PRECISE)
+        under = np.maximum(A, np.clip(r + 0.5 - dist, 0, 1))
+    if d > 0:
+        k = int(round(d * math.sqrt(0.5)))
+        moved = np.zeros_like(under)
+        moved[k:, k:] = under[:under.shape[0] - k, :under.shape[1] - k]
+        under = np.maximum(under, moved)
+    col = np.float32(outline_rgb(o)) / 255
+    out_a = A + under * (1 - A)
+    out_rgb = (C * A[..., None] + col * (under * (1 - A))[..., None]) / np.maximum(out_a, 1e-6)[..., None]
+    ys, xs = np.nonzero(out_a > 0.02)
+    y0, y1, x0, x1 = ys.min(), ys.max() + 1, xs.min(), xs.max() + 1
+    return (np.clip(out_rgb[y0:y1, x0:x1], 0, 1).astype(np.float32), out_a[y0:y1, x0:x1].astype(np.float32),
+            (int(x0) - pad, int(y0) - pad))
+
+
 def prepare(image: bytes | np.ndarray | None, o: ToneOptions) -> Prepared:
     back, crop_xy = 1.0, (0, 0)
     rgb = alpha = None
@@ -515,6 +564,11 @@ def prepare(image: bytes | np.ndarray | None, o: ToneOptions) -> Prepared:
             raise ImageError("Nothing to print.")
         y0, y1, x0, x1 = ys.min(), ys.max() + 1, xs.min(), xs.max() + 1
         rgb, alpha = rgb[y0:y1, x0:x1], alpha[y0:y1, x0:x1]
+    if o.outline > 0 or o.shadow > 0:
+        rgb, alpha, (ox, oy) = _add_outline(rgb, alpha, o)
+        if not o.text:   # the print box grows by the keyline and shadow
+            crop_xy = (crop_xy[0] + ox, crop_xy[1] + oy)
+            crop_wh = (rgb.shape[1], rgb.shape[0])
 
     pm = np.dstack([rgb * alpha[..., None], alpha]).astype(np.float32)
     prep = Prepared(rgba=np.ascontiguousarray(pm), src_w=rgb.shape[1], src_h=rgb.shape[0],
@@ -1115,6 +1169,22 @@ def texture_masks(xs, ys, o: ToneOptions, texture_images: dict | None = None):
         elif kind == "toner":
             spots = noise.fbm(xs, ys, max(base * 0.12, 0.8), seed, 2) > 1 - s * 0.05
             add |= spots & (noise.fbm(xs, ys, base * 20, seed + 4, 2) > 0.45)
+        elif kind == "washed":   # fine, uneven dropouts all over: ink faded by years of washing
+            fine = noise.fbm(xs, ys, max(base * 0.08, 0.7), seed, 2)
+            patch = noise.fbm(xs, ys, base * 6, seed + 1, 3)
+            remove |= fine < s * 0.5 * (0.45 + 0.9 * patch)
+        elif kind == "fabric":   # knit ribs and rows of the shirt showing through the ink
+            pitch = max(2.0, base)
+            fx = (np.asarray(xs, np.float64) / pitch) % 1.0
+            fy = (np.asarray(ys, np.float64) / (pitch * 0.7)) % 1.0
+            breakup = noise.fbm(xs, ys, pitch * 0.6, seed, 2) > 0.3
+            remove |= ((fx < s * 0.3)[None, :] | (fy < s * 0.16)[:, None]) & breakup
+        elif kind == "streaks":   # dry, uneven squeegee pulls: speckled bands across the print
+            band = noise.fbm(xs, ys, base, seed, 3, stretch=8.0)
+            speck = noise.fbm(xs, ys, max(base * 0.05, 0.7), seed + 5, 2)
+            remove |= (band < s * 0.5) & (speck < 0.35 + 0.5 * s)
+        elif kind == "pinholes":   # tiny holes from dust and gaps in the screen emulsion
+            remove |= noise.fbm(xs, ys, max(base * 0.08, 0.7), seed, 2) > 1 - s * 0.06
         elif kind == "image":
             tex = (texture_images or {}).get(t.get("image_id"))
             if tex is None:
@@ -1135,6 +1205,8 @@ def render_plates(prep: Prepared, o: ToneOptions, x0: float, y0: float, gw: int,
                   fit: Fit | None = None) -> list[np.ndarray]:
     """On/off bitmaps (gh x gw) for each plate over one region of the print."""
     fit = fit or resolve_fit(prep, o)
+    if o.ghost_mm > 0 and o.ghost_strength > 0:
+        return _with_ghost(prep, o, x0, y0, gw, gh, step, plates, texture_images, fit)
     out_w, _ = prep.out_size(o)
     xs = x0 + (np.arange(gw) + 0.5) * step
     ys = y0 + (np.arange(gh) + 0.5) * step
@@ -1180,6 +1252,23 @@ def render_plates(prep: Prepared, o: ToneOptions, x0: float, y0: float, gw: int,
             if inks:  # toner specks go on the darkest / black plate (printed last)
                 result[inks[-1]] |= add & alpha_any & ~remove & (b_keep if b_keep is not None else True)
     return result
+
+
+def _with_ghost(prep, o, x0, y0, gw, gh, step, plates, texture_images, fit):
+    """Ghost / slur: the screen shifted on a second pass, leaving a faint, broken double print."""
+    import copy
+    plain = copy.copy(o)
+    plain.ghost_mm = 0.0
+    main = render_plates(prep, plain, x0, y0, gw, gh, step, plates, texture_images, fit)
+    g = o.ghost_mm * o.dpi / 25.4
+    moved = [copy.copy(p) for p in plates]
+    for p in moved:
+        p.shift = (p.shift[0] + 0.6 * g, p.shift[1] + 0.8 * g)
+    ghost = render_plates(prep, plain, x0, y0, gw, gh, step, moved, texture_images, fit)
+    xs = x0 + (np.arange(gw) + 0.5) * step
+    ys = y0 + (np.arange(gh) + 0.5) * step
+    keep = noise.fbm(xs, ys, max(0.35 * o.dpi / 25.4, 0.8), o.seed * 7 + 77, 2) < o.ghost_strength * 0.8
+    return [m | (gb & keep) for m, gb in zip(main, ghost)]
 
 
 _GRID_CACHE: "OrderedDict[tuple, object]" = __import__("collections").OrderedDict()

@@ -132,6 +132,8 @@
     if (f === "off") return v ? String(v) : "off";
     if (f === "offmm") return v ? `${fmt(v)} mm` : "off";
     if (f === "solid") return v ? fmt(v) : "solid";
+    if (f === "pct") return v ? `${fmt(v * 100, 1)}% of width` : "off";
+    if (f === "pct100") return `${Math.round(v * 100)}%`;
     return `${fmt(v)}${unit}`;
   }
 
@@ -145,6 +147,7 @@
     }
     setSel($("preset"), presetId);
     syncGarment();
+    syncOutline();
     buildInkColours();
     buildCuts();
     buildTextures();
@@ -309,7 +312,14 @@
     const match = cat.garments.find((g) => g.hex.toLowerCase() === h);
     setSel($("garmentSel"), match ? match.hex : "custom");
   }
-  function setGarment(h) { opts.garment = h; syncGarment(); save(); scheduleLive(50); }
+  function syncOutline() {
+    const auto = opts.outline_color === "auto";
+    setSel($("outlineMode"), auto ? "auto" : "custom");
+    if (!auto) $("outlineHex").value = opts.outline_color;
+    $("outlineSw").style.backgroundColor = auto ? E.toHex(E.contrastInk(E.hex(opts.garment))) : opts.outline_color;
+    $("outlineRow").style.display = auto ? "none" : "flex";
+  }
+  function setGarment(h) { opts.garment = h; syncGarment(); syncOutline(); save(); scheduleLive(50); }
 
   // ---------------------------------------------------------------- presets, save, restore
 
@@ -836,6 +846,15 @@
     $("resetTone").addEventListener("click", () => {
       for (const k of ["brightness", "contrast", "gamma", "black_point", "white_point", "invert", "sharpen"]) opts[k] = cat.defaults[k];
       syncUI(); save(); scheduleLive(50);
+    });
+    $("outlineMode").addEventListener("change", () => {
+      opts.outline_color = selVal($("outlineMode")) === "auto" ? "auto" : (validHex($("outlineHex").value) || "#111111");
+      syncOutline(); save(); scheduleLive(50);
+    });
+    $("outlineHex").addEventListener("change", () => {
+      const h = validHex($("outlineHex").value);
+      if (!h) { syncOutline(); return status("Colours are 6-digit hex, like #111111.", true); }
+      opts.outline_color = h; syncOutline(); save(); scheduleLive(50);
     });
     $("garmentSel").addEventListener("change", () => { const v = selVal($("garmentSel")); if (v !== "custom") setGarment(v); });
     $("garmentHex").addEventListener("change", () => {

@@ -174,6 +174,27 @@
     </div>
 
     <div class="sec">
+      <div class="head">Vintage &amp; bootleg</div>
+      <div class="body">
+        <div class="field"><div class="title">Keyline (outline)</div>
+          <input type="range" data-k="outline" min="0" max="0.06" step="0.002" data-fmt="pct"></div>
+        <div class="field"><div class="title">Drop shadow</div>
+          <input type="range" data-k="shadow" min="0" max="0.1" step="0.002" data-fmt="pct"></div>
+        <div class="field"><div class="title">Keyline / shadow colour</div><select id="outlineMode">
+          <option value="auto" data-v="auto">Auto (stands out on the shirt)</option>
+          <option value="custom" data-v="custom">Custom colour</option></select></div>
+        <div class="colourRow" id="outlineRow"><span class="sw" id="outlineSw"></span><input type="text" id="outlineHex" maxlength="7" value="#111111"></div>
+        <div class="field"><div class="title">Ghost / slur print</div>
+          <input type="range" data-k="ghost_mm" min="0" max="3" step="0.05" data-fmt="offmm"></div>
+        <div class="field"><div class="title">Ghost strength</div>
+          <input type="range" data-k="ghost_strength" min="0.1" max="1" step="0.05" data-fmt="pct100"></div>
+        <div class="hint">Keyline and shadow wrap the whole design in one ink, like a 90s bootleg (the layer grows to fit them).
+          Ghost is a faint, broken second print offset from the first, like a slipped screen. For worn ink, see Washed out,
+          Fabric weave, Squeegee streaks and Screen pinholes in Texture, or the Bootleg, Flea-market, Sun-faded and Thrashed presets.</div>
+      </div>
+    </div>
+
+    <div class="sec">
       <div class="head">Shirt</div>
       <div class="body">
         <div class="field"><div class="title">Shirt colour</div><select id="garmentSel"></select></div>

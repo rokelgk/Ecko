@@ -170,3 +170,6 @@ body.panelsHidden .psSide { display: none; }
 
 .inkName { display: flex; align-items: center; gap: 6px; font-size: 11px; opacity: 0.85; margin: 4px 0 2px; }
 .inkName input { flex: 1; min-width: 0; padding: 3px 6px; font-size: 12px; }
+.outlineColour { align-items: center; gap: 10px; }
+.outlineColour .check { margin: 0; flex: 1; }
+.outlineColour input[type=color] { width: 40px; height: 30px; flex: 0 0 auto; }

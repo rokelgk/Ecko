@@ -4,7 +4,8 @@
   const $ = (id) => document.getElementById(id);
   const SLIDERS = ["bg_tolerance", "lpi", "grain_mm", "angle", "spot_colors", "spot_softness", "brightness",
     "contrast", "gamma", "black_point", "white_point", "sharpen", "min_dot", "max_dot", "dot_gain",
-    "roughness", "misregister_mm", "choke_mm", "threshold_levels", "threshold_soft", "smooth_mm", "denoise", "border_mm"];
+    "roughness", "misregister_mm", "choke_mm", "threshold_levels", "threshold_soft", "smooth_mm", "denoise", "border_mm",
+    "outline", "shadow", "ghost_mm", "ghost_strength"];
   const CHECKS = ["remove_background", "invert", "knockout", "registration_marks", "threshold_stack"];
   const SELECTS = ["mode", "style", "target", "shirt_fit", "underbase", "threshold_colors", "palette", "border_shape"];
   const TONE_KEYS = ["brightness", "contrast", "gamma", "black_point", "white_point", "sharpen", "invert"];
@@ -362,6 +363,8 @@
     for (const k of SLIDERS) $(k).value = opts[k];
     for (const k of CHECKS) $(k).checked = !!opts[k];
     for (const k of SELECTS) $(k).value = opts[k];
+    $("outlineAuto").checked = opts.outline_color === "auto";
+    if (opts.outline_color !== "auto") $("outlinePick").value = opts.outline_color;
     const grain = catalog.styles.find((s) => s.id === opts.style)?.grain;
     $("amRow").hidden = grain;
     $("grainRow").hidden = !grain;
@@ -398,6 +401,11 @@
     $("softOut").textContent = opts.threshold_soft > 0 ? fmt(opts.threshold_soft) : "solid";
     $("smoothOut").textContent = opts.smooth_mm > 0 ? `${fmt(opts.smooth_mm)} mm` : "off";
     $("denoiseOut").textContent = opts.denoise > 0 ? opts.denoise : "off";
+    const pct = (v) => (v > 0 ? `${fmt(v * 100, 1)}% of the width` : "off");
+    $("outlineOut").textContent = pct(opts.outline);
+    $("shadowOut").textContent = pct(opts.shadow);
+    $("ghostOut").textContent = opts.ghost_mm > 0 ? `${fmt(opts.ghost_mm)} mm` : "off";
+    $("ghostSOut").textContent = `${Math.round(opts.ghost_strength * 100)}%`;
     $("dpiNote").textContent = $("dpi").value;
     document.querySelectorAll("#presets button").forEach((b) => b.classList.toggle("on", b.dataset.id === opts._preset));
   }
@@ -923,6 +931,17 @@
       }
       syncUI();
       changed();
+    });
+    $("outlineAuto").addEventListener("change", () => {
+      opts.outline_color = $("outlineAuto").checked ? "auto" : $("outlinePick").value;
+      opts._preset = null;
+      changed();
+    });
+    $("outlinePick").addEventListener("input", () => {
+      $("outlineAuto").checked = false;
+      opts.outline_color = $("outlinePick").value;
+      opts._preset = null;
+      changed(450);
     });
     $("width").addEventListener("input", changed);
     $("dpi").addEventListener("change", changed);

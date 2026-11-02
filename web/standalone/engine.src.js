@@ -53,6 +53,7 @@
     min_dot: [0, 0.5], max_dot: [0.5, 1], dot_gain: [0, 0.4], roughness: [0, 1],
     misregister_mm: [0, 5], bg_tolerance: [1, 80], seed: [0, 2 ** 31 - 1], choke_mm: [0, 1],
     threshold_levels: [2, 8], threshold_soft: [0, 0.3], smooth_mm: [0, 3], denoise: [0, 3], border_mm: [1, 120],
+    outline: [0, 0.06], shadow: [0, 0.1], ghost_mm: [0, 4], ghost_strength: [0, 1],
   };
   const TEXT_RANGES = { size: [0.02, 1.0], arc: [-340, 340], x: [-2, 2], y: [-2, 2], spacing: [-0.2, 1.0] };
   const TEXT_DEFAULTS = { font: "varsity", size: 0.12, arc: 0.0, x: 0.0, y: -0.7, spacing: 0.05, color: "#000000" };
@@ -83,6 +84,7 @@
     o.inks.forEach(hex);
     if (o.mode === "duotone" && o.inks.length < 2) throw new OptionError("Duotone needs two ink colours.");
     hex(o.garment);
+    if (o.outline_color !== "auto") o.outline_color = toHex(hex(o.outline_color));
     if (!Array.isArray(o.textures) || o.textures.length > 8) throw new OptionError("Up to 8 textures are supported.");
     o.textures = o.textures.map((t) => {
       if (!t || typeof t !== "object" || !(t.type in TEXTURES)) throw new OptionError(`Unknown texture: ${JSON.stringify(t)}`);
@@ -151,7 +153,8 @@
 
   function prepareKey(o) {
     return JSON.stringify([o.remove_background, o.bg_tolerance, o.sharpen, o.mode === "spot" && o.spot_colors,
-      o.text, o.text.length ? textWorkWidth(o) : 0, o.denoise, o.smooth_mm, o.smooth_mm ? Math.round(o.width_in * o.dpi) : 0]);
+      o.text, o.text.length ? textWorkWidth(o) : 0, o.denoise, o.smooth_mm, o.smooth_mm ? Math.round(o.width_in * o.dpi) : 0,
+      o.outline, o.shadow, (o.outline || o.shadow) ? outlineRgb(o) : 0]);
   }
 
   // ================================================================ noise (global coordinates)
@@ -645,6 +648,76 @@
   }
 
   /** rgba8: Uint8ClampedArray/Uint8Array (straight alpha) or null for a text-only design. */
+  // ---- bootleg keyline + drop shadow (same as the Python engine's _add_outline)
+  function outlineRgb(o) { return o.outline_color !== "auto" ? hex(o.outline_color) : contrastInk(hex(o.garment)); }
+
+  function edt1(f, n, d, v, z) {   // Felzenszwalb & Huttenlocher squared distance, one line
+    let k = 0;
+    v[0] = 0; z[0] = -Infinity; z[1] = Infinity;
+    for (let q = 1; q < n; q++) {
+      let sv = ((f[q] + q * q) - (f[v[k]] + v[k] * v[k])) / (2 * q - 2 * v[k]);
+      while (sv <= z[k]) { k--; sv = ((f[q] + q * q) - (f[v[k]] + v[k] * v[k])) / (2 * q - 2 * v[k]); }
+      k++; v[k] = q; z[k] = sv; z[k + 1] = Infinity;
+    }
+    k = 0;
+    for (let q = 0; q < n; q++) { while (z[k + 1] < q) k++; d[q] = (q - v[k]) ** 2 + f[v[k]]; }
+  }
+  function distanceToInside(inside, w, h) {   // exact Euclidean distance (pixels) to the nearest inside pixel
+    const INF = 1e20, g = new Float64Array(w * h), n = Math.max(w, h);
+    const f = new Float64Array(n), d = new Float64Array(n), v = new Int32Array(n), z = new Float64Array(n + 1);
+    for (let x = 0; x < w; x++) {
+      for (let y = 0; y < h; y++) f[y] = inside[y * w + x] ? 0 : INF;
+      edt1(f, h, d, v, z);
+      for (let y = 0; y < h; y++) g[y * w + x] = d[y];
+    }
+    const out = new Float32Array(w * h);
+    for (let y = 0; y < h; y++) {
+      for (let x = 0; x < w; x++) f[x] = g[y * w + x];
+      edt1(f, w, d, v, z);
+      for (let x = 0; x < w; x++) out[y * w + x] = Math.sqrt(d[x]);
+    }
+    return out;
+  }
+  function addOutline(img, o) {   // -> {rgb, alpha, w, h, ox, oy}
+    const w = img.w, h = img.h, r = o.outline * w, dd = o.shadow * w, pad = Math.ceil(r + dd) + 2;
+    const W = w + 2 * pad, H = h + 2 * pad, A = new Float32Array(W * H), C = new Float32Array(W * H * 3);
+    for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) {
+      const q = (y + pad) * W + x + pad, p = y * w + x;
+      A[q] = img.alpha[p]; C[q * 3] = img.rgb[p * 3]; C[q * 3 + 1] = img.rgb[p * 3 + 1]; C[q * 3 + 2] = img.rgb[p * 3 + 2];
+    }
+    let under = A;
+    if (r > 0) {
+      const inside = new Uint8Array(W * H);
+      for (let k = 0; k < W * H; k++) inside[k] = A[k] > 0.5 ? 1 : 0;
+      const dist = distanceToInside(inside, W, H);
+      under = new Float32Array(W * H);
+      for (let k = 0; k < W * H; k++) under[k] = Math.max(A[k], Math.min(1, Math.max(0, r + 0.5 - dist[k])));
+    }
+    if (dd > 0) {
+      const kk = Math.round(dd * Math.sqrt(0.5)), moved = new Float32Array(W * H);
+      for (let y = kk; y < H; y++) for (let x = kk; x < W; x++) moved[y * W + x] = under[(y - kk) * W + x - kk];
+      const u2 = new Float32Array(W * H);
+      for (let k = 0; k < W * H; k++) u2[k] = Math.max(under[k], moved[k]);
+      under = u2;
+    }
+    const col = outlineRgb(o).map((c) => c / 255);
+    const outA = new Float32Array(W * H), outC = new Float32Array(W * H * 3);
+    let x0 = W, y0 = H, x1 = -1, y1 = -1;
+    for (let k = 0; k < W * H; k++) {
+      const a = A[k], u = under[k] * (1 - a), t = a + u;
+      outA[k] = t;
+      const div = Math.max(t, 1e-6);
+      for (let c = 0; c < 3; c++) outC[k * 3 + c] = Math.min(1, Math.max(0, (C[k * 3 + c] * a + col[c] * u) / div));
+      if (t > 0.02) { const x = k % W, y = (k - x) / W; if (x < x0) x0 = x; if (x > x1) x1 = x; if (y < y0) y0 = y; if (y > y1) y1 = y; }
+    }
+    const cw = x1 - x0 + 1, ch = y1 - y0 + 1, rgb = new Float32Array(cw * ch * 3), alpha = new Float32Array(cw * ch);
+    for (let y = 0; y < ch; y++) {
+      alpha.set(outA.subarray((y + y0) * W + x0, (y + y0) * W + x0 + cw), y * cw);
+      rgb.set(outC.subarray(((y + y0) * W + x0) * 3, ((y + y0) * W + x0 + cw) * 3), y * cw * 3);
+    }
+    return { rgb, alpha, w: cw, h: ch, ox: x0 - pad, oy: y0 - pad };
+  }
+
   function prepareArt(rgba8, width, height, o) {   // -> {art, crop}; art is null when nothing is left
     let art = null, crop = [0, 0, 0, 0];
     if (rgba8) {
@@ -687,7 +760,8 @@
   }
 
   function prepare(rgba8, width, height, o, renderText, stage) {
-    const { art, crop, picture } = stage || prepareArt(rgba8, width, height, o);
+    const stg = stage || prepareArt(rgba8, width, height, o), { art, picture } = stg;
+    let crop = stg.crop;
     if (picture && !art && !o.text.length) {
       throw new ImageError("Nothing is left to print once the background is removed. " +
         "Turn off background removal or lower its tolerance.");
@@ -701,6 +775,11 @@
       const comp = composeText(art, o, renderText);
       img = cropTo(comp.rgb, comp.alpha, comp.w, comp.h);
       if (!img) throw new ImageError("Nothing to print.");
+    }
+    if (o.outline > 0 || o.shadow > 0) {
+      const back = art && art.w ? crop[2] / art.w : 1;
+      img = addOutline(img, o);
+      if (!o.text.length) crop = [Math.round(crop[0] + img.ox * back), Math.round(crop[1] + img.oy * back), Math.round(img.w * back), Math.round(img.h * back)];
     }
     const pm = new Float32Array(img.w * img.h * 4);
     for (let p = 0; p < img.w * img.h; p++) {
@@ -1292,6 +1371,24 @@
       } else if (kind === "toner") {
         const a = fbm(xs, ys, Math.max(base * 0.12, 0.8), seed, 2), b = fbm(xs, ys, base * 20, seed + 4, 2);
         for (let k = 0; k < n; k++) if (a[k] > 1 - s * 0.05 && b[k] > 0.45) add[k] = 1;
+      } else if (kind === "washed") {   // fine, uneven dropouts: ink faded by years of washing
+        const fine = fbm(xs, ys, Math.max(base * 0.08, 0.7), seed, 2), patch = fbm(xs, ys, base * 6, seed + 1, 3);
+        for (let k = 0; k < n; k++) if (fine[k] < s * 0.5 * (0.45 + 0.9 * patch[k])) remove[k] = 1;
+      } else if (kind === "fabric") {   // knit ribs and rows of the shirt showing through
+        const pitch = Math.max(2, base), br = fbm(xs, ys, pitch * 0.6, seed, 2), gw = xs.length;
+        for (let i2 = 0; i2 < ys.length; i2++) {
+          const fy = (((ys[i2] / (pitch * 0.7)) % 1) + 1) % 1, row = fy < s * 0.16;
+          for (let j = 0; j < gw; j++) {
+            const fx = (((xs[j] / pitch) % 1) + 1) % 1, k = i2 * gw + j;
+            if ((fx < s * 0.3 || row) && br[k] > 0.3) remove[k] = 1;
+          }
+        }
+      } else if (kind === "streaks") {   // dry, uneven squeegee pulls
+        const band = fbm(xs, ys, base, seed, 3, 8), speck = fbm(xs, ys, Math.max(base * 0.05, 0.7), seed + 5, 2);
+        for (let k = 0; k < n; k++) if (band[k] < s * 0.5 && speck[k] < 0.35 + 0.5 * s) remove[k] = 1;
+      } else if (kind === "pinholes") {   // tiny holes from dust and gaps in the emulsion
+        const a = fbm(xs, ys, Math.max(base * 0.08, 0.7), seed, 2);
+        for (let k = 0; k < n; k++) if (a[k] > 1 - s * 0.06) remove[k] = 1;
       } else if (kind === "image") {
         const tex = (textureImages || {})[t.image_id];
         if (!tex) return;
@@ -1318,6 +1415,17 @@
 
   function renderPlates(prep, o, x0, y0, gw, gh, step, plates, textureImages, fit) {
     fit = fit || resolveFit(prep, o);
+    if (o.ghost_mm > 0 && o.ghost_strength > 0) {   // ghost / slur: a faint, broken second print, offset
+      const plain = { ...o, ghost_mm: 0 };
+      const main = renderPlates(prep, plain, x0, y0, gw, gh, step, plates, textureImages, fit);
+      const g = o.ghost_mm * o.dpi / 25.4;
+      const moved = plates.map((p) => ({ ...p, shift: [p.shift[0] + 0.6 * g, p.shift[1] + 0.8 * g] }));
+      const ghost = renderPlates(prep, plain, x0, y0, gw, gh, step, moved, textureImages, fit);
+      const keep = fbm(grid(x0, gw, step), grid(y0, gh, step), Math.max(0.35 * o.dpi / 25.4, 0.8), o.seed * 7 + 77, 2);
+      const lim = o.ghost_strength * 0.8;
+      main.forEach((m, i) => { const gb = ghost[i]; for (let k = 0; k < m.length; k++) if (gb[k] && keep[k] < lim) m[k] = 1; });
+      return main;
+    }
     const [outW] = outSize(prep, o), xs = grid(x0, gw, step), ys = grid(y0, gh, step);
     const samples = {}, result = [];
     const [, outH] = outSize(prep, o), border = borderMask(xs, ys, o, outW, outH);

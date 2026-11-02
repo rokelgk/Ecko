@@ -588,3 +588,53 @@ def test_separation_films_are_named_after_the_inks(logo):
     assert all(n.split("-")[-1][:-4].isalnum() and len(n.split("-")[-1]) == 10 for n in films)  # ends in the hex
     readme = z.read("README.txt").decode()
     assert "Cardinal Red" in readme and "RGB" in readme
+
+
+# ------------------------------------------------------------- vintage / bootleg extras
+
+
+def _alpha_of(prep, o):
+    rgba = E.render_full(prep, o)
+    rgba = rgba[0] if isinstance(rgba, tuple) else rgba
+    return rgba[..., 3]
+
+
+@pytest.mark.parametrize("kind", ["washed", "fabric", "streaks", "pinholes"])
+def test_wear_textures_remove_ink_and_stay_binary(logo, kind):
+    base = E.parse_options({"width_in": 3})
+    worn = E.parse_options({"width_in": 3, "textures": [{"type": kind, "strength": 0.8, "scale": 1}]})
+    a0, a1 = _alpha_of(E.prepare(logo, base), base), _alpha_of(E.prepare(logo, worn), worn)
+    assert set(np.unique(a1)) <= {0, 255}
+    assert (a1 > 0).sum() < (a0 > 0).sum() * 0.97
+
+
+def test_keyline_and_shadow_grow_the_print_and_add_ink(logo):
+    base = E.parse_options({"width_in": 3})
+    boot = E.parse_options({"width_in": 3, "outline": 0.03, "shadow": 0.05, "outline_color": "#ff0000"})
+    p0, p1 = E.prepare(logo, base), E.prepare(logo, boot)
+    assert p1.src_w > p0.src_w and p1.src_h > p0.src_h
+    assert p1.crop[0] < p0.crop[0] and p1.crop[1] < p0.crop[1]   # the box grows up/left for the keyline
+    assert (p1.rgba[..., 3] > 0.5).sum() > (p0.rgba[..., 3] > 0.5).sum() * 1.1
+    with pytest.raises(ValueError):
+        E.parse_options({"outline": 0.5})
+    with pytest.raises(ValueError):
+        E.parse_options({"outline_color": "red"})
+
+
+def test_auto_keyline_colour_stands_out_on_the_shirt():
+    assert E.outline_rgb(E.parse_options({"garment": "#111111"})) == tuple(E.CREAM)
+    assert E.outline_rgb(E.parse_options({"garment": "#ffffff"})) == tuple(E.INK_BLACK)
+
+
+def test_ghost_print_adds_a_faint_offset_copy(logo):
+    base = E.parse_options({"width_in": 3})
+    ghost = E.parse_options({"width_in": 3, "ghost_mm": 1.5, "ghost_strength": 0.8})
+    prep = E.prepare(logo, base)
+    a0, a1 = _alpha_of(prep, base), _alpha_of(prep, ghost)
+    assert set(np.unique(a1)) <= {0, 255}
+    assert (a1 > 0).sum() > (a0 > 0).sum() and ((a1 > 0) | (a0 == 0)).all()   # only adds ink
+
+
+def test_vintage_presets_exist():
+    ids = {p["id"] for p in PRESETS}
+    assert {"bootleg-rap", "flea-market", "sun-faded", "thrashed-band"} <= ids

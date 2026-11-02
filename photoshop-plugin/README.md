@@ -12,6 +12,11 @@ contrast, midtones, black and white points, invert); procedural textures plus yo
 from any layer; shirt colour (presets or any hex) and Fit to shirt; borders; and press control
 (dot sizes, dot gain, rough edges, misregistration, registration marks).
 
+**Vintage & bootleg**: a keyline and drop shadow around the whole design (auto or any colour), a ghost /
+slur double print, and wear textures (washed out, fabric weave, squeegee streaks, screen pinholes, plus
+worn, cracked, grunge, scratches, toner). Presets: Bootleg rap tee, Flea-market bootleg, Sun-faded 80s,
+Thrashed band tee.
+
 After Apply, the **Inks** list works like the web page's: switch each ink on or off, solo it, choke or
 spread it, recolour spot inks, and give each ink your own name. Inks are named by colour
 ("Red", "Navy", "Athletic gold"…) until you rename them.
