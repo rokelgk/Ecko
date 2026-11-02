@@ -56,13 +56,15 @@ Pick the job type, the shirt color and the number of screens, then press
   to jump to it.
 - **Zoom and pan:** − / Fit / + / 100%, mouse-wheel zoom to the cursor and
   drag to move, in the panel and the full window.
-- **Proof Window (🪟, Photoshop):** the panel has no picture; the **Proof
-  Window** (a copy of your original art) and a live **Separation Preview**
-  open as tabs arranged side by side (2-up / split view; "⋯ More → Proof:
-  tabs only" skips the arranging) and redraws after every change, showing whichever view tab you
-  pick. The panel picture comes back while the clean-up brush or eyedropper
-  is in use, or when the Proof window is switched off.
-  **Detail** (Fast / Sharp / Max) sets how sharp the live proof is.
+- **Live Proof Window (🪟, Photoshop):** the panel has no picture; a
+  **Proof Window** document holds the separation itself (a garment layer plus
+  one spot channel per screen, named after the ink) and is rebuilt after
+  every change, so Photoshop shows what will print. Picking a screen in the
+  panel shows only that channel; Original/Compare/Dots show on a view layer.
+  Your art and the Proof Window open in separate windows side by side
+  (⋯ More: separate windows / split view / tabs, ⇆ Arrange again, and a
+  Photoshop log for troubleshooting). Each update is confirmed under the
+  toolbar with its time.
 - **Aztec carved theme:** stepped-fret bands, sun-stone glyph, carved card
   corners and step-pyramid dividers in obsidian, gold, terracotta and jade
   (pure CSS + inline SVG). The ◈ Theme button switches to the plain look.

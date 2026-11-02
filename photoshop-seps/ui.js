@@ -891,28 +891,57 @@
     pushLive(rgba, ww, hh);
   }
 
-  // Live view in Photoshop: the same picture, drawn into a document on the
-  // canvas, a moment after the panel updates (so dragging stays smooth).
-  let liveTimer = null, liveBusy = false, livePending = null, liveWarned = false;
+  // Live Proof Window in Photoshop: after every change the separation is
+  // rebuilt there as spot channels (throttled: newest state wins, so dragging
+  // keeps updating without piling up work).
+  let liveTimer = null, liveBusy = false, liveDirty = false, liveView = null;
   function pushLive(rgba, w, h) {
-    if (host.name !== 'photoshop' || !host.showLive || ui.liveOff) return;
-    // Throttle, not debounce: while you drag, the canvas keeps updating
-    // (newest picture wins) instead of waiting for you to let go.
-    livePending = { rgba, w, h, dpi: state.result ? state.result.dpi : 72 };
-    if (!liveBusy && !liveTimer) liveTimer = setTimeout(flushLive, 120);
+    if (host.name !== 'photoshop' || !host.showProof || ui.liveOff || !state.result) return;
+    liveView = { rgba, w, h };
+    liveDirty = true;
+    if (!liveBusy && !liveTimer) liveTimer = setTimeout(flushLive, 150);
+  }
+  function fitInto(rgba, sw, sh, w, h) {
+    // Letterbox a picture into the proof size on a dark background.
+    const k = Math.min(w / sw, h / sh);
+    const tw = Math.max(1, Math.round(sw * k)), th = Math.max(1, Math.round(sh * k));
+    const small = E.ops.resizeImage({ data: rgba, width: sw, height: sh, channels: 4 }, tw, th);
+    const out = new Uint8ClampedArray(w * h * 4);
+    for (let p = 0; p < w * h; p++) { out[p * 4] = 30; out[p * 4 + 1] = 26; out[p * 4 + 2] = 22; out[p * 4 + 3] = 255; }
+    const ox = Math.floor((w - tw) / 2), oy = Math.floor((h - th) / 2);
+    for (let y = 0; y < th; y++) out.set(small.data.subarray(y * tw * 4, (y + 1) * tw * 4), ((y + oy) * w + ox) * 4);
+    return out;
   }
   async function flushLive() {
     liveTimer = null;
-    if (liveBusy || !livePending) return;
-    const job = livePending;
-    livePending = null;
+    if (liveBusy || !liveDirty || !state.result) return;
+    liveDirty = false;
     liveBusy = true;
-    try { await host.showLive(job.rgba, job.w, job.h, job.dpi, { float: (ui.proofAs || 'float') === 'float' }); } catch (e) {
-      if (!liveWarned) { status('Live view in Photoshop failed: ' + e.message, true); liveWarned = true; }
+    const r = state.result;
+    const job = {
+      w: r.width, h: r.height, dpi: r.dpi, garment: state.garment, arrange: ui.proofAs || 'windows',
+      screens: r.screens.map((x) => ({ name: x.name, hex: x.hex, role: x.role, plate: x.plate })),
+    };
+    if (typeof state.view === 'number') job.only = state.view;
+    else if (state.view !== 'preview' && liveView) {
+      job.viewRgba = liveView.w === r.width && liveView.h === r.height ? liveView.rgba : fitInto(liveView.rgba, liveView.w, liveView.h, r.width, r.height);
+    }
+    const t0 = Date.now();
+    try {
+      await host.showProof(job);
+      proofNote(`Proof Window updated ${new Date().toLocaleTimeString()} · ${job.screens.length} spot channels · ${Date.now() - t0} ms`);
+    } catch (e) {
+      proofNote(`Proof Window could not update: ${e.message}`, true);
     } finally {
       liveBusy = false;
-      if (livePending && !liveTimer) liveTimer = setTimeout(flushLive, 120);
+      if (liveDirty && !liveTimer) liveTimer = setTimeout(flushLive, 150);
     }
+  }
+  function proofNote(text, err) {
+    const el = $('proofStatus');
+    if (!el) return;
+    el.textContent = text;
+    el.className = 'small ' + (err ? 'err' : 'muted');
   }
 
   // ---------- screens list ----------
@@ -1525,7 +1554,7 @@
   }
   $('moreBtn').addEventListener('click', () => { $('moreTools').classList.toggle('hidden'); layout(); });
   if ($('proofAs')) {
-    $('proofAs').value = ui.proofAs || 'float';
+    $('proofAs').value = ui.proofAs || 'windows';
     $('proofAs').addEventListener('change', async () => {
       ui.proofAs = $('proofAs').value; saveUi();
       // Reopen the proof the new way.
@@ -1533,6 +1562,13 @@
       if (state.result) renderView();
     });
   }
+  if ($('logBtn')) {
+    $('logBtn').addEventListener('click', () => $('psLog').classList.toggle('hidden'));
+    host.onLog = (lines) => { $('psLog').textContent = lines.join('\n'); };
+  }
+  if ($('arrangeBtn')) $('arrangeBtn').addEventListener('click', async () => {
+    try { await host.arrangeProof(ui.proofAs || 'windows'); proofNote('Arranged the windows.'); } catch (e) { proofNote('Could not arrange: ' + e.message, true); }
+  });
   $('togglePreview').addEventListener('click', () => { ui.previewHidden = !ui.previewHidden; saveUi(); layout(); });
   if ($('toTop')) $('toTop').addEventListener('click', () => { $('optionsPane').scrollTop = 0; });
   setupSplitter();
