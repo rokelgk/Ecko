@@ -78,7 +78,7 @@
 
     // Live view on the Photoshop canvas: a document named "Ecko Seps - Live"
     // that is redrawn after every change (whatever view the panel shows).
-    async showLive(rgba, w, h, dpi) {
+    async showLive(rgba, w, h, dpi, opts) {
       const rgb = new Uint8Array(w * h * 3);
       for (let p = 0; p < w * h; p++) { rgb[p * 3] = rgba[p * 4]; rgb[p * 3 + 1] = rgba[p * 4 + 1]; rgb[p * 3 + 2] = rgba[p * 4 + 2]; }
       return modal('Update Ecko Seps live view', async () => {
@@ -104,9 +104,16 @@
           id.dispose();
         }
         if (created) {
-          // Window > Arrange > Tile All Vertically: art and proof side by side,
-          // then hand the focus back to the artwork.
-          try { await action.batchPlay([{ _obj: 'select', _target: [{ _ref: 'menuItemClass', _enum: 'menuItemType', _value: 'tileVertically' }] }], {}); } catch (e) { /* arrange is optional */ }
+          // Its own window: Window > Arrange > Float in Window on the Proof
+          // Window only, so it floats beside your art instead of becoming a
+          // tab (or splitting the tab area). Drag it where you like;
+          // Photoshop opens the next one in the same spot.
+          if (!opts || opts.float !== false) {
+            try {
+              app.activeDocument = doc;
+              await action.batchPlay([{ _obj: 'select', _target: [{ _ref: 'menuItemClass', _enum: 'menuItemType', _value: 'floatInWindow' }] }], {});
+            } catch (e) { /* floating is optional; it stays a tab */ }
+          }
           const art = this._artId ? app.documents.find((d) => d.id === this._artId) : null;
           if (art) { try { app.activeDocument = art; } catch (e) { /* keep proof active */ } }
         }

@@ -863,7 +863,7 @@
     const job = livePending;
     livePending = null;
     liveBusy = true;
-    try { await host.showLive(job.rgba, job.w, job.h, job.dpi); } catch (e) {
+    try { await host.showLive(job.rgba, job.w, job.h, job.dpi, { float: (ui.proofAs || 'float') === 'float' }); } catch (e) {
       if (!liveWarned) { status('Live view in Photoshop failed: ' + e.message, true); liveWarned = true; }
     } finally {
       liveBusy = false;
@@ -1389,6 +1389,7 @@
       document.body.classList.toggle('ui-large', ui.size === 'large');
       document.body.classList.toggle('theme-aztec', ui.theme !== 'plain');
       document.body.classList.toggle('ps-host', true);
+      app.classList.toggle('slim', w < 400);
       return;
     }
     const narrow = w < 760;
@@ -1420,6 +1421,7 @@
     document.body.classList.toggle('ui-large', ui.size === 'large');
     document.body.classList.toggle('theme-aztec', ui.theme !== 'plain');
     document.body.classList.toggle('ps-host', host.name === 'photoshop');
+    app.classList.toggle('slim', (parseFloat(op.style.width) || w) < 400);
     $('togglePreview').textContent = ui.previewHidden ? 'Show preview' : 'Hide preview';
   }
 
@@ -1476,6 +1478,16 @@
   if ($('detailSel')) {
     $('detailSel').value = ui.detail || 'fast';
     $('detailSel').addEventListener('change', () => { ui.detail = $('detailSel').value; saveUi(); state.proof = null; schedule('tune', null); });
+  }
+  $('moreBtn').addEventListener('click', () => { $('moreTools').classList.toggle('hidden'); layout(); });
+  if ($('proofAs')) {
+    $('proofAs').value = ui.proofAs || 'float';
+    $('proofAs').addEventListener('change', async () => {
+      ui.proofAs = $('proofAs').value; saveUi();
+      // Reopen the proof the new way.
+      try { await host.closeLive(); } catch (e) { /* not open */ }
+      if (state.result) renderView();
+    });
   }
   $('togglePreview').addEventListener('click', () => { ui.previewHidden = !ui.previewHidden; saveUi(); layout(); });
   if ($('toTop')) $('toTop').addEventListener('click', () => { $('optionsPane').scrollTop = 0; });

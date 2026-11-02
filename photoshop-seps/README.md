@@ -52,8 +52,9 @@ Pick the job type, the shirt color and the number of screens, then press
   softness, strength, invert, new pattern, and apply to all screens, the
   underbase only or the top colors only.
 - **Proof Window (🪟, Photoshop):** like ActionSeps, the panel has no picture;
-  a "Proof Window" document at the art's print size opens tiled next to your
-  artwork and redraws after every change, showing whichever view tab you
+  a "Proof Window" document at the art's print size opens in its own
+  floating window (Window → Arrange → Float in Window) to place beside your
+  artwork ("⋯ More → Proof: tab" keeps it as a tab) and redraws after every change, showing whichever view tab you
   pick. The panel picture comes back while the clean-up brush or eyedropper
   is in use, or when the Proof window is switched off.
   **Detail** (Fast / Sharp / Max) sets how sharp the live proof is.

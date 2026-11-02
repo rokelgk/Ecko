@@ -116,8 +116,8 @@ h3 { font-size: 12px; margin: 12px 0 6px 0; }
 label.btn input[type=file] { display: none; }
 
 .presets { display: flex; flex-wrap: wrap; }
-.preset { width: calc(50% - 4px); margin: 0 8px 8px 0; padding: 8px; border: 1px solid var(--line); border-radius: 5px; cursor: pointer; background: #3c3c3c; }
-.preset:nth-child(2n) { margin-right: 0; }
+.preset { flex: 1 1 150px; min-width: 0; margin: 0 8px 8px 0; padding: 8px; border: 1px solid var(--line); border-radius: 5px; cursor: pointer; background: #3c3c3c; }
+
 .preset b { display: block; font-size: 12px; margin-bottom: 2px; }
 .preset span { color: var(--muted); font-size: 10.5px; }
 .preset.on { border-color: var(--accent); background: #24364d; }
@@ -312,3 +312,25 @@ body.ps-host .btn.to-top { position: static; box-shadow: none; }
 .layout.proof-mode .stage, .layout.proof-mode .splitter, .layout.proof-mode #togglePreview,
 .layout.proof-mode .pane-preview > .band.pyr { display: none !important; }
 .layout.proof-mode .pane-preview { overflow: hidden; border-bottom: 2px solid var(--gold, #555); padding-bottom: 6px; }
+
+/* Toolbar: main actions on one row, the rest under "More". */
+.pv-tools { display: flex; flex-wrap: wrap; align-items: center; justify-content: flex-start; margin-bottom: 4px; }
+.pv-tools .btn, .pv-tools select { margin: 0 6px 4px 0; }
+.pv-tools.more { padding: 6px 6px 2px; border: 1px dashed var(--line); border-radius: 5px; }
+.pv-head { flex-wrap: wrap; }
+.pv-head .badge { margin-left: auto; }
+
+/* Slim panels (options under ~400 px wide): stack labels over controls,
+   put each screen's buttons on their own line, wrap the step summaries. */
+.layout.slim .field { flex-direction: column; align-items: stretch; }
+.layout.slim .field > label { flex: none; width: auto; margin-bottom: 3px; }
+.layout.slim .field > .ctl { min-width: 0; width: 100%; }
+.layout.slim .scr .name { flex: 1 1 55%; }
+.layout.slim .scr .meta { flex: 1 1 100%; text-align: left; padding-left: 46px; margin: 2px 0 4px; }
+.layout.slim .stp { flex-wrap: wrap; }
+.layout.slim .stp .s { flex: 1 1 100%; text-align: left; margin: 2px 0 0 28px; }
+.layout.slim .preset { flex: 1 1 100%; margin-right: 0; }
+.layout.slim .merge-row select { max-width: none; flex: 1 1 40%; }
+.layout.slim .cleanbar select { max-width: none; }
+.layout.slim .card { padding: 8px 7px; }
+.layout.slim .card > h2 { font-size: 12.5px; }

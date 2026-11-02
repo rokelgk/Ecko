@@ -6,7 +6,7 @@
 const { chromium } = require('playwright');
 const SIZES = [
   ['MacBook Air 13" browser', 1440, 780], ['older MacBook 1280x700', 1280, 700], ['small laptop 1024x600', 1024, 600],
-  ['short window 900x480', 900, 480], ['tablet portrait 768x1024', 768, 1024], ['narrow panel 340x700', 340, 700],
+  ['short window 900x480', 900, 480], ['tablet portrait 768x1024', 768, 1024], ['docked panel 300x800', 300, 800], ['narrow panel 340x700', 340, 700],
   ['phone 390x664', 390, 664], ['tiny 320x480', 320, 480],
 ];
 let failures = 0;
