@@ -1,0 +1,66 @@
+[
+ {
+  "id": "scan_cracked_heavy",
+  "label": "Scan: heavy cracked plastisol"
+ },
+ {
+  "id": "scan_linen",
+  "label": "Scan: linen weave"
+ },
+ {
+  "id": "scan_heather",
+  "label": "Scan: heather jersey"
+ },
+ {
+  "id": "scan_light_cracks",
+  "label": "Scan: light vertical cracks"
+ },
+ {
+  "id": "scan_scuffed",
+  "label": "Scan: scuffed and stained"
+ },
+ {
+  "id": "scan_horizontal_cracks",
+  "label": "Scan: horizontal cracks"
+ },
+ {
+  "id": "scan_washed_fabric",
+  "label": "Scan: washed fabric"
+ },
+ {
+  "id": "scan_crackle_heavy",
+  "label": "Scan: heavy crackle"
+ },
+ {
+  "id": "scan_cracked_stain",
+  "label": "Scan: cracked with a stain"
+ },
+ {
+  "id": "scan_light_speckle",
+  "label": "Scan: light speckled wear"
+ },
+ {
+  "id": "scan_crackle",
+  "label": "Scan: horizontal crackle"
+ },
+ {
+  "id": "scan_faint_cracks",
+  "label": "Scan: faint cracks"
+ },
+ {
+  "id": "scan_deep_cracks",
+  "label": "Scan: deep cracks"
+ },
+ {
+  "id": "scan_crack_clusters",
+  "label": "Scan: cracked clusters"
+ },
+ {
+  "id": "scan_fine_cracks",
+  "label": "Scan: fine vertical cracks"
+ },
+ {
+  "id": "scan_crazing",
+  "label": "Scan: dense crazing"
+ }
+]

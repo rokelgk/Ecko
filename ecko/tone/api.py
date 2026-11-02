@@ -117,7 +117,8 @@ def catalog():
     return {
         "styles": [{"id": k, "name": v, "grain": k in E.GRAIN_STYLES} for k, v in E.STYLES.items()],
         "modes": [{"id": k, "name": v} for k, v in E.MODES.items()],
-        "textures": [{"id": k, "name": v["label"], "adds_ink": v["adds_ink"]} for k, v in E.TEXTURES.items()],
+        "textures": [{"id": k, "name": v["label"], "adds_ink": v["adds_ink"], "scan": bool(v.get("scan"))}
+                     for k, v in E.TEXTURES.items()],
         "targets": [{"id": k, "name": v["label"], "lpi": list(v["lpi"]), "min_dot_mm": v["min_dot_mm"]}
                     for k, v in E.TARGETS.items()],
         "presets": PRESETS,

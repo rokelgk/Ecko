@@ -1346,6 +1346,137 @@
 
   // ================================================================ textures
 
+  // ================================================================ distress scans (packed by tools/make_textures.py)
+
+  const SCAN_DATA = {};   // id -> base64 string or Uint8Array of the .etx file
+  const scanCache = new Map();
+  function registerScans(map) { Object.assign(SCAN_DATA, map || {}); }
+
+  function fromBase64(str) {
+    const A = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/", lut = new Int16Array(128).fill(-1);
+    for (let i = 0; i < 64; i++) lut[A.charCodeAt(i)] = i;
+    const clean = str.replace(/[^A-Za-z0-9+/]/g, ""), out = new Uint8Array(Math.floor(clean.length * 3 / 4));
+    let o = 0;
+    for (let i = 0; i < clean.length; i += 4) {
+      const a = lut[clean.charCodeAt(i)], b = lut[clean.charCodeAt(i + 1)];
+      const c = i + 2 < clean.length ? lut[clean.charCodeAt(i + 2)] : -1, d = i + 3 < clean.length ? lut[clean.charCodeAt(i + 3)] : -1;
+      out[o++] = (a << 2) | (b >> 4);
+      if (c >= 0) out[o++] = ((b & 15) << 4) | (c >> 2);
+      if (d >= 0) out[o++] = ((c & 3) << 6) | d;
+    }
+    return out.subarray(0, o);
+  }
+
+  // Small zlib inflate (RFC 1950/1951): Photoshop panels have no decompression built in.
+  function inflate(src, outSize) {
+    const out = new Uint8Array(outSize);
+    let pos = 2, bit = 0, op = 0;   // skip the 2-byte zlib header
+    const bits = (n) => {
+      let v = 0;
+      for (let i = 0; i < n; i++) { v |= ((src[pos] >> bit) & 1) << i; if (++bit === 8) { bit = 0; pos++; } }
+      return v;
+    };
+    function table(lengths) {   // canonical Huffman: counts + symbols
+      const counts = new Uint16Array(16), offs = new Uint16Array(16), syms = new Uint16Array(lengths.length);
+      for (const l of lengths) counts[l]++;
+      counts[0] = 0;
+      for (let i = 1; i < 16; i++) offs[i] = offs[i - 1] + counts[i - 1];
+      lengths.forEach((l, s) => { if (l) syms[offs[l]++] = s; });
+      return { counts, syms };
+    }
+    function decode(t) {
+      let code = 0, first = 0, index = 0;
+      for (let len = 1; len < 16; len++) {
+        code |= bits(1);
+        const c = t.counts[len];
+        if (code - first < c) return t.syms[index + code - first];
+        index += c; first = (first + c) << 1; code <<= 1;
+      }
+      throw new Error("Bad texture data");
+    }
+    const LBASE = [3, 4, 5, 6, 7, 8, 9, 10, 11, 13, 15, 17, 19, 23, 27, 31, 35, 43, 51, 59, 67, 83, 99, 115, 131, 163, 195, 227, 258];
+    const LEXT = [0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 2, 2, 2, 2, 3, 3, 3, 3, 4, 4, 4, 4, 5, 5, 5, 5, 0];
+    const DBASE = [1, 2, 3, 4, 5, 7, 9, 13, 17, 25, 33, 49, 65, 97, 129, 193, 257, 385, 513, 769, 1025, 1537, 2049, 3073, 4097, 6145, 8193, 12289, 16385, 24577];
+    const DEXT = [0, 0, 0, 0, 1, 1, 2, 2, 3, 3, 4, 4, 5, 5, 6, 6, 7, 7, 8, 8, 9, 9, 10, 10, 11, 11, 12, 12, 13, 13];
+    let fixedL = null, fixedD = null;
+    for (;;) {
+      const last = bits(1), type = bits(2);
+      if (type === 0) {
+        if (bit) { bit = 0; pos++; }
+        const len = src[pos] | (src[pos + 1] << 8);
+        pos += 4;
+        out.set(src.subarray(pos, pos + len), op); op += len; pos += len;
+      } else {
+        let lt, dt;
+        if (type === 1) {
+          if (!fixedL) {
+            const l = new Uint8Array(288);
+            l.fill(8, 0, 144); l.fill(9, 144, 256); l.fill(7, 256, 280); l.fill(8, 280, 288);
+            fixedL = table(l); fixedD = table(new Uint8Array(30).fill(5));
+          }
+          lt = fixedL; dt = fixedD;
+        } else {
+          const hlit = bits(5) + 257, hdist = bits(5) + 1, hclen = bits(4) + 4;
+          const ORDER = [16, 17, 18, 0, 8, 7, 9, 6, 10, 5, 11, 4, 12, 3, 13, 2, 14, 1, 15];
+          const cl = new Uint8Array(19);
+          for (let i = 0; i < hclen; i++) cl[ORDER[i]] = bits(3);
+          const ct = table(cl), lens = new Uint8Array(hlit + hdist);
+          for (let i = 0; i < hlit + hdist;) {
+            const sym = decode(ct);
+            if (sym < 16) lens[i++] = sym;
+            else if (sym === 16) { const prev = lens[i - 1]; for (let r = 3 + bits(2); r > 0; r--) lens[i++] = prev; }
+            else if (sym === 17) i += 3 + bits(3);
+            else i += 11 + bits(7);
+          }
+          lt = table(lens.subarray(0, hlit)); dt = table(lens.subarray(hlit));
+        }
+        for (;;) {
+          const sym = decode(lt);
+          if (sym < 256) out[op++] = sym;
+          else if (sym === 256) break;
+          else {
+            const li = sym - 257, len = LBASE[li] + bits(LEXT[li]);
+            const di = decode(dt), dist = DBASE[di] + bits(DEXT[di]);
+            for (let k = 0; k < len; k++, op++) out[op] = out[op - dist];
+          }
+        }
+      }
+      if (last) break;
+    }
+    return out;
+  }
+
+  function scanLevels(id) {   // -> {q (0..7 per pixel), w, h} or null when the scan isn't loaded
+    if (scanCache.has(id)) return scanCache.get(id);
+    let raw = SCAN_DATA[id];
+    if (!raw) return null;
+    if (typeof raw === "string") raw = fromBase64(raw);
+    if (String.fromCharCode(raw[0], raw[1], raw[2], raw[3]) !== "ETX1") throw new Error(`Not a texture file: ${id}`);
+    const w = raw[4] | (raw[5] << 8), h = raw[6] | (raw[7] << 8);
+    const v = { q: inflate(raw.subarray(8), w * h), w, h };
+    while (scanCache.size >= 4) scanCache.delete(scanCache.keys().next().value);
+    scanCache.set(id, v);
+    return v;
+  }
+
+  function sampleScan(id, xs, ys, tilePx) {   // bilinear, mirrored tiles; same maths as the Python engine
+    const T = scanLevels(id);
+    if (!T) return null;
+    const { q, w: tw, h: th } = T, k = tw / tilePx, gw = xs.length, gh = ys.length, out = new Float64Array(gw * gh);
+    const mir = (i, n) => { const t = ((i % (2 * n)) + 2 * n) % (2 * n); return t < n ? t : 2 * n - 1 - t; };
+    const xa = new Int32Array(gw), xb = new Int32Array(gw), fx = new Float64Array(gw);
+    for (let j = 0; j < gw; j++) { const u = xs[j] * k - 0.5, x0 = Math.floor(u); fx[j] = u - x0; xa[j] = mir(x0, tw); xb[j] = mir(x0 + 1, tw); }
+    for (let i = 0; i < gh; i++) {
+      const v = ys[i] * k - 0.5, y0 = Math.floor(v), fy = v - y0, ra = mir(y0, th) * tw, rb = mir(y0 + 1, th) * tw;
+      for (let j = 0; j < gw; j++) {
+        const t00 = q[ra + xa[j]] / 7, t01 = q[ra + xb[j]] / 7, t10 = q[rb + xa[j]] / 7, t11 = q[rb + xb[j]] / 7;
+        const a = t00 + (t01 - t00) * fx[j], b = t10 + (t11 - t10) * fx[j];
+        out[i * gw + j] = a + (b - a) * fy;
+      }
+    }
+    return out;
+  }
+
   function textureMasks(xs, ys, o, textureImages) {
     const n = xs.length * ys.length, remove = new Uint8Array(n), add = new Uint8Array(n), ppm = o.dpi / 25.4;
     o.textures.forEach((t, i) => {
@@ -1389,6 +1520,9 @@
       } else if (kind === "pinholes") {   // tiny holes from dust and gaps in the emulsion
         const a = fbm(xs, ys, Math.max(base * 0.08, 0.7), seed, 2);
         for (let k = 0; k < n; k++) if (a[k] > 1 - s * 0.06) remove[k] = 1;
+      } else if (TEXTURES[kind].scan) {
+        const v = sampleScan(kind, xs, ys, base);
+        if (v) for (let k = 0; k < n; k++) if (v[k] < s) remove[k] = 1;   // strength 1 = all but clean areas
       } else if (kind === "image") {
         const tex = (textureImages || {})[t.image_id];
         if (!tex) return;
@@ -1880,7 +2014,8 @@
     ImageError, OptionError, hex, toHex, parseOptions, prepareKey, artKey, prepareArt, prepare, outSize, resolveFit, plateSpecs,
     renderPreview, renderFull, renderPlates, composite, report, threshold, shapeDots, lum, contrastInk, spotPalette,
     thresholdCuts, fixedPalette, DIFFUSION_STYLES, PALETTES, inkName,
-    _internal: { hash2, valueNoise, fbm, blueNoise, voronoiEdge, scratches, rgbToLab, labToRgb, resize },
+    registerScans,
+    _internal: { textureMasks, scanLevels, hash2, valueNoise, fbm, blueNoise, voronoiEdge, scratches, rgbToLab, labToRgb, resize },
   };
   if (typeof module !== "undefined" && module.exports) module.exports = api;
   root.EckoToneEngine = api;

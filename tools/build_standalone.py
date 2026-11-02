@@ -64,6 +64,11 @@ def build_engine() -> str:
     return header + js
 
 
+def scans_b64() -> dict:
+    """The built-in distress scans, as {id: base64 .etx}."""
+    return {sc["id"]: base64.b64encode((E.SCAN_DIR / f"{sc['id']}.etx").read_bytes()).decode() for sc in E.SCANS}
+
+
 def build_page(engine_js: str) -> str:
     html = (WEB / "tone.html").read_text()
     css = (WEB / "styles.css").read_text() + "\n" + (WEB / "tone.css").read_text()
@@ -85,6 +90,7 @@ def build_page(engine_js: str) -> str:
     worker_src = engine_js + "\n" + host
     bundle = "\n".join([
         script(json.dumps(fonts), ' type="application/json" id="eckoFonts"'),
+        script(json.dumps(scans_b64()), ' type="application/json" id="eckoScans"'),
         script(worker_src, ' type="text/plain" id="eckoWorkerSrc"'),
         script(json.dumps(base64.b64encode(plugin_zip_bytes(engine_js)).decode()), ' type="application/json" id="eckoPlugin"'),
         script(engine_js), script(host), script(shim), script(ui),
@@ -131,6 +137,8 @@ def plugin_files(engine_js: str) -> dict:
     src = ROOT / "photoshop-plugin"
     files = {name: (src / name).read_bytes() for name in ("manifest.json", "index.html", "index.js")}
     files["tone-engine.js"] = engine_js.encode()
+    files["tone-scans.js"] = ("/* GENERATED: built-in distress scans for Ecko Tone. */\nmodule.exports = "
+                              + json.dumps(scans_b64()) + ";\n").encode()
     return files
 
 
@@ -160,6 +168,7 @@ def main() -> None:
     engine_js = build_engine()
     (STANDALONE / "tone-engine.js").write_text(engine_js)
     (ROOT / "photoshop-plugin" / "tone-engine.js").write_text(engine_js)
+    (ROOT / "photoshop-plugin" / "tone-scans.js").write_bytes(plugin_files(engine_js)["tone-scans.js"])
     if (STANDALONE / "host.js").exists() and (STANDALONE / "shim.js").exists():
         (ROOT / "dist").mkdir(exist_ok=True)
         page = build_page(engine_js)

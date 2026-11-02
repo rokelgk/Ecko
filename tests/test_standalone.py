@@ -42,3 +42,27 @@ def test_ink_names_match_between_python_and_js():
                        capture_output=True, text=True, timeout=60)
     assert r.returncode == 0, r.stderr
     assert json.loads(r.stdout) == [E.ink_name(c) for c in colours]
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="Node.js not installed")
+def test_scan_textures_match_between_python_and_js():
+    """The same scan must knock out exactly the same pixels in the web app, Photoshop and the server."""
+    import json
+
+    import numpy as np
+
+    from ecko.tone import engine as E
+    o = {"dpi": 300, "seed": 3, "textures": [{"type": sc["id"], "strength": 0.6, "scale": 0.7} for sc in E.SCANS[:8]]}
+    xs = (np.arange(0, 900, 1.7) + 0.5).tolist()
+    ys = (np.arange(0, 600, 2.3) + 0.5).tolist()
+    remove, _ = E.texture_masks(np.array(xs), np.array(ys), E.parse_options(o))
+    js = ("const E=require(process.argv[1]);E.registerScans(require(process.argv[2]));"
+          "const a=JSON.parse(process.argv[3]);const o=E.parseOptions(a[0]);"
+          "const m=E._internal.textureMasks(Float64Array.from(a[1]),Float64Array.from(a[2]),o,{});"
+          "console.log(JSON.stringify(Array.from(m.remove)));")
+    r = subprocess.run(["node", "-e", js, str(ROOT / "web/standalone/tone-engine.js"),
+                        str(ROOT / "photoshop-plugin/tone-scans.js"), json.dumps([o, xs, ys])],
+                       capture_output=True, text=True, timeout=120)
+    assert r.returncode == 0, r.stderr
+    got = np.array(json.loads(r.stdout), bool).reshape(len(ys), len(xs))
+    assert remove.any() and (got == remove).mean() == 1.0

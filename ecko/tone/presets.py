@@ -72,4 +72,8 @@ PRESETS = [
                  "textures": [{"type": "cracked", "strength": 0.55, "scale": 1.0},
                               {"type": "scratches", "strength": 0.4, "scale": 1.0},
                               {"type": "streaks", "strength": 0.45, "scale": 1.0}]}},
+    {"id": "real-cracked", "name": "Real cracked print", "blurb": "Scanned cracks from a real worn shirt, on soft vintage dots.",
+     "options": {"mode": "mono", "style": "round", "lpi": 32, "angle": 22.5, "roughness": 0.3, "target": "dtf",
+                 "textures": [{"type": "scan_cracked_heavy", "strength": 0.55, "scale": 1.0},
+                              {"type": "scan_heather", "strength": 0.25, "scale": 1.0}]}},
 ]

@@ -7,11 +7,13 @@
 (function () {
   "use strict";
   const fonts = JSON.parse(document.getElementById("eckoFonts").textContent);
+  const scanEl = document.getElementById("eckoScans");   // the built-in distress scans
+  const scans = scanEl ? JSON.parse(scanEl.textContent) : {};
   const realFetch = window.fetch.bind(window);
   let call = null;
 
   function mainThreadCaller() {
-    let ready = window.EckoToneHost.handle("init", { fonts });
+    let ready = window.EckoToneHost.handle("init", { fonts, scans });
     return async (cmd, args) => { await ready; return window.EckoToneHost.handle(cmd, args); };
   }
 
@@ -37,7 +39,7 @@
         pending.set(id, { resolve: res, reject: rej });
         worker.postMessage({ id, cmd, args }, transfer || []);
       });
-      send("init", { fonts }).then((caps) => (caps.fonts && caps.canDraw ? resolve(send) : reject(new Error("no canvas in worker"))), reject);
+      send("init", { fonts, scans }).then((caps) => (caps.fonts && caps.canDraw ? resolve(send) : reject(new Error("no canvas in worker"))), reject);
       setTimeout(() => reject(new Error("worker timeout")), 8000);
     });
   }

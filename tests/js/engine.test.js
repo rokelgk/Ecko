@@ -226,3 +226,15 @@ test("vintage extras: wear textures, keyline + shadow, ghost print", () => {
   assert.ok(p1.srcW > p0.srcW && p1.crop[0] < p0.crop[0]);
   assert.ok(inked(E.parseOptions({ width_in: 3, ghost_mm: 1.5, ghost_strength: 0.8 })) > n0);
 });
+
+test("scanned textures decode and knock ink out", () => {
+  E.registerScans(require(path.join(__dirname, "../../photoshop-plugin/tone-scans.js")));
+  const { rgba, w, h } = box();
+  const inked = (o) => { const r = E.renderFull(E.prepare(rgba, w, h, o), o); let n = 0; for (let k = 3; k < r.rgba.length; k += 4) if (r.rgba[k]) n++; return n; };
+  const n0 = inked(E.parseOptions({ width_in: 3 }));
+  const scans = E.CATALOG.api.textures.filter((t) => t.scan);
+  assert.ok(scans.length >= 16);
+  for (const t of scans.slice(0, 4)) {
+    assert.ok(inked(E.parseOptions({ width_in: 3, textures: [{ type: t.id, strength: 0.9, scale: 1 }] })) < n0, t.id);
+  }
+});

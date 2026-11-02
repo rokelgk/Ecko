@@ -510,7 +510,7 @@
 
   async function handle(cmd, args) {
     switch (cmd) {
-      case "init": return { fonts: await loadFonts(args.fonts), canDraw: canDraw() };
+      case "init": E.registerScans(args.scans); return { fonts: await loadFonts(args.fonts), canDraw: canDraw() };
       case "upload": return upload(args);
       case "uploadRGBA": return uploadRGBA(args);
       case "preview": return preview(args);

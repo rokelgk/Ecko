@@ -638,3 +638,35 @@ def test_ghost_print_adds_a_faint_offset_copy(logo):
 def test_vintage_presets_exist():
     ids = {p["id"] for p in PRESETS}
     assert {"bootleg-rap", "flea-market", "sun-faded", "thrashed-band"} <= ids
+
+
+# ------------------------------------------------------------- scanned distress textures
+
+
+def test_every_scan_loads_and_knocks_ink_out(logo):
+    assert len(E.SCANS) >= 16
+    base = E.parse_options({"width_in": 3})
+    prep = E.prepare(logo, base)
+    a0 = (_alpha_of(prep, base) > 0).sum()
+    for sc in E.SCANS:
+        T = E.scan_levels(sc["id"])
+        assert T.min() == 0.0 and T.max() == 1.0
+        o = E.parse_options({"width_in": 3, "textures": [{"type": sc["id"], "strength": 0.9, "scale": 1}]})
+        a1 = _alpha_of(prep, o)
+        assert set(np.unique(a1)) <= {0, 255}
+        assert (a1 > 0).sum() < a0, sc["id"]
+
+
+def test_scans_tile_without_seams():
+    xs = np.arange(0, 3000, dtype=np.float64) + 0.5
+    v = E.sample_scan("scan_crackle", xs, np.array([10.5]), 1000.0)[0]
+    jumps = np.abs(np.diff(v))
+    assert jumps[995:1005].max() <= np.percentile(jumps, 99.9) + 1e-9   # mirrored: no step at the tile edge
+
+
+def test_scans_work_on_light_and_dark_shirts(logo):
+    for shirt in ("#ffffff", "#111111"):
+        o = E.parse_options({"width_in": 3, "garment": shirt, "textures": [{"type": "scan_deep_cracks", "strength": 0.7, "scale": 1}]})
+        plain = E.parse_options({"width_in": 3, "garment": shirt})
+        prep = E.prepare(logo, plain)
+        assert (_alpha_of(prep, o) > 0).sum() < (_alpha_of(prep, plain) > 0).sum()

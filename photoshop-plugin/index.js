@@ -17,6 +17,7 @@
   try {
     ps = require("photoshop");
     E = require("./tone-engine.js");
+    try { E.registerScans(require("./tone-scans.js")); } catch (e) { /* scans missing: those textures are skipped */ }
   } catch (e) {
     $("status").textContent = `Couldn't start: ${e.message || e}`;
     $("status").className = "err";
@@ -250,13 +251,21 @@
   function buildTextures() {
     const box = $("textures");
     while (box.firstChild) box.removeChild(box.firstChild);
+    let scanHead = false;
     for (const t of cat.textures) {
       if (t.id === "image" && !texLayerId) continue;
+      if (t.scan && !scanHead) {
+        scanHead = true;
+        const h = document.createElement("div");
+        h.className = "hint";
+        h.textContent = "Scanned from real worn prints (dark = ink knocked out, on any shirt colour):";
+        box.appendChild(h);
+      }
       tex[t.id] = tex[t.id] || { on: t.id === "image", strength: 0.4, scale: 1 };
       const st = tex[t.id];
       const el = document.createElement("div");
       el.className = "ink";
-      el.innerHTML = `<div class="check"><input type="checkbox" ${st.on ? "checked" : ""}> ${esc(t.id === "image" ? "Your texture layer" : t.name)}</div>
+      el.innerHTML = `<div class="check"><input type="checkbox" ${st.on ? "checked" : ""}> ${esc(t.id === "image" ? "Your texture layer" : t.name.replace(/^Scan: /, ""))}</div>
         <div class="field"><div class="title">Strength<span class="value">${fmt(st.strength)}</span></div><input type="range" min="0" max="1" step="0.02" value="${st.strength}" data-t="strength"></div>
         <div class="field"><div class="title">Size<span class="value">${fmt(st.scale)}</span></div><input type="range" min="0.25" max="4" step="0.05" value="${st.scale}" data-t="scale"></div>`;
       el.querySelector("input[type=checkbox]").addEventListener("change", (e) => { st.on = !!e.target.checked; save(); scheduleLive(50); });

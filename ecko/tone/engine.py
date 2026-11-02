@@ -16,7 +16,11 @@ the same picture at different zoom levels.
 
 from __future__ import annotations
 
+import json
 import math
+import struct
+import zlib
+from pathlib import Path
 from dataclasses import dataclass, field, fields
 from functools import lru_cache
 
@@ -88,6 +92,45 @@ TEXTURES = {
     "pinholes": {"label": "Screen pinholes", "size_mm": 4.0, "adds_ink": False},
     "image": {"label": "Your texture image", "size_mm": 100.0, "adds_ink": False},
 }
+
+# Real distress scans (tools/make_textures.py packs them): dark = ink knocked out. One tile is 180 mm
+# wide at size 1 and tiles are mirrored, so there are no seams on big prints.
+SCAN_DIR = Path(__file__).resolve().parent / "textures"
+SCANS = json.loads((SCAN_DIR / "index.json").read_text()) if (SCAN_DIR / "index.json").exists() else []
+for _scan in SCANS:
+    TEXTURES[_scan["id"]] = {"label": _scan["label"], "size_mm": 180.0, "adds_ink": False, "scan": True}
+
+
+@lru_cache(maxsize=4)
+def scan_levels(scan_id: str) -> np.ndarray:
+    """A packed scan as float64 0..1 (0 = darkest), exactly as the JavaScript engine decodes it."""
+    data = (SCAN_DIR / f"{scan_id}.etx").read_bytes()
+    if data[:4] != b"ETX1":
+        raise ValueError(f"Not a texture file: {scan_id}")
+    w, h = struct.unpack("<HH", data[4:8])
+    q = np.frombuffer(zlib.decompress(data[8:]), np.uint8).reshape(h, w)
+    return q.astype(np.float64) / 7.0
+
+
+def _mirror(i: np.ndarray, n: int) -> np.ndarray:
+    t = np.mod(i, 2 * n)
+    return np.where(t < n, t, 2 * n - 1 - t)
+
+
+def sample_scan(scan_id: str, xs, ys, tile_px: float) -> np.ndarray:
+    """Bilinear sample of a scan tiled (mirrored) every tile_px print pixels."""
+    T = scan_levels(scan_id)
+    th, tw = T.shape
+    k = tw / tile_px
+    u = np.asarray(xs, np.float64) * k - 0.5
+    v = np.asarray(ys, np.float64) * k - 0.5
+    x0, y0 = np.floor(u), np.floor(v)
+    fx, fy = u - x0, v - y0
+    xa, xb = _mirror(x0.astype(np.int64), tw), _mirror(x0.astype(np.int64) + 1, tw)
+    ya, yb = _mirror(y0.astype(np.int64), th), _mirror(y0.astype(np.int64) + 1, th)
+    a = T[ya][:, xa] + (T[ya][:, xb] - T[ya][:, xa]) * fx[None, :]
+    b = T[yb][:, xa] + (T[yb][:, xb] - T[yb][:, xa]) * fx[None, :]
+    return a + (b - a) * fy[:, None]
 
 # Rules of thumb, not guarantees: printers, films and powders vary.
 TARGETS = {
@@ -1185,6 +1228,8 @@ def texture_masks(xs, ys, o: ToneOptions, texture_images: dict | None = None):
             remove |= (band < s * 0.5) & (speck < 0.35 + 0.5 * s)
         elif kind == "pinholes":   # tiny holes from dust and gaps in the screen emulsion
             remove |= noise.fbm(xs, ys, max(base * 0.08, 0.7), seed, 2) > 1 - s * 0.06
+        elif TEXTURES[kind].get("scan"):
+            remove |= sample_scan(kind, xs, ys, base) < s   # strength 1 = all but clean areas
         elif kind == "image":
             tex = (texture_images or {}).get(t.get("image_id"))
             if tex is None:

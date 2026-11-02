@@ -123,13 +123,21 @@
   function buildTextures() {
     const box = $("textures");
     box.innerHTML = "";
+    let scanHead = false;
     for (const t of catalog.textures) {
       if (t.id === "image" && !tex.image) continue;
+      if (t.scan && !scanHead) {   // the built-in scans of real worn prints get their own heading
+        scanHead = true;
+        const h = document.createElement("p");
+        h.className = "hint texHead";
+        h.textContent = "Scanned from real worn prints (dark = ink knocked out, so the shirt shows through on any colour):";
+        box.appendChild(h);
+      }
       tex[t.id] = tex[t.id] || { type: t.id, on: false, strength: 0.4, scale: 1 };
       const st = tex[t.id];
       const el = document.createElement("div");
       el.className = "tex" + (st.on ? " on" : "");
-      el.innerHTML = `<label class="check"><input type="checkbox" ${st.on ? "checked" : ""}> ${t.name}</label>
+      el.innerHTML = `<label class="check"><input type="checkbox" ${st.on ? "checked" : ""}> ${t.scan ? t.name.replace(/^Scan: /, "") : t.name}</label>
         <div class="sliders">
           <label>Strength <input type="range" min="0" max="1" step="0.02" value="${st.strength}" data-k="strength"></label>
           <label>Size <input type="range" min="0.25" max="4" step="0.05" value="${st.scale}" data-k="scale"></label>

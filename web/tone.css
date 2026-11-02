@@ -173,3 +173,4 @@ body.panelsHidden .psSide { display: none; }
 .outlineColour { align-items: center; gap: 10px; }
 .outlineColour .check { margin: 0; flex: 1; }
 .outlineColour input[type=color] { width: 40px; height: 30px; flex: 0 0 auto; }
+.texHead { margin: 10px 0 4px; font-weight: 600; }
