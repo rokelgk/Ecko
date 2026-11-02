@@ -78,26 +78,37 @@
 
     // Live view on the Photoshop canvas: a document named "Ecko Seps - Live"
     // that is redrawn after every change (whatever view the panel shows).
-    async showLive(rgba, w, h) {
+    async showLive(rgba, w, h, dpi) {
       const rgb = new Uint8Array(w * h * 3);
       for (let p = 0; p < w * h; p++) { rgb[p * 3] = rgba[p * 4]; rgb[p * 3 + 1] = rgba[p * 4 + 1]; rgb[p * 3 + 2] = rgba[p * 4 + 2]; }
       return modal('Update Ecko Seps live view', async () => {
+        let created = false;
         let doc = this._liveId ? app.documents.find((d) => d.id === this._liveId) : null;
         if (doc && (Math.round(doc.width) !== w || Math.round(doc.height) !== h)) {
           await doc.closeWithoutSaving();
           doc = null;
         }
         if (!doc) {
-          doc = await app.documents.add({ width: w, height: h, resolution: 72, mode: 'RGBColorMode', fill: 'white', name: 'Ecko Seps - Live' });
+          // The Proof Window: a document at the same print size as the art,
+          // tiled next to it (like ActionSeps' proof window).
+          doc = await app.documents.add({ width: w, height: h, resolution: Math.max(1, Math.round(dpi || 72)), mode: 'RGBColorMode', fill: 'white', name: 'Proof Window' });
           this._liveId = doc.id;
-          const layer = await doc.createLayer({ name: 'Ecko Seps live view' });
+          const layer = await doc.createLayer({ name: 'Ecko Seps proof' });
           this._liveLayer = layer.id;
+          created = true;
         }
         const id = await imaging.createImageDataFromBuffer(rgb, { width: w, height: h, components: 3, chunky: true, colorProfile: 'sRGB IEC61966-2.1', colorSpace: 'RGB' });
         try {
           await imaging.putPixels({ documentID: doc.id, layerID: this._liveLayer, imageData: id, replace: true, targetBounds: { left: 0, top: 0 } });
         } finally {
           id.dispose();
+        }
+        if (created) {
+          // Window > Arrange > Tile All Vertically: art and proof side by side,
+          // then hand the focus back to the artwork.
+          try { await action.batchPlay([{ _obj: 'select', _target: [{ _ref: 'menuItemClass', _enum: 'menuItemType', _value: 'tileVertically' }] }], {}); } catch (e) { /* arrange is optional */ }
+          const art = this._artId ? app.documents.find((d) => d.id === this._artId) : null;
+          if (art) { try { app.activeDocument = art; } catch (e) { /* keep proof active */ } }
         }
       });
     },

@@ -51,8 +51,11 @@ Pick the job type, the shirt color and the number of screens, then press
   and fine-grain knockouts, or your own texture image; amount, size,
   softness, strength, invert, new pattern, and apply to all screens, the
   underbase only or the top colors only.
-- **Live view in Photoshop (📺):** a "Ecko Seps - Live" document on the
-  canvas redraws after every change, showing whatever view the panel shows.
+- **Proof Window (🪟, Photoshop):** like ActionSeps, the panel has no picture;
+  a "Proof Window" document at the art's print size opens tiled next to your
+  artwork and redraws after every change, showing whichever view tab you
+  pick. The panel picture comes back while the clean-up brush or eyedropper
+  is in use, or when the Proof window is switched off.
   **Detail** (Fast / Sharp / Max) sets how sharp the live proof is.
 - **Aztec carved theme:** stepped-fret bands, sun-stone glyph, carved card
   corners and step-pyramid dividers in obsidian, gold, terracotta and jade

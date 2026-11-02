@@ -306,3 +306,9 @@ body.ps-host .btn.to-top { position: static; box-shadow: none; }
 .addpop input.mix { -webkit-appearance: none; appearance: none; height: 12px; border-radius: 6px; border: 1px solid #555; }
 .addpop input.mix.hue { background: linear-gradient(90deg, #f00, #ff0, #0f0, #0ff, #00f, #f0f, #f00); }
 .addpop input.mix::-webkit-slider-thumb { -webkit-appearance: none; width: 16px; height: 16px; border-radius: 8px; background: #fff; border: 2px solid #222; }
+
+/* Proof-window mode: no picture in the panel (it's in the Proof Window
+   document); keep tabs, match score and notes on top. */
+.layout.proof-mode .stage, .layout.proof-mode .splitter, .layout.proof-mode #togglePreview,
+.layout.proof-mode .pane-preview > .band.pyr { display: none !important; }
+.layout.proof-mode .pane-preview { overflow: hidden; border-bottom: 2px solid var(--gold, #555); padding-bottom: 6px; }

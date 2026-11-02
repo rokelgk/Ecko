@@ -470,6 +470,7 @@
     const forMixer = state.picking === 'mixer';
     state.picking = false;
     $('app').classList.remove('picking');
+    layout();
     const src = proofImage().image;
     const x = Math.min(src.width - 1, Math.floor(fx * src.width)), y = Math.min(src.height - 1, Math.floor(fy * src.height));
     const acc = [0, 0, 0];
@@ -842,7 +843,7 @@
       hint = `Screen ${s.order}: ${s.name}. Black prints. ${(s.coverage * 100).toFixed(1)}% coverage.`;
     }
     host.showImage(img, rgba, ww, hh);
-    $('viewHint').textContent = hint;
+    $('viewHint').textContent = proofMode() ? `${hint.split('. Tap')[0].replace(/ Tap .*$/, '')} · Showing in the Proof Window next to your art.` : hint;
     pushLive(rgba, ww, hh);
   }
 
@@ -853,7 +854,7 @@
     if (host.name !== 'photoshop' || !host.showLive || ui.liveOff) return;
     // Throttle, not debounce: while you drag, the canvas keeps updating
     // (newest picture wins) instead of waiting for you to let go.
-    livePending = { rgba, w, h };
+    livePending = { rgba, w, h, dpi: state.result ? state.result.dpi : 72 };
     if (!liveBusy && !liveTimer) liveTimer = setTimeout(flushLive, 120);
   }
   async function flushLive() {
@@ -862,7 +863,7 @@
     const job = livePending;
     livePending = null;
     liveBusy = true;
-    try { await host.showLive(job.rgba, job.w, job.h); } catch (e) {
+    try { await host.showLive(job.rgba, job.w, job.h, job.dpi); } catch (e) {
       if (!liveWarned) { status('Live view in Photoshop failed: ' + e.message, true); liveWarned = true; }
     } finally {
       liveBusy = false;
@@ -1244,6 +1245,7 @@
     pick.addEventListener('click', () => {
       state.picking = 'mixer';
       $('app').classList.add('picking');
+      layout();
       state.view = 'art'; renderTabs(); renderView();
       status('Tap the color you want in the picture.');
     });
@@ -1350,10 +1352,45 @@
   }
 
   let lastSize = '';
+  // Proof-window mode (Photoshop, live view on): the panel has no picture,
+  // just the view tabs and notes on top and the options below; the picture
+  // is the Proof Window document next to the art. The picture comes back
+  // while the clean-up brush or the eyedropper is in use.
+  const proofMode = () => host.name === 'photoshop' && !ui.liveOff && !(state.clean && state.clean.active) && !state.picking;
+
+  // Natural height of the top strip in proof mode: its visible children.
+  function stripHeight(h) {
+    const pv = $('previewPane');
+    let sum = 14;
+    for (const c of pv.children) {
+      if (c.offsetParent === null || c.classList.contains('stage')) continue;
+      const cs = getComputedStyle(c);
+      sum += c.getBoundingClientRect().height + (parseFloat(cs.marginTop) || 0) + (parseFloat(cs.marginBottom) || 0);
+    }
+    return Math.round(Math.max(60, Math.min(h * 0.45, sum)));
+  }
+
   function layout() {
     const app = $('app');
     const { w, h } = hostSize();
-    lastSize = `${w}x${h}`;
+    const pm = proofMode();
+    app.classList.toggle('proof-mode', pm);
+    lastSize = `${w}x${h}x${pm}`;
+    if (pm) {
+      const pv = $('previewPane'), op = $('optionsPane');
+      app.classList.add('narrow');
+      app.style.width = `${w}px`; app.style.height = `${h}px`;
+      pv.style.width = `${w}px`;
+      const pvH = stripHeight(h);
+      pv.style.height = `${pvH}px`;
+      op.style.width = `${w}px`; op.style.height = `${Math.max(100, h - pvH)}px`;
+      lastSize += `x${pvH}`;
+      document.body.classList.toggle('ui-compact', ui.size === 'compact' || (!ui.size && h < 700));
+      document.body.classList.toggle('ui-large', ui.size === 'large');
+      document.body.classList.toggle('theme-aztec', ui.theme !== 'plain');
+      document.body.classList.toggle('ps-host', true);
+      return;
+    }
     const narrow = w < 760;
     app.classList.toggle('narrow', narrow);
     app.classList.toggle('short', h < 620);
@@ -1389,7 +1426,10 @@
   // Photoshop panels don't always send resize events: check the size often.
   setInterval(() => {
     const { w, h } = hostSize();
-    if (`${w}x${h}` !== lastSize) { layout(); if (state.view === 'compare') renderView(); }
+    const pm = proofMode();
+    let key = `${w}x${h}x${pm}`;
+    if (pm) key += `x${stripHeight(h)}`;
+    if (key !== lastSize) { layout(); if (state.view === 'compare') renderView(); }
   }, 400);
 
   function setupSplitter() {
@@ -1426,10 +1466,10 @@
     layout(); renderView();
   });
   if ($('liveBtn')) {
-    const paintLive = () => { $('liveBtn').textContent = ui.liveOff ? '📺 Live: off' : '📺 Live: on'; $('liveBtn').classList.toggle('primary', !ui.liveOff); };
+    const paintLive = () => { $('liveBtn').textContent = ui.liveOff ? '🪟 Proof window: off' : '🪟 Proof window: on'; $('liveBtn').classList.toggle('primary', !ui.liveOff); };
     paintLive();
     $('liveBtn').addEventListener('click', async () => {
-      ui.liveOff = !ui.liveOff; saveUi(); paintLive();
+      ui.liveOff = !ui.liveOff; saveUi(); paintLive(); layout();
       if (ui.liveOff) { try { await host.closeLive(); } catch (e) { /* already closed */ } } else if (state.result) renderView();
     });
   }
@@ -1719,6 +1759,7 @@
   $('pickSpot').addEventListener('click', () => {
     state.picking = !state.picking;
     $('app').classList.toggle('picking', state.picking);
+    layout();
     if (state.picking) { if (typeof state.view === 'number' || state.view === 'dots') { state.view = 'art'; renderTabs(); renderView(); } status('Tap the color in the picture to add it as a spot color.'); }
     else status('');
   });
