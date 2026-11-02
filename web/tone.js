@@ -180,7 +180,7 @@
       inp.type = "color";
       inp.value = opts.inks[i];
       inp.title = n === 2 ? (i ? "Second ink" : "Shadow ink") : "Ink";
-      inp.addEventListener("input", () => { opts.inks[i] = inp.value; changed(); });
+      inp.addEventListener("input", () => { opts.inks[i] = inp.value; changed(450); });
       box.appendChild(inp);
     }
   }
@@ -216,7 +216,7 @@
         inp.value = t[k];
         inp.addEventListener("input", () => {
           t[k] = inp.type === "range" ? parseFloat(inp.value) : inp.value;
-          changed();
+          changed(inp.type === "range" ? 180 : 450);   // typing / colour dragging: wait for a pause
         });
       });
       el.querySelector("[data-del]").addEventListener("click", () => {
@@ -417,11 +417,11 @@
 
   // ---------------------------------------------------------------- render
 
-  function changed() {
+  function changed(delay = 180) {
     labels();
     save();
     clearTimeout(timer);
-    timer = setTimeout(render, 180);
+    timer = setTimeout(render, delay);
   }
 
   function serverOpts() {
@@ -778,12 +778,13 @@
           im.src = url;
         });
         const w = img.naturalWidth, h = img.naturalHeight;
-        const sc = Math.min(1, 5000 / Math.max(w, h), Math.sqrt(16e6 / (w * h)));
+        const sc = Math.min(1, 4000 / Math.max(w, h), Math.sqrt(16e6 / (w * h)));
         const c = document.createElement("canvas");
         c.width = Math.max(1, Math.round(w * sc));
         c.height = Math.max(1, Math.round(h * sc));
         c.getContext("2d").drawImage(img, 0, 0, c.width, c.height);
         const blob = await new Promise((resolve) => c.toBlob(resolve, "image/png"));
+        c.width = 1; c.height = 1;   // Safari limits total canvas memory: give it back now
         return new File([blob], (f.name || "picture").replace(/\.[^.]+$/, "") + ".png", { type: "image/png" });
       } finally {
         URL.revokeObjectURL(url);

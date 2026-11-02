@@ -28,7 +28,7 @@
   const CREAM = [244, 241, 234];
   const INK_BLACK = [29, 29, 31];
   const MAX_OUTPUT_PX = 120000000;
-  const MAX_SOURCE_SIDE = 5000;
+  const MAX_SOURCE_SIDE = 4000;
   const LOUPE_MAX = 800;
   const MAX_TEXT_LAYERS = 6;
 
@@ -139,6 +139,12 @@
   }
 
   const textWorkWidth = (o) => Math.min(4000, Math.max(800, Math.round(o.width_in * o.dpi / 100) * 100));
+
+  // The picture clean-up part of prepare (no text): cached separately so text edits don't redo it.
+  function artKey(o) {
+    return JSON.stringify([o.remove_background, o.bg_tolerance, o.sharpen, o.denoise, o.smooth_mm,
+      o.smooth_mm ? Math.round(o.width_in * o.dpi) : 0]);
+  }
 
   function prepareKey(o) {
     return JSON.stringify([o.remove_background, o.bg_tolerance, o.sharpen, o.mode === "spot" && o.spot_colors,
@@ -366,18 +372,43 @@
     if (dw > sw || dh > sh) return resizeBilinear(src, sw, sh, dw, dh, C);
     const tmp = new Float32Array(dw * sh * C), out = new Float32Array(dw * dh * C);
     const sx = sw / dw, sy = sh / dh;
-    const taps = [];   // per output column: [source column, weight] pairs
+    // Per output column, its source columns and weights, in flat typed arrays (fast inner loop).
+    const start = new Int32Array(dw + 1), cols = [], wts = [];
     for (let x = 0; x < dw; x++) {
-      const a = x * sx, b = a + sx, i0 = Math.floor(a), i1 = Math.min(sw, Math.ceil(b)), t = [];
-      for (let i = i0; i < i1; i++) t.push(i, (Math.min(b, i + 1) - Math.max(a, i)) / sx);
-      taps.push(t);
+      const a = x * sx, b = a + sx, i0 = Math.floor(a), i1 = Math.min(sw, Math.ceil(b));
+      start[x] = cols.length;
+      for (let i = i0; i < i1; i++) { cols.push(i * C); wts.push((Math.min(b, i + 1) - Math.max(a, i)) / sx); }
     }
+    start[dw] = cols.length;
+    const tc = Int32Array.from(cols), tw = Float32Array.from(wts);
     for (let y = 0; y < sh; y++) {   // row by row: memory is read in order
       const sb = y * sw * C, tb = y * dw * C;
+      if (C === 1) {
+        for (let x = 0; x < dw; x++) {
+          let acc = 0;
+          for (let j = start[x]; j < start[x + 1]; j++) acc += src[sb + tc[j]] * tw[j];
+          tmp[tb + x] = acc;
+        }
+        continue;
+      }
+      if (C === 3 || C === 4) {   // unrolled: the common cases, several times faster
+        for (let x = 0; x < dw; x++) {
+          let r = 0, g = 0, bl = 0, al = 0;
+          for (let j = start[x]; j < start[x + 1]; j++) {
+            const q = sb + tc[j], w = tw[j];
+            r += src[q] * w; g += src[q + 1] * w; bl += src[q + 2] * w;
+            if (C === 4) al += src[q + 3] * w;
+          }
+          const o = tb + x * C;
+          tmp[o] = r; tmp[o + 1] = g; tmp[o + 2] = bl;
+          if (C === 4) tmp[o + 3] = al;
+        }
+        continue;
+      }
       for (let x = 0; x < dw; x++) {
-        const t = taps[x], o = tb + x * C;
-        for (let j = 0; j < t.length; j += 2) {
-          const q = sb + t[j] * C, w = t[j + 1];
+        const o = tb + x * C;
+        for (let j = start[x]; j < start[x + 1]; j++) {
+          const q = sb + tc[j], w = tw[j];
           for (let c = 0; c < C; c++) tmp[o + c] += src[q + c] * w;
         }
       }
@@ -611,7 +642,7 @@
   }
 
   /** rgba8: Uint8ClampedArray/Uint8Array (straight alpha) or null for a text-only design. */
-  function prepare(rgba8, width, height, o, renderText) {
+  function prepareArt(rgba8, width, height, o) {   // -> {art, crop}; art is null when nothing is left
     let art = null, crop = [0, 0, 0, 0];
     if (rgba8) {
       let w = width, h = height, back = 1;
@@ -647,14 +678,18 @@
         for (let k = 0; k < rgb.length; k++) rgb[k] = Math.max(0, Math.min(1, rgb[k] + o.sharpen * (rgb[k] - blur[k])));
       }
       art = cropTo(rgb, alpha, w, h);
-      if (!art && !o.text.length) {
-        throw new ImageError("Nothing is left to print once the background is removed. " +
-          "Turn off background removal or lower its tolerance.");
-      }
       if (art) crop = [Math.round(art.x0 * back), Math.round(art.y0 * back), Math.round(art.w * back), Math.round(art.h * back)];
-    } else if (!o.text.length) {
-      throw new ImageError("Add a picture or some text.");
     }
+    return { art, crop, picture: !!rgba8 };
+  }
+
+  function prepare(rgba8, width, height, o, renderText, stage) {
+    const { art, crop, picture } = stage || prepareArt(rgba8, width, height, o);
+    if (picture && !art && !o.text.length) {
+      throw new ImageError("Nothing is left to print once the background is removed. " +
+        "Turn off background removal or lower its tolerance.");
+    }
+    if (!picture && !o.text.length) throw new ImageError("Add a picture or some text.");
 
     const photo = !!art && photoLike(art.rgb, art.alpha, art.w, art.h);
     let img = art;
@@ -1708,7 +1743,7 @@
 
   const api = {
     CATALOG, DEFAULTS, STYLES, AM_STYLES, GRAIN_STYLES, TEXTURES, TARGETS, CREAM, INK_BLACK, LOUPE_MAX, MAX_OUTPUT_PX,
-    ImageError, OptionError, hex, toHex, parseOptions, prepareKey, prepare, outSize, resolveFit, plateSpecs,
+    ImageError, OptionError, hex, toHex, parseOptions, prepareKey, artKey, prepareArt, prepare, outSize, resolveFit, plateSpecs,
     renderPreview, renderFull, renderPlates, composite, report, threshold, shapeDots, lum, contrastInk, spotPalette,
     thresholdCuts, fixedPalette, DIFFUSION_STYLES, PALETTES,
     _internal: { hash2, valueNoise, fbm, blueNoise, voronoiEdge, scratches, rgbToLab, labToRgb, resize },

@@ -19,6 +19,7 @@
     c.width = w; c.height = h;
     return c;
   }
+  function freeCanvas(c) { try { c.width = 1; c.height = 1; } catch (e) { /* ignore */ } }   // see TEXT_CANVAS_PX
   const canDraw = () => typeof OffscreenCanvas !== "undefined" || typeof document !== "undefined";
 
   async function loadFonts(fonts) {
@@ -43,8 +44,23 @@
   }
 
   /** One line of text bent along an arc (port of ecko/arctext.py). Returns coverage + baseline-centre anchor. */
+  // Safari caps the total memory of all canvases on a page. Making a new canvas on every keystroke
+  // or colour change used up that budget and the page crashed, so text uses one reused canvas
+  // that is shrunk back after each use, and is never larger than TEXT_CANVAS_PX.
+  const TEXT_CANVAS_PX = 12e6, TEXT_CANVAS_SIDE = 6000;
+  let probeCtx = null, textCanvas = null;
+  function textCtx(w, h) {
+    if (!textCanvas) textCanvas = makeCanvas(w, h);
+    else { textCanvas.width = w; textCanvas.height = h; }   // resizing also clears it
+    const ctx = textCanvas.getContext("2d");
+    if (!ctx) throw new Error("The browser ran out of drawing memory. Try a smaller picture or less text.");
+    return ctx;
+  }
+
   function renderText(t, capPx) {
-    const fam = `"ecko-${t.font}"`, probe = makeCanvas(8, 8).getContext("2d");
+    const fam = `"ecko-${t.font}"`;
+    if (!probeCtx) probeCtx = makeCanvas(8, 8).getContext("2d");
+    const probe = probeCtx;
     probe.font = `200px ${fam}`;
     const mH = probe.measureText("H"), hH = mH.actualBoundingBoxAscent + mH.actualBoundingBoxDescent;
     const size = Math.max(4, Math.round(200 * capPx / Math.max(1, hH)));
@@ -67,7 +83,11 @@
     const pad = size * 1.3;
     const x0 = Math.min(...glyphs.map((g) => g[1])) - pad, y0 = Math.min(...glyphs.map((g) => g[2])) - pad;
     const W = Math.ceil(Math.max(...glyphs.map((g) => g[1])) + pad - x0), H = Math.ceil(Math.max(...glyphs.map((g) => g[2])) + pad - y0);
-    const c = makeCanvas(W, H), ctx = c.getContext("2d");
+    if (W * H > TEXT_CANVAS_PX || W > TEXT_CANVAS_SIDE || H > TEXT_CANVAS_SIDE) {   // too big: draw smaller, scale up
+      const k = Math.min(Math.sqrt(TEXT_CANVAS_PX / (W * H)), TEXT_CANVAS_SIDE / W, TEXT_CANVAS_SIDE / H) * 0.98;
+      return scaleMask(renderText(t, capPx * k), 1 / k);
+    }
+    const ctx = textCtx(W, H);
     ctx.font = `${size}px ${fam}`;
     ctx.textAlign = "center";
     ctx.textBaseline = "alphabetic";
@@ -76,6 +96,7 @@
       ctx.save(); ctx.translate(x - x0, y - y0); ctx.rotate(rot); ctx.fillText(ch, 0, 0); ctx.restore();
     }
     const px = ctx.getImageData(0, 0, W, H).data;
+    textCanvas.width = 1; textCanvas.height = 1;   // hand the memory back straight away
     let mx = W, my = H, Mx = -1, My = -1;
     for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) if (px[(y * W + x) * 4 + 3]) {
       if (x < mx) mx = x; if (x > Mx) Mx = x; if (y < my) my = y; if (y > My) My = y;
@@ -85,6 +106,20 @@
     const w = Mx - mx + 1, h = My - my + 1, mask = new Uint8Array(w * h);
     for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) mask[y * w + x] = px[((y + my) * W + x + mx) * 4 + 3];
     return { mask, w, h, ax: -x0 - mx, ay: -y0 - my };
+  }
+
+  function scaleMask(m, f) {   // bilinear enlarge of a text mask
+    const w = Math.max(1, Math.round(m.w * f)), h = Math.max(1, Math.round(m.h * f)), out = new Uint8Array(w * h);
+    for (let y = 0; y < h; y++) {
+      const sy = Math.min(m.h - 1, Math.max(0, (y + 0.5) / f - 0.5)), y0 = Math.floor(sy), y1 = Math.min(m.h - 1, y0 + 1), fy = sy - y0;
+      for (let x = 0; x < w; x++) {
+        const sx = Math.min(m.w - 1, Math.max(0, (x + 0.5) / f - 0.5)), x0 = Math.floor(sx), x1 = Math.min(m.w - 1, x0 + 1), fx = sx - x0;
+        const a = m.mask[y0 * m.w + x0] * (1 - fx) + m.mask[y0 * m.w + x1] * fx;
+        const b = m.mask[y1 * m.w + x0] * (1 - fx) + m.mask[y1 * m.w + x1] * fx;
+        out[y * w + x] = Math.round(a * (1 - fy) + b * fy);
+      }
+    }
+    return { mask: out, w, h, ax: m.ax * f, ay: m.ay * f };
   }
 
   async function decodeImage(bytes) {
@@ -97,8 +132,10 @@
     if (bmp.width < 16 || bmp.height < 16) throw new HttpError(422, "The image is too small. Upload at least 200 x 200 pixels.");
     const c = makeCanvas(bmp.width, bmp.height), ctx = c.getContext("2d");
     ctx.drawImage(bmp, 0, 0);
-    const data = ctx.getImageData(0, 0, bmp.width, bmp.height).data;
-    return { rgba: data, w: bmp.width, h: bmp.height };
+    const data = ctx.getImageData(0, 0, bmp.width, bmp.height).data, w = bmp.width, h = bmp.height;
+    freeCanvas(c);
+    if (bmp.close) bmp.close();
+    return { rgba: data, w, h };
   }
 
   // ---------------------------------------------------------------- PNG + ZIP writers
@@ -151,6 +188,7 @@
     const c = makeCanvas(w, h);
     c.getContext("2d").putImageData(new ImageData(new Uint8ClampedArray(rgba.buffer, rgba.byteOffset, w * h * 4), w, h), 0, 0);
     const blob = c.convertToBlob ? await c.convertToBlob({ type: "image/png" }) : await new Promise((r) => c.toBlob(r, "image/png"));
+    freeCanvas(c);
     if (!dpi) return blob;
     const bytes = new Uint8Array(await blob.arrayBuffer()), ppm = Math.round(dpi / 0.0254);
     const phys = chunk("pHYs", new Uint8Array([...be32(ppm), ...be32(ppm), 1]));
@@ -239,8 +277,11 @@
     art.getContext("2d").putImageData(new ImageData(r.rgba, r.width, r.height), 0, 0);
     ctx.imageSmoothingQuality = "high";
     ctx.drawImage(art, Math.round((W - pw) / 2), Math.round(235 * s), pw, ph);
-    if (c.convertToBlob) return c.convertToBlob({ type: "image/jpeg", quality: 0.88 });
-    return new Promise((res) => c.toBlob(res, "image/jpeg", 0.88));
+    freeCanvas(art);
+    const blob = c.convertToBlob ? await c.convertToBlob({ type: "image/jpeg", quality: 0.88 })
+      : await new Promise((res) => c.toBlob(res, "image/jpeg", 0.88));
+    freeCanvas(c);
+    return blob;
   }
 
   // ---------------------------------------------------------------- state + handlers
@@ -248,6 +289,7 @@
   const images = new Map();      // id -> {rgba, w, h}
   const prepared = new Map();    // key -> Prepared (LRU)
   const textures = new Map();    // id -> {data, w, h}
+  const arts = new Map();        // image id + clean-up settings -> cleaned picture (before text)
 
   function options(raw) {
     try { return E.parseOptions(raw && typeof raw === "object" ? raw : {}); }
@@ -264,11 +306,57 @@
       if (!img) throw new HttpError(410, "Image expired; upload it again.");
     }
     let prep;
-    try { prep = E.prepare(img && img.rgba, img && img.w, img && img.h, o, renderText); }
+    try {
+      const ak = `${iid}|${E.artKey(o)}`;
+      let stage = arts.get(ak);
+      if (!stage) {
+        arts.clear();   // one cleaned-up picture at a time: they are big
+        stage = E.prepareArt(img && img.rgba, img && img.w, img && img.h, o);
+        arts.set(ak, stage);
+      }
+      prep = E.prepare(img && img.rgba, img && img.w, img && img.h, o, renderText, stage);
+    }
     catch (e) { throw new HttpError(e instanceof E.ImageError ? 422 : 500, e.message); }
     prepared.set(key, prep);
-    while (prepared.size > 12) prepared.delete(prepared.keys().next().value);
+    trimPrepared();
     return prep;
+  }
+
+  // Each prepared picture holds full-size float copies (often 100+ MB). Keep only a few, and
+  // stay under a byte budget, so typing text or changing colours can't exhaust the tab's memory.
+  const PREP_MAX = 2, PREP_BUDGET = 500e6;
+  function bytesOf(v, depth = 0) {
+    if (!v || depth > 3) return 0;
+    if (ArrayBuffer.isView(v)) return v.byteLength;
+    if (v instanceof ArrayBuffer) return v.byteLength;
+    if (typeof v !== "object") return 0;
+    let n = 0;
+    for (const k in v) n += bytesOf(v[k], depth + 1);
+    return n;
+  }
+  function trimPrepared() {
+    while (prepared.size > PREP_MAX) prepared.delete(prepared.keys().next().value);
+    let total = 0;
+    for (const p of prepared.values()) total += (p.__bytes ??= bytesOf(p));
+    while (prepared.size > 1 && total > PREP_BUDGET) {
+      const k = prepared.keys().next().value;
+      total -= prepared.get(k).__bytes || 0;
+      prepared.delete(k);
+    }
+  }
+  function forgetImage(id) {
+    for (const k of [...prepared.keys()]) if (k.startsWith(`${id}|`)) prepared.delete(k);
+    for (const k of [...arts.keys()]) if (k.startsWith(`${id}|`)) arts.delete(k);
+    textures.delete(id);
+  }
+  function trimImages() {   // uploads are kept under ~1 GB (a batch needs all its designs at once)
+    let total = 0;
+    for (const im of images.values()) total += im.rgba.byteLength;
+    while (images.size > 1 && (images.size > 30 || total > 1e9)) {
+      const k = images.keys().next().value;
+      total -= images.get(k).rgba.byteLength;
+      images.delete(k); forgetImage(k);
+    }
   }
 
   function textureImages(o) {
@@ -302,14 +390,14 @@
     const img = await decodeImage(bytes);
     const id = Array.from(crypto.getRandomValues(new Uint8Array(16)), (b) => b.toString(16).padStart(2, "0")).join("");
     images.set(id, img);
-    while (images.size > 48) images.delete(images.keys().next().value);
+    trimImages();
     return { id, width: img.w, height: img.h };
   }
 
   function uploadRGBA({ rgba, w, h, origW, origH }) {   // already decoded by the page
     const id = Array.from(crypto.getRandomValues(new Uint8Array(16)), (b) => b.toString(16).padStart(2, "0")).join("");
     images.set(id, { rgba: new Uint8ClampedArray(rgba), w, h });
-    while (images.size > 48) images.delete(images.keys().next().value);
+    trimImages();
     return { id, width: origW || w, height: origH || h };
   }
 
@@ -405,6 +493,7 @@
           const fit = E.resolveFit(prep, o);
           lines.push(`${stem}.png  ${w}x${h}px  fit=${fit.mode}  inks: ${r.plates.filter((p) => !p.underbase).map((p) => E.toHex(p.rgb)).join(", ")}`);
           for (const note of fit.notes) lines.push(`    ${note}`);
+          prepared.delete(`${items[n].image_id ?? null}|${E.prepareKey(o)}`);   // free memory between prints
         } catch (e) {
           if (e instanceof HttpError && e.status === 400 && /batch/.test(e.message)) throw e;
           errors.push(`${name} on ${label}: ${e.message}`);

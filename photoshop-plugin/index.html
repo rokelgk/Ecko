@@ -3,16 +3,16 @@
 <head>
   <meta charset="utf-8">
   <style>
-    /* Plain flowing layout only: Photoshop's panel engine is not a full browser, so no fixed
-       heights or absolute positioning. Sections fold (one open at a time) so the panel stays short. */
-    body { font-family: sans-serif; font-size: 12px; color: var(--uxp-host-text-color, #ddd); margin: 0; padding: 8px 10px; }
+    /* Plain flowing layout: Photoshop's panel engine is not a full browser. The settings sit in a
+       fixed-height box with its own scroll bar (S / M / L buttons change the height). */
+    body { font-family: sans-serif; font-size: 12px; color: var(--uxp-host-text-color, #e6e6e6); background-color: var(--uxp-host-background-color, #323232); margin: 0; padding: 8px 10px; }
     .top { padding-bottom: 8px; border-bottom: 1px solid rgba(128, 128, 128, 0.45); margin-bottom: 6px; }
     .brand { font-weight: bold; font-size: 13px; margin-bottom: 6px; }
     #run { width: 100%; padding: 7px; font-weight: bold; }
-    .second { width: 100%; margin-top: 6px; padding: 5px; }
-    #steps { overflow-y: auto; }
-    #bigWindow { padding: 0; }
-    #bigBody { padding: 10px 14px; }
+    .sizes { margin-top: 6px; font-size: 11px; opacity: 0.85; }
+    .size { min-width: 30px; margin-left: 4px; padding: 2px 6px; }
+    #steps { height: 240px; overflow-y: scroll; padding-right: 6px; }
+    #live { margin-right: 4px; }
     #status { margin-top: 6px; font-size: 11px; line-height: 1.35; }
     .err { color: #f87171; }
     .sec { border-bottom: 1px solid rgba(128, 128, 128, 0.3); }
@@ -39,8 +39,11 @@
     <div class="top">
       <div class="brand">Ecko Tone</div>
       <button id="run">Apply to selected layer</button>
-      <button id="popout" class="second">Open in full window</button>
-      <div id="status">Select a layer, pick a look, then Apply. The result goes on a new layer.</div>
+      <div class="check"><input type="checkbox" id="live" checked> Live: the result updates as you change any setting</div>
+      <div class="sizes">Settings height:
+        <button id="sizeS" class="size">S</button><button id="sizeM" class="size">M</button><button id="sizeL" class="size">L</button>
+      </div>
+      <div id="status">Select a layer, then Apply once. With Live on, every slider and setting updates the result straight away.</div>
     </div>
 
     <div id="steps">
@@ -120,7 +123,6 @@
     <div class="foot">Settings are remembered. <span class="link" id="reset">Reset settings</span></div>
     </div>
   </div>
-  <dialog id="bigWindow"><div id="bigBody"></div></dialog>
   <script src="index.js"></script>
 </body>
 </html>

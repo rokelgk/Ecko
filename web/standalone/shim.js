@@ -89,7 +89,7 @@
     try {
       if (!w || !h) throw unreadable();
       if (w < 16 || h < 16) throw Object.assign(new Error("The image is too small. Upload at least 200 x 200 pixels."), { status: 422 });
-      const s = Math.min(1, 5000 / Math.max(w, h), Math.sqrt(16e6 / (w * h)));
+      const s = Math.min(1, 4000 / Math.max(w, h), Math.sqrt(16e6 / (w * h)));
       const cw = Math.max(1, Math.round(w * s)), ch = Math.max(1, Math.round(h * s));
       const c = document.createElement("canvas");
       c.width = cw; c.height = ch;
@@ -97,6 +97,7 @@
       ctx.imageSmoothingQuality = "high";
       ctx.drawImage(src, 0, 0, cw, ch);
       const data = ctx.getImageData(0, 0, cw, ch).data;
+      c.width = 1; c.height = 1;   // Safari limits total canvas memory: give it back now
       return { rgba: data.buffer, w: cw, h: ch, origW: w, origH: h };
     } finally {
       if (url) URL.revokeObjectURL(url);

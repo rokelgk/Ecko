@@ -122,7 +122,7 @@ BORDERS = {
 BORDER_SHAPES = {"rect": "Rectangle", "oval": "Oval", "rounded": "Rounded"}
 
 MAX_OUTPUT_PX = 120_000_000
-MAX_SOURCE_SIDE = 5000
+MAX_SOURCE_SIDE = 4000
 LOUPE_MAX = 800
 
 
