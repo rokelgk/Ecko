@@ -115,6 +115,13 @@
     title.appendChild(out);
     el._out = out;
   }
+  function readChoice(el, ev) {   // the chosen option, preferring what the change event itself carries
+    if (el.tagName !== "SELECT") return readEl(el);
+    const t = ev && ev.target;
+    const v = t && typeof t.value === "string" && t.value ? t.value : null;
+    if (v && Array.from(el.options).some((o) => (o.getAttribute("data-v") || o.value) === v)) return v;
+    return readEl(el);
+  }
   function readEl(el) {
     if (el.tagName === "SELECT") return selVal(el);
     if (el.type === "checkbox") return !!el.checked;
@@ -172,7 +179,13 @@
   for (const el of bound) {
     const k = el.getAttribute("data-k");
     if (el.tagName === "SELECT" || el.type === "checkbox") {
-      el.addEventListener("change", () => { opts[k] = readEl(el); changed(k, 50); });
+      el.addEventListener("change", (ev) => {
+        opts[k] = readChoice(el, ev);
+        changed(k, 50);
+        for (const ms of [60, 250]) {   // Photoshop can report the previous choice for a moment: check again
+          setTimeout(() => { const v = readEl(el); if (v !== undefined && v !== opts[k]) { opts[k] = v; changed(k, 30); } }, ms);
+        }
+      });
     } else {
       el.addEventListener("input", () => { opts[k] = readEl(el); if (el._out) el._out.textContent = label(el); changed(k, 350); });
       el.addEventListener("change", () => { opts[k] = readEl(el); changed(k, 80); });
@@ -457,6 +470,7 @@
   // repaint the same result layer (no re-reading the layer, no new layers).
   let session = null;   // {docId, srcId, bounds, rgba, w, h, opaque, resultId, shirtId, prepKey, prep, rect}
   let busy = false, pending = false, liveTimer = null;
+  let gen = 0, retries = 0;   // gen counts setting changes: a render that started before the latest change runs again
 
   let live = true;
   function setLive(on) {
@@ -494,8 +508,17 @@
     return { docId: doc.id, srcId: layer.id, bounds, rgba, w: width, h: height, opaque };
   }
 
+  function pullFromControls() {
+    for (const el of bound) {
+      if (el.tagName === "SELECT" && !el.options.length) continue;
+      const v = readEl(el), k = el.getAttribute("data-k");
+      if (v !== undefined && !(typeof v === "number" && !Number.isFinite(v))) opts[k] = v;
+    }
+  }
+
   // -> {r, o, prep}; reuses the prepared picture when only look settings changed.
   async function render(doc, s, forView) {
+    pullFromControls();
     let o = options(doc, s.w, forView);
     o.remove_background = o.remove_background && s.opaque;   // a layer with transparency is already cut out
     const key = E.prepareKey(o);
@@ -567,7 +590,7 @@
     if (!doc) return status("Open a document first.", true);
     const layer = doc.activeLayers[0];
     if (!layer) return status("Select a layer first.", true);
-    if (busy) { pending = false; return status("Still working on the last change…"); }
+    if (busy) return status("Still working on the last change… click Apply again in a moment.");
     save();
     busy = true;
     status("Working… (big layers take a few seconds)");
@@ -603,6 +626,7 @@
 
   // Live: re-render into the same result layer after each change (coalesced while one is running).
   function scheduleLive(delay = 80) {
+    gen++;
     if (!session || !live) return;
     clearTimeout(liveTimer);
     liveTimer = setTimeout(liveUpdate, delay);
@@ -618,6 +642,8 @@
       return status("Live stopped: the result layer or document changed. Select a layer and Apply again.");
     }
     busy = true;
+    const startGen = gen;
+    let failed = null;
     status("Updating…");
     try {
       let notes = [];
@@ -630,13 +656,22 @@
         notes = E.resolveFit(prep, o).notes;
         afterRender(s, r, o);
       }, { commandName: "Ecko Tone live update" });
+      retries = 0;
       status([solo ? "Updated live (showing one ink: click Show all to see every ink)." : "Updated live.", ...notes].join(" "));
     } catch (e) {
-      status(e.message || String(e), true);
+      failed = e;
     } finally {
       busy = false;
     }
-    if (pending) { pending = false; liveUpdate(); }
+    if (failed) {
+      // Photoshop refuses while it is busy (a menu closing, a tool in use): try again shortly, so the
+      // change isn't lost. Real errors (bad settings) are shown after a few tries.
+      const engineError = failed instanceof E.OptionError || failed instanceof E.ImageError;
+      if (!engineError && retries < 6) { retries++; status("Photoshop is busy: retrying the update…"); setTimeout(liveUpdate, 250 * retries); return; }
+      retries = 0;
+      status(failed.message || String(failed), true);
+    }
+    if (pending || gen !== startGen) { pending = false; liveUpdate(); }   // settings changed while rendering
   }
 
   // ---------------------------------------------------------------- separations
