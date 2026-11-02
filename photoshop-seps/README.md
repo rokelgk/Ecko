@@ -28,6 +28,13 @@ Pick the job type, the shirt color and the number of screens, then press
   ("Reach" limits how far it spreads). Clean-ups are stored in art
   coordinates, so they carry to the full-size output, and the underbase
   follows. Undo or clear any time; each screen shows its 🧹 count.
+- **Add a color (+):** quick spot colors (red, orange, yellow, gold, green,
+  lime, blue, navy, purple, pink, brown, skin tone, tan, gray, white; ✓ marks
+  ones you already have), black screens (**Solid Black**, **Black Set** for
+  shadows, **Detailed Black** for lines and edge detail; they print on top
+  and get their own plates, even on a black shirt), and a mixer with hue /
+  saturation / brightness sliders, hex entry, **Pick from the image**, and
+  in Photoshop the Photoshop color picker and foreground color.
 - **Merge screens:** fold any screen into another (for example Highlight
   White into the Underbase): the merged color disappears as a screen and
   film and prints on the target (shown as "⊕ merged"; unmerge from the

@@ -295,3 +295,14 @@ body.ps-host .btn.to-top { position: static; box-shadow: none; }
 #eckoDialog { padding: 0; margin: 0; border: 0; background: var(--bg); }
 
 .pv-tools select { margin-left: 4px; font-size: 11px; padding: 2px 4px; }
+
+/* Add-a-color window */
+.addpop { background: #2b2620; border: 1px solid var(--gold, #8a6a3a); border-radius: 6px; padding: 8px; margin: 8px 0; }
+.addpop .quick { display: flex; flex-wrap: wrap; }
+.addpop .qc { display: inline-flex; align-items: center; margin: 0 6px 6px 0; }
+.addpop .qc .chip { width: 14px; height: 14px; margin-right: 5px; border-radius: 3px; }
+.addpop .qc.have { opacity: 0.6; }
+.addpop .mixsw { width: 44px; height: 30px; border-radius: 5px; border: 2px solid #777; display: inline-block; }
+.addpop input.mix { -webkit-appearance: none; appearance: none; height: 12px; border-radius: 6px; border: 1px solid #555; }
+.addpop input.mix.hue { background: linear-gradient(90deg, #f00, #ff0, #0f0, #0ff, #00f, #f0f, #f00); }
+.addpop input.mix::-webkit-slider-thumb { -webkit-appearance: none; width: 16px; height: 16px; border-radius: 8px; background: #fff; border: 2px solid #222; }

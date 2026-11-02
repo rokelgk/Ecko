@@ -353,3 +353,21 @@ test('clean-up on all screens removes the clicked color region from every screen
   const q = Math.round(0.6 * r.height) * r.width + Math.round(0.9 * r.width);
   assert.ok(r.screens.some((s) => s.role === 'color' && s.plate[q] > 0));
 });
+
+test('black screens: solid, set and detailed black get their own plates on a black shirt', () => {
+  const img = fx('photo.png');
+  const first = engine.separate(img, preset('dark-sim', { screens: 5 }));
+  const inks = first.screens.map((s) => ({ name: s.name, hex: s.hex, role: s.role }));
+  const cov = {};
+  for (const k of ['black-solid', 'black-set', 'black-detail']) {
+    const r = engine.separate(img, preset('dark-sim', { inks: inks.concat([{ name: k, hex: '#111111', role: 'color', special: k }]) }));
+    const s = r.screens[r.screens.length - 1];
+    assert.strictEqual(s.name, k);
+    cov[k] = avgPlate(s.plate);
+    assert.ok(cov[k] > 0.005, `${k} prints something`);
+    // The eye (darkest spot) gets black in every variant.
+    const eye = Math.round(0.44 * r.height) * r.width + Math.round(0.42 * r.width);
+    assert.ok(s.plate[eye] > 100, `${k} covers the eye`);
+  }
+  assert.ok(cov['black-set'] > cov['black-solid'], 'set black reaches into the shadows');
+});

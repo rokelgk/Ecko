@@ -138,7 +138,7 @@ function planInks(img, o, garment) {
   const dark = isDark(garment.lab);
   const wantUb = o.underbase === 'auto' ? dark : !!o.underbase;
   if (o.inks && o.inks.length) {
-    const colors = o.inks.filter((i) => i.role !== 'underbase').map((i) => screen(i.name, i.hex, i.role || 'color', { code: i.code || '', library: i.library || '', locked: !!i.locked, adjust: i.adjust || null, film: i.film || null, mergeInto: i.mergeInto || null, erase: i.erase || null }));
+    const colors = o.inks.filter((i) => i.role !== 'underbase').map((i) => screen(i.name, i.hex, i.role || 'color', { code: i.code || '', library: i.library || '', locked: !!i.locked, adjust: i.adjust || null, film: i.film || null, mergeInto: i.mergeInto || null, erase: i.erase || null, special: i.special || null }));
     return { colors, wantUb: o.inks.some((i) => i.role === 'underbase') || (o.underbase === true), dark };
   }
   if (o.mode === 'cmyk') {
@@ -874,6 +874,52 @@ function plateHistogram(plate) {
   return bins;
 }
 
+// ---------- special black plates ----------
+//
+// Like the black channels in pro sep action sets: on a black shirt the
+// separation never needs black ink (the shirt is black), but a black screen
+// printed on top adds punch and definition.
+//   black-solid   only true black areas, solid
+//   black-set     the shadows as halftones (a "key" black)
+//   black-detail  dark lines and edge detail (sharpens the print)
+function specialPlate(img, kind, o, binary) {
+  const w = img.width, h = img.height, n = w * h, d = img.data;
+  const L = new Float32Array(n);
+  const cache = new Map();
+  for (let p = 0; p < n; p++) {
+    const key = (d[p * 3] << 16) | (d[p * 3 + 1] << 8) | d[p * 3 + 2];
+    let v = cache.get(key);
+    if (v === undefined) { v = C.rgbToLab([d[p * 3], d[p * 3 + 1], d[p * 3 + 2]])[0]; cache.set(key, v); }
+    L[p] = v;
+  }
+  const out = new Uint8Array(n);
+  if (kind === 'black-solid') {
+    for (let p = 0; p < n; p++) out[p] = L[p] <= 14 ? 255 : L[p] >= 24 ? 0 : Math.round(((24 - L[p]) / 10) * 255);
+  } else if (kind === 'black-detail') {
+    // Local darkness: how much darker a pixel is than its surroundings.
+    const r = Math.max(1, Math.round((img.dpi || 300) / 150));
+    const blur = ops.gaussianBlur({ data: (() => { const g = new Uint8ClampedArray(n * 3); for (let p = 0; p < n; p++) g[p * 3] = g[p * 3 + 1] = g[p * 3 + 2] = L[p] * 2.55; return g; })(), width: w, height: h, channels: 3 }, r * 1.5);
+    for (let p = 0; p < n; p++) {
+      const local = blur[p * 3] / 2.55 - L[p];
+      const shade = Math.max(0, Math.min(1, (34 - L[p]) / 22)) * 0.85;
+      out[p] = Math.round(Math.max(shade, Math.max(0, Math.min(1, local / 10))) * 255);
+    }
+  } else {
+    for (let p = 0; p < n; p++) out[p] = Math.round(Math.pow(Math.max(0, Math.min(1, (48 - L[p]) / 40)), 1.2) * 255);
+  }
+  if (binary) {
+    // Index jobs: square pixels, so dither the tones.
+    const err = new Float32Array(n);
+    for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) {
+      const p = y * w + x, v = out[p] / 255 + err[p], on = v >= 0.5 ? 1 : 0, q = v - on;
+      out[p] = on ? 255 : 0;
+      if (x + 1 < w) err[p + 1] += q * 7 / 16;
+      if (y + 1 < h) { if (x > 0) err[p + w - 1] += q * 3 / 16; err[p + w] += q * 5 / 16; if (x + 1 < w) err[p + w + 1] += q / 16; }
+    }
+  }
+  return out;
+}
+
 // ---------- local clean-up (eraser) ----------
 //
 // Edits are stored in art coordinates (0..1 of width/height), so they apply
@@ -1144,6 +1190,10 @@ function separate(image, options) {
     }
   }
   const ubInk = o.inks && o.inks.find((i) => i.role === 'underbase');
+  // Special inks (solid / set / detailed black) get their own plates from
+  // the art; every other ink goes through the mode's separation.
+  const allColors = colors;
+  colors = allColors.filter((c) => !c.special);
   let platesRaw, binary = false, cmykUb = null;
   if (!colors.length) platesRaw = [];
   else if (o.mode === 'simulated') platesRaw = separateSimulated(img, garment, colors, o, plan.wantUb);
@@ -1165,6 +1215,20 @@ function separate(image, options) {
     }
   } else if (o.mode === 'grayscale') platesRaw = separateGrayscale(img, garment, colors[0]);
   else throw new Error(`Unknown mode: ${o.mode}`);
+
+  if (allColors.length !== colors.length) {
+    const it = platesRaw[Symbol.iterator]();
+    const extra = platesRaw.slice(colors.length); // e.g. CMYK highlight plate
+    const merged = allColors.map((c) => (c.special ? specialPlate(img, c.special, o, binary) : it.next().value));
+    // Solid black knocks out the inks under it (they would be hidden anyway).
+    allColors.forEach((c, i) => {
+      if (c.special !== 'black-solid') return;
+      const k = merged[i];
+      merged.forEach((pl, j) => { if (j !== i && pl && !allColors[j].special) for (let p = 0; p < pl.length; p++) if (k[p]) pl[p] = (pl[p] * (255 - k[p])) / 255 | 0; });
+    });
+    platesRaw = merged.concat(extra.length && platesRaw.length > colors.length ? platesRaw.slice(colors.length) : []);
+    colors = allColors;
+  }
 
   // Transparent pixels never get ink.
   if (mask) for (const pl of platesRaw) for (let p = 0; p < pl.length; p++) if (mask[p] < 8) pl[p] = 0;
@@ -1316,4 +1380,4 @@ function autoScreenCount(image, o) {
   return best;
 }
 
-module.exports = { separate, applyErase, plateHistogram, adjustLut, DEFAULTS, underbaseNeed, solveSimplex, compensateDotGain, composite, autoScreenCount, isDark };
+module.exports = { separate, applyErase, specialPlate, plateHistogram, adjustLut, DEFAULTS, underbaseNeed, solveSimplex, compensateDotGain, composite, autoScreenCount, isDark };

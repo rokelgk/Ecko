@@ -467,6 +467,7 @@
   }
 
   function pickSpotAt(fx, fy) {
+    const forMixer = state.picking === 'mixer';
     state.picking = false;
     $('app').classList.remove('picking');
     const src = proofImage().image;
@@ -481,6 +482,7 @@
     }
     if (!n) { status('That spot is transparent. Tap on the art.', true); return; }
     let hex = E.color.toHex(acc.map((v) => v / n));
+    if (forMixer) { setMixerHex(hex); openAddColor(); status(`Picked ${hex}. Adjust it if you like, then press "Add this color".`); return; }
     const lab = E.color.rgbToLab(E.color.parseHex(hex));
     let name = E.color.colorName(lab);
     if (state.matchLibrary) { const m = E.inks.nearestInk(lab, library()); if (m) { name = m.ink.name; hex = m.ink.hex; } }
@@ -914,6 +916,7 @@
     });
     renderMergeControls();
     renderArtColors();
+    renderAddColor();
   }
 
   // ---------- merge screens ----------
@@ -1121,13 +1124,145 @@
     row.parentNode.insertBefore(box, row.nextSibling);
   }
 
-  function addInk() {
-    if (!state.inks) return;
-    editInks('Added a screen', () => {
-      const hl = state.inks.findIndex((x) => x.role === 'highlight');
-      const ink = { name: 'New Ink', hex: '#808080', role: 'color', locked: true, hidden: false };
+  // ---------- add a color: quick spots, blacks, mixer, pick from image ----------
+  const QUICK = [['Red', '#d22630'], ['Orange', '#ff6a13'], ['Yellow', '#ffd100'], ['Gold', '#ffb81c'], ['Green', '#00843d'], ['Lime', '#78be20'],
+    ['Blue', '#0057b8'], ['Navy', '#13294b'], ['Purple', '#6d2077'], ['Pink', '#e31c79'], ['Brown', '#6b4226'], ['Skin Tone', '#e2a988'],
+    ['Tan', '#c5a882'], ['Gray', '#8a8d8f'], ['White', '#ffffff']];
+  const BLACKS = [['Solid Black', 'black-solid', 'Only the true black areas, printed solid.'],
+    ['Black Set', 'black-set', 'The shadows as halftones (a key black).'],
+    ['Detailed Black', 'black-detail', 'Dark lines and edge detail, for definition.']];
+  const mixer = { h: 0, s: 80, v: 85 };
+
+  function hsvToHex(h, sv, v) {
+    const S = sv / 100, V = v / 100, c = V * S, x = c * (1 - Math.abs(((h / 60) % 2) - 1)), m = V - c;
+    const [r, g, b] = h < 60 ? [c, x, 0] : h < 120 ? [x, c, 0] : h < 180 ? [0, c, x] : h < 240 ? [0, x, c] : h < 300 ? [x, 0, c] : [c, 0, x];
+    return E.color.toHex([(r + m) * 255, (g + m) * 255, (b + m) * 255]);
+  }
+  function setMixerHex(hex) {
+    const [r, g, b] = E.color.parseHex(hex).map((v) => v / 255);
+    const max = Math.max(r, g, b), min = Math.min(r, g, b), d = max - min;
+    let h = 0;
+    if (d) h = max === r ? 60 * (((g - b) / d) % 6) : max === g ? 60 * ((b - r) / d + 2) : 60 * ((r - g) / d + 4);
+    mixer.h = Math.round((h + 360) % 360); mixer.s = Math.round(max ? (d / max) * 100 : 0); mixer.v = Math.round(max * 100);
+  }
+
+  function haveColor(hex, special) {
+    if (special) return (state.inks || []).some((x) => x.special === special && !x.hidden);
+    const lab = E.color.rgbToLab(E.color.parseHex(hex));
+    return (state.inks || []).some((x) => !x.hidden && !x.special && E.color.deltaE2000(lab, E.color.rgbToLab(E.color.parseHex(x.hex))) < 12);
+  }
+
+  function addColor(name, hex, special) {
+    if (!state.inks) { status('Separate first, then add colors.', true); return; }
+    if (!special && state.matchLibrary) {
+      const m = E.inks.nearestInk(E.color.rgbToLab(E.color.parseHex(hex)), library());
+      if (m) { name = m.ink.name; hex = m.ink.hex; }
+    }
+    editInks(`Added ${name}`, () => {
+      const ink = { name, hex, role: 'color', locked: true, hidden: false };
+      if (special) { ink.special = special; state.inks.push(ink); return; } // blacks print last, on top
+      const hl = state.inks.findIndex((q) => q.role === 'highlight');
       if (hl >= 0) state.inks.splice(hl, 0, ink); else state.inks.push(ink);
     });
+    renderAddColor();
+  }
+
+  function openAddColor() { $('addColorPop').classList.remove('hidden'); renderAddColor(); }
+  function renderAddColor() {
+    const box = $('addColorPop');
+    if (!box || box.classList.contains('hidden')) return;
+    box.innerHTML = '';
+    const head = document.createElement('div'); head.className = 'row';
+    head.innerHTML = '<b>Add a color</b>';
+    const close = document.createElement('button'); close.className = 'btn small'; close.textContent = 'Close';
+    close.style.marginLeft = 'auto';
+    close.addEventListener('click', () => box.classList.add('hidden'));
+    head.appendChild(close);
+    box.appendChild(head);
+    const sub = (t) => { const e = document.createElement('h4'); e.className = 'subhead'; e.textContent = t; box.appendChild(e); };
+
+    sub('Quick spot colors (✓ = already in your screens)');
+    const q = document.createElement('div'); q.className = 'quick';
+    for (const [name, hex] of QUICK) {
+      const b = document.createElement('button');
+      const has = haveColor(hex);
+      b.className = 'btn small qc' + (has ? ' have' : '');
+      b.innerHTML = `<span class="chip" style="background:${hex}"></span>${has ? '✓ ' : ''}${esc(name)}`;
+      b.title = has ? `${name} is already covered; add another anyway` : `Add ${name} (${hex})`;
+      b.addEventListener('click', () => addColor(name, hex));
+      q.appendChild(b);
+    }
+    box.appendChild(q);
+
+    sub('Black screens');
+    for (const [name, special, tip] of BLACKS) {
+      const r = document.createElement('div'); r.className = 'row';
+      const b = document.createElement('button');
+      const has = haveColor('#111111', special);
+      b.className = 'btn small qc' + (has ? ' have' : '');
+      b.innerHTML = `<span class="chip" style="background:#111"></span>${has ? '✓ ' : ''}${esc(name)}`;
+      b.disabled = has;
+      b.addEventListener('click', () => addColor(name, '#111111', special));
+      const t = document.createElement('span'); t.className = 'muted small'; t.textContent = tip;
+      r.appendChild(b); r.appendChild(t);
+      box.appendChild(r);
+    }
+
+    sub('Mix your own, or pick it from the image');
+    const sw = document.createElement('div'); sw.className = 'row';
+    const big = document.createElement('span'); big.className = 'mixsw';
+    const hexIn = document.createElement('input'); hexIn.className = 'hex';
+    sw.appendChild(big); sw.appendChild(hexIn);
+    box.appendChild(sw);
+    const paint = () => {
+      const hex = hsvToHex(mixer.h, mixer.s, mixer.v);
+      big.style.background = hex; hexIn.value = hex;
+      sat.style.background = `linear-gradient(90deg, ${hsvToHex(mixer.h, 0, mixer.v)}, ${hsvToHex(mixer.h, 100, mixer.v)})`;
+      bri.style.background = `linear-gradient(90deg, #000, ${hsvToHex(mixer.h, mixer.s, 100)})`;
+      nameOut.textContent = E.color.colorName(E.color.rgbToLab(E.color.parseHex(hex)));
+    };
+    const slider = (label, key, max, cls) => {
+      const r = document.createElement('div'); r.className = 'field';
+      const l = document.createElement('label'); l.textContent = label;
+      const c = document.createElement('div'); c.className = 'ctl';
+      const inp = document.createElement('input'); inp.type = 'range'; inp.min = 0; inp.max = max; inp.step = 1; inp.value = mixer[key]; inp.className = 'mix ' + cls;
+      inp.addEventListener('input', () => { mixer[key] = Number(inp.value); paint(); });
+      c.appendChild(inp); r.appendChild(l); r.appendChild(c); box.appendChild(r);
+      return inp;
+    };
+    slider('Hue', 'h', 359, 'hue');
+    const sat = slider('Saturation', 's', 100, 'sat');
+    const bri = slider('Brightness', 'v', 100, 'bri');
+    hexIn.addEventListener('change', () => { try { setMixerHex(E.color.toHex(E.color.parseHex(hexIn.value))); renderAddColor(); } catch (e) { paint(); } });
+    const nameOut = document.createElement('span'); nameOut.className = 'muted small';
+    sw.appendChild(nameOut);
+    const acts = document.createElement('div'); acts.className = 'row';
+    const add = document.createElement('button'); add.className = 'btn small primary'; add.textContent = '+ Add this color';
+    add.addEventListener('click', () => { const hex = hsvToHex(mixer.h, mixer.s, mixer.v); addColor(E.color.colorName(E.color.rgbToLab(E.color.parseHex(hex))), hex); });
+    const pick = document.createElement('button'); pick.className = 'btn small'; pick.textContent = '🎯 Pick from the image';
+    pick.title = 'Tap a color in the picture; it lands here so you can adjust it before adding';
+    pick.addEventListener('click', () => {
+      state.picking = 'mixer';
+      $('app').classList.add('picking');
+      state.view = 'art'; renderTabs(); renderView();
+      status('Tap the color you want in the picture.');
+    });
+    acts.appendChild(add); acts.appendChild(pick);
+    if (host.name === 'photoshop') {
+      const psPick = document.createElement('button'); psPick.className = 'btn small'; psPick.textContent = 'Photoshop color picker';
+      psPick.addEventListener('click', async () => { const hex = await host.pickColor(hsvToHex(mixer.h, mixer.s, mixer.v)); if (hex) { setMixerHex(hex); renderAddColor(); } });
+      const fg = document.createElement('button'); fg.className = 'btn small'; fg.textContent = 'Use foreground color';
+      fg.addEventListener('click', async () => { const hex = await host.foregroundColor(); if (hex) { setMixerHex(hex); renderAddColor(); } });
+      acts.appendChild(psPick); acts.appendChild(fg);
+    }
+    box.appendChild(acts);
+    paint();
+  }
+
+  function addInk() {
+    if (!state.inks) { status('Separate first, then add colors.', true); return; }
+    const box = $('addColorPop');
+    if (box.classList.contains('hidden')) openAddColor(); else box.classList.add('hidden');
   }
 
   // ---------- output ----------
