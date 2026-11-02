@@ -663,7 +663,8 @@
     try {
       const name = $("name").value || "ecko-tone";
       const r = await postWithReupload("/api/tone/export",
-        () => ({ image_id: file ? imageId : null, options: serverOpts(), format, name }));
+        () => ({ image_id: file ? imageId : null, options: serverOpts(), format, name,
+          shirt_background: format === "png" && $("shirtBg").checked }));
       if (!r.ok) throw new Error(await detail(r));
       await saveBlob(await r.blob(), r, `${name}.${format}`);
     } catch (e) {

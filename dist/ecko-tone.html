@@ -568,6 +568,7 @@ body.panelsHidden .psSide { display: none; }
         <summary><h2>Download</h2></summary>
         <label>File name <input type="text" id="name" value="ecko-tone"></label>
         <button type="button" class="primary" id="dlPng">Print PNG (DTF / DTG)</button>
+        <label class="check"><input type="checkbox" id="shirtBg"> Put the shirt colour behind (preview / mockup, not for printing)</label>
         <button type="button" class="ghost block" id="dlZip">Separations ZIP (screen print)</button>
         <p class="hint">Made for the shirt colour you picked. Real <span id="dpiNote">300</span> DPI, pure on/off transparency. The ZIP adds one 1-bit film per ink.</p>
       </details>
@@ -2653,6 +2654,11 @@ body.panelsHidden .psSide { display: none; }
     if (fmt !== "png" && fmt !== "zip") throw new HttpError(400, "format is png or zip.");
     const prep = getPrepared(body.image_id ?? null, o), name = safeName(body.name);
     const r = guard(() => E.renderFull(prep, o, textureImages(o), fmt === "zip"));
+    if (fmt === "png" && body.shirt_background) {   // flatten onto the shirt colour: a preview, not a print file
+      const g = E.hex(o.garment), px = r.rgba;
+      for (let k = 0; k < px.length; k += 4) if (!px[k + 3]) { px[k] = g[0]; px[k + 1] = g[1]; px[k + 2] = g[2]; px[k + 3] = 255; }
+      return { blob: await encodePNG(r.width, r.height, px, o.dpi), filename: `${name}-on-shirt.png` };
+    }
     const png = await encodePNG(r.width, r.height, r.rgba, o.dpi);
     if (fmt === "png") return { blob: png, filename: `${name}.png` };
     const rep = E.report(prep, o, r.plates, r.seps);
@@ -4822,6 +4828,11 @@ body.panelsHidden .psSide { display: none; }
     if (fmt !== "png" && fmt !== "zip") throw new HttpError(400, "format is png or zip.");
     const prep = getPrepared(body.image_id ?? null, o), name = safeName(body.name);
     const r = guard(() => E.renderFull(prep, o, textureImages(o), fmt === "zip"));
+    if (fmt === "png" && body.shirt_background) {   // flatten onto the shirt colour: a preview, not a print file
+      const g = E.hex(o.garment), px = r.rgba;
+      for (let k = 0; k < px.length; k += 4) if (!px[k + 3]) { px[k] = g[0]; px[k + 1] = g[1]; px[k + 2] = g[2]; px[k + 3] = 255; }
+      return { blob: await encodePNG(r.width, r.height, px, o.dpi), filename: `${name}-on-shirt.png` };
+    }
     const png = await encodePNG(r.width, r.height, r.rgba, o.dpi);
     if (fmt === "png") return { blob: png, filename: `${name}.png` };
     const rep = E.report(prep, o, r.plates, r.seps);
@@ -5746,7 +5757,8 @@ body.panelsHidden .psSide { display: none; }
     try {
       const name = $("name").value || "ecko-tone";
       const r = await postWithReupload("/api/tone/export",
-        () => ({ image_id: file ? imageId : null, options: serverOpts(), format, name }));
+        () => ({ image_id: file ? imageId : null, options: serverOpts(), format, name,
+          shirt_background: format === "png" && $("shirtBg").checked }));
       if (!r.ok) throw new Error(await detail(r));
       await saveBlob(await r.blob(), r, `${name}.${format}`);
     } catch (e) {

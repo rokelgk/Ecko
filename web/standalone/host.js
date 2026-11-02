@@ -337,6 +337,11 @@
     if (fmt !== "png" && fmt !== "zip") throw new HttpError(400, "format is png or zip.");
     const prep = getPrepared(body.image_id ?? null, o), name = safeName(body.name);
     const r = guard(() => E.renderFull(prep, o, textureImages(o), fmt === "zip"));
+    if (fmt === "png" && body.shirt_background) {   // flatten onto the shirt colour: a preview, not a print file
+      const g = E.hex(o.garment), px = r.rgba;
+      for (let k = 0; k < px.length; k += 4) if (!px[k + 3]) { px[k] = g[0]; px[k + 1] = g[1]; px[k + 2] = g[2]; px[k + 3] = 255; }
+      return { blob: await encodePNG(r.width, r.height, px, o.dpi), filename: `${name}-on-shirt.png` };
+    }
     const png = await encodePNG(r.width, r.height, r.rgba, o.dpi);
     if (fmt === "png") return { blob: png, filename: `${name}.png` };
     const rep = E.report(prep, o, r.plates, r.seps);

@@ -3,51 +3,115 @@
 <head>
   <meta charset="utf-8">
   <style>
-    /* Photoshop panels don't scroll on their own: the settings live in an absolutely positioned
-       scrolling area, and the action bar is pinned to the bottom so it is always visible. */
-    html, body { margin: 0; padding: 0; height: 100%; overflow: hidden; }
-    body { font-family: sans-serif; font-size: 12px; color: var(--uxp-host-text-color, #ddd);
-      background: var(--uxp-host-background-color, transparent); }
-    #scroller { position: absolute; top: 0; left: 0; right: 0; bottom: 96px; overflow-y: scroll; padding: 8px 10px 12px; }
-    #footer { position: absolute; left: 0; right: 0; bottom: 0; height: 96px; padding: 8px 10px; box-sizing: border-box;
-      border-top: 1px solid rgba(128, 128, 128, 0.45); background: var(--uxp-host-background-color, #323232); }
-    .field { margin: 0 0 10px; }
-    .title { display: flex; justify-content: space-between; margin-bottom: 3px; }
-    .value { opacity: 0.85; }
-    select, input[type=range] { width: 100%; }
-    .hint { opacity: 0.7; margin: 4px 0 0; }
-    #run { width: 100%; padding: 6px; font-weight: bold; }
-    #status { margin-top: 6px; max-height: 44px; overflow-y: auto; font-size: 11px; line-height: 1.3; }
+    /* Plain flowing layout only: Photoshop's panel engine is not a full browser, so no fixed
+       heights or absolute positioning. Sections fold (one open at a time) so the panel stays short. */
+    body { font-family: sans-serif; font-size: 12px; color: var(--uxp-host-text-color, #ddd); margin: 0; padding: 8px 10px; }
+    .top { padding-bottom: 8px; border-bottom: 1px solid rgba(128, 128, 128, 0.45); margin-bottom: 6px; }
+    .brand { font-weight: bold; font-size: 13px; margin-bottom: 6px; }
+    #run { width: 100%; padding: 7px; font-weight: bold; }
+    #status { margin-top: 6px; font-size: 11px; line-height: 1.35; }
     .err { color: #f87171; }
+    .sec { border-bottom: 1px solid rgba(128, 128, 128, 0.3); }
+    .head { padding: 8px 0; font-weight: bold; cursor: pointer; text-transform: uppercase; font-size: 11px; letter-spacing: 1px; }
+    .body { padding: 0 0 10px; }
+    .field { margin: 0 0 9px; }
+    .title { margin-bottom: 3px; }
+    .value { opacity: 0.8; margin-left: 6px; }
+    select, input[type=range] { width: 100%; }
+    .check { margin: 4px 0 8px; }
+    .hint { opacity: 0.7; margin: 2px 0 8px; font-size: 11px; }
+    .foot { margin-top: 10px; font-size: 11px; opacity: 0.8; }
+    .link { text-decoration: underline; cursor: pointer; }
+    #notPhotoshop { display: none; padding: 12px; font-size: 14px; line-height: 1.5; }
   </style>
 </head>
 <body>
-  <div id="scroller">
-    <div class="field"><div class="title"><span>Look</span></div><select id="preset"></select></div>
-    <div class="field"><div class="title"><span>Pattern</span></div><select id="style"></select></div>
-    <div class="field">
-      <div class="title"><span>Lines per inch</span><span class="value" id="lpiOut"></span></div>
-      <input type="range" id="lpi" min="5" max="150" step="1" value="35">
-    </div>
-    <div class="field">
-      <div class="title"><span>Angle</span><span class="value" id="angleOut"></span></div>
-      <input type="range" id="angle" min="0" max="180" step="0.5" value="22.5">
-    </div>
-    <div class="field"><div class="title"><span>Shirt colour</span></div><select id="garment"></select></div>
-    <div class="field"><div class="title"><span>Fit to shirt</span></div><select id="fit"></select></div>
-    <div class="field"><div class="title"><span>Printing on</span></div><select id="target"></select></div>
-    <div class="field"><div class="title"><span>Border</span></div><select id="border"></select></div>
-    <div class="field"><div class="title"><span>Border shape</span></div><select id="borderShape"></select></div>
-    <div class="field">
-      <div class="title"><span>Border width</span><span class="value" id="borderOut"></span></div>
-      <input type="range" id="borderMm" min="2" max="80" step="1" value="15">
-    </div>
-    <p class="hint">Makes a new layer above the selected one. Your original layer is left alone.
-      Everything runs inside Photoshop: no server, no internet. Scroll for more settings.</p>
+  <div id="notPhotoshop">
+    <b>This is the Photoshop panel file.</b><br>
+    It only works inside Photoshop (load it with UXP Developer Tool).<br>
+    For the web version, double-click <b>ecko-tone.html</b> instead.
   </div>
-  <div id="footer">
-    <button id="run">Halftone selected layer</button>
-    <div id="status"></div>
+  <div id="panel">
+    <div class="top">
+      <div class="brand">Ecko Tone</div>
+      <button id="run">Apply to selected layer</button>
+      <div id="status">Select a layer, pick a look, then Apply. The result goes on a new layer.</div>
+    </div>
+
+    <div class="sec" data-sec="look">
+      <div class="head">1 · Look</div>
+      <div class="body">
+        <div class="field"><div class="title">Preset</div><select id="preset"></select></div>
+        <div class="hint">A starting point: every step below stays editable.</div>
+      </div>
+    </div>
+
+    <div class="sec" data-sec="prep">
+      <div class="head">2 · Prep</div>
+      <div class="body">
+        <div class="field"><div class="title">Brightness<span class="value" id="brightnessOut"></span></div>
+          <input type="range" id="brightness" min="-1" max="1" step="0.05" value="0"></div>
+        <div class="field"><div class="title">Contrast<span class="value" id="contrastOut"></span></div>
+          <input type="range" id="contrast" min="-1" max="1" step="0.05" value="0"></div>
+        <div class="field"><div class="title">Sharpen<span class="value" id="sharpenOut"></span></div>
+          <input type="range" id="sharpen" min="0" max="3" step="0.1" value="0.5"></div>
+        <div class="field"><div class="title">Denoise<span class="value" id="denoiseOut"></span></div>
+          <input type="range" id="denoise" min="0" max="3" step="1" value="0"></div>
+        <div class="field"><div class="title">Smooth shapes<span class="value" id="smoothOut"></span></div>
+          <input type="range" id="smooth" min="0" max="3" step="0.1" value="0"></div>
+      </div>
+    </div>
+
+    <div class="sec" data-sec="colour">
+      <div class="head">3 · Colour &amp; pattern</div>
+      <div class="body">
+        <div class="field"><div class="title">Colour</div><select id="mode"></select></div>
+        <div class="field" id="levelsRow"><div class="title">Tones<span class="value" id="levelsOut"></span></div>
+          <input type="range" id="levels" min="2" max="8" step="1" value="3"></div>
+        <div class="field" id="countRow"><div class="title">Colours<span class="value" id="countOut"></span></div>
+          <input type="range" id="count" min="2" max="8" step="1" value="4"></div>
+        <div class="field" id="paletteRow"><div class="title">Palette</div><select id="palette"></select></div>
+        <div class="field"><div class="title">Pattern</div><select id="style"></select></div>
+        <div class="field" id="lpiRow"><div class="title">Lines per inch<span class="value" id="lpiOut"></span></div>
+          <input type="range" id="lpi" min="5" max="150" step="1" value="35"></div>
+        <div class="field" id="grainRow"><div class="title">Grain size<span class="value" id="grainOut"></span></div>
+          <input type="range" id="grain" min="0.05" max="1.5" step="0.01" value="0.25"></div>
+        <div class="field"><div class="title">Angle<span class="value" id="angleOut"></span></div>
+          <input type="range" id="angle" min="0" max="180" step="0.5" value="22.5"></div>
+      </div>
+    </div>
+
+    <div class="sec" data-sec="shirt">
+      <div class="head">4 · Shirt</div>
+      <div class="body">
+        <div class="field"><div class="title">Shirt colour</div><select id="garment"></select></div>
+        <div class="field"><div class="title">Fit to shirt</div><select id="fit"></select></div>
+        <div class="field"><div class="title">White underbase</div><select id="underbase">
+          <option value="auto">Auto (screen print on dark shirts)</option><option value="on">On</option><option value="off">Off</option></select></div>
+        <div class="check"><input type="checkbox" id="shirtLayer" checked> Add a shirt-colour layer underneath</div>
+        <div class="hint">See the result on the shirt colour. Hide that layer before exporting your print file.</div>
+      </div>
+    </div>
+
+    <div class="sec" data-sec="border">
+      <div class="head">5 · Border</div>
+      <div class="body">
+        <div class="field"><div class="title">Border</div><select id="border"></select></div>
+        <div class="field"><div class="title">Shape</div><select id="borderShape"></select></div>
+        <div class="field"><div class="title">Width<span class="value" id="borderOut"></span></div>
+          <input type="range" id="borderMm" min="2" max="80" step="1" value="15"></div>
+      </div>
+    </div>
+
+    <div class="sec" data-sec="output">
+      <div class="head">6 · Output</div>
+      <div class="body">
+        <div class="field"><div class="title">Printing on</div><select id="target"></select></div>
+        <div class="hint">Uses your document's resolution as the DPI, so the pattern matches the web app at that size.</div>
+      </div>
+    </div>
+
+    <div class="foot">Settings are remembered. <span class="link" id="reset">Reset settings</span></div>
   </div>
   <script src="index.js"></script>
 </body>

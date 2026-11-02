@@ -188,6 +188,12 @@ def export(body: dict = Body(...)):
     except ImageError as exc:
         raise HTTPException(422, str(exc)) from exc
     if fmt == "png":
+        if body.get("shirt_background"):   # flattened onto the shirt colour: a preview, not a print file
+            rgba = rgba.copy()
+            clear = rgba[..., 3] == 0
+            rgba[clear, :3] = E._hex(o.garment)
+            rgba[..., 3] = 255
+            name = f"{name}-on-shirt"
         return Response(png_bytes(rgba, o.dpi), media_type="image/png",
                         headers={"Content-Disposition": f'attachment; filename="{name}.png"'})
     small = [s[::4, ::4] for s in seps]

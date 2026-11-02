@@ -536,3 +536,12 @@ def test_border_validation():
         E.parse_options({"border": "lightning"})
     with pytest.raises(ValueError):
         E.parse_options({"border_mm": 500})
+
+
+def test_export_with_shirt_colour_behind(logo):
+    iid = _upload(logo)
+    r = client.post("/api/tone/export", json={"image_id": iid, "format": "png", "shirt_background": True,
+                                              "options": {"width_in": 2, "garment": "#1f2a44"}})
+    assert 'on-shirt.png' in r.headers["content-disposition"]
+    a = np.array(Image.open(io.BytesIO(r.content)).convert("RGBA"))
+    assert (a[..., 3] == 255).all() and tuple(a[0, 0, :3]) == (0x1f, 0x2a, 0x44)
