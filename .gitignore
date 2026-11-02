@@ -5,4 +5,8 @@ __pycache__/
 /out/
 /data/
 node_modules/
-/photoshop-seps/dist/
+!/photoshop-seps/dist/
+/photoshop-seps/dist/*
+!/photoshop-seps/dist/EckoSeps.ccx
+!/photoshop-seps/dist/EckoSeps-installer.zip
+!/photoshop-seps/dist/ecko-seps-plugin.zip
