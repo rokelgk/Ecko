@@ -282,8 +282,8 @@ def _parse_ink_edits(edits) -> dict:
     out = {}
     for name, e in edits.items():
         if not isinstance(name, str) or len(name) > 40 or not isinstance(e, dict):
-            raise ValueError("Each ink edit is {ink name: {on, choke_mm}}.")
-        unknown = set(e) - {"on", "choke_mm"}
+            raise ValueError("Each ink edit is {ink name: {on, choke_mm, name}}.")
+        unknown = set(e) - {"on", "choke_mm", "name"}
         if unknown:
             raise ValueError(f"Unknown ink settings: {', '.join(sorted(unknown))}")
         try:
@@ -293,6 +293,11 @@ def _parse_ink_edits(edits) -> dict:
         if not (math.isfinite(choke) and -0.5 <= choke <= 0.5):
             raise ValueError("Ink choke must be between -0.5 and 0.5 mm.")
         out[name] = {"on": bool(e.get("on", True)), "choke_mm": round(choke, 4)}
+        label = " ".join(str(e.get("name") or "").split())
+        if len(label) > 40:
+            raise ValueError("Ink names are limited to 40 characters.")
+        if label:
+            out[name]["name"] = label
     return out
 
 
@@ -681,6 +686,7 @@ class Plate:
     underbase: bool = False   # white base printed first, under the colours on dark shirts
     on: bool = True           # switched off: not printed, not in files
     choke_mm: float = 0.0     # > 0 shrinks this ink's dots, < 0 spreads them
+    label: str = ""           # the ink's name on films and in the README ("Red", or the user's own name)
 
 
 def _lum(rgb) -> float:
@@ -689,6 +695,65 @@ def _lum(rgb) -> float:
 
 def _lab1(rgb) -> np.ndarray:
     return cv2.cvtColor(np.array([[rgb]], np.float32) / 255, cv2.COLOR_RGB2LAB)[0, 0]
+
+
+# Plain screen-print ink names; each ink is named after the nearest one (CIE76 in Lab) unless the
+# user names it. The web and Photoshop versions read this same table from the catalog.
+INK_NAMES = [
+    ("Black", (0, 0, 0)), ("Charcoal", (54, 54, 58)), ("Dark grey", (90, 90, 95)), ("Grey", (128, 128, 128)),
+    ("Light grey", (190, 190, 192)), ("White", (255, 255, 255)), ("Cream", (243, 233, 210)), ("Bone", (227, 218, 201)),
+    ("Tan", (200, 170, 125)), ("Khaki", (189, 176, 140)), ("Brown", (110, 70, 40)), ("Chocolate", (70, 42, 28)),
+    ("Rust", (170, 75, 40)), ("Copper", (190, 110, 70)), ("Red", (200, 16, 46)), ("Bright red", (238, 39, 55)),
+    ("Cardinal", (140, 21, 40)), ("Maroon", (100, 25, 40)), ("Burgundy", (110, 30, 55)), ("Pink", (245, 160, 190)),
+    ("Hot pink", (235, 50, 140)), ("Magenta", (236, 0, 140)), ("Coral", (250, 120, 100)), ("Orange", (245, 130, 32)),
+    ("Burnt orange", (200, 90, 30)), ("Peach", (250, 190, 150)), ("Gold", (255, 180, 0)), ("Athletic gold", (255, 199, 44)),
+    ("Yellow", (255, 230, 0)), ("Lemon", (250, 240, 120)), ("Mustard", (210, 165, 40)), ("Olive", (110, 110, 50)),
+    ("Army green", (75, 83, 50)), ("Forest green", (25, 75, 45)), ("Kelly green", (0, 140, 70)), ("Green", (60, 170, 70)),
+    ("Lime", (150, 210, 60)), ("Mint", (160, 220, 180)), ("Teal", (0, 128, 128)), ("Turquoise", (0, 180, 190)),
+    ("Cyan", (0, 174, 239)), ("Sky blue", (120, 190, 230)), ("Light blue", (170, 205, 235)), ("Columbia blue", (155, 195, 225)),
+    ("Royal blue", (30, 70, 170)), ("Blue", (40, 90, 200)), ("Navy", (25, 35, 75)), ("Indigo", (60, 50, 130)),
+    ("Purple", (95, 45, 135)), ("Violet", (140, 90, 190)), ("Lavender", (190, 170, 220)),
+]
+
+
+def _lab_exact(rgb) -> tuple:
+    """Lab exactly as the JavaScript engine computes it, so both pick the same ink names."""
+    def lin(c):
+        return c / 12.92 if c <= 0.04045 else ((c + 0.055) / 1.055) ** 2.4
+
+    def f(t):
+        return t ** (1 / 3) if t > 0.008856 else 7.787 * t + 16 / 116
+    r, g, b = (lin(v / 255) for v in rgb)
+    x = (0.412453 * r + 0.357580 * g + 0.180423 * b) / 0.950456
+    y = 0.212671 * r + 0.715160 * g + 0.072169 * b
+    z = (0.019334 * r + 0.119193 * g + 0.950227 * b) / 1.088754
+    fx, fy, fz = f(x), f(y), f(z)
+    return 116 * fy - 16, 500 * (fx - fy), 200 * (fy - fz)
+
+
+_INK_LABS = [(n, _lab_exact(c)) for n, c in INK_NAMES]
+
+
+def ink_name(rgb) -> str:
+    L, a, b = _lab_exact(rgb)
+    best, bd = "Ink", float("inf")
+    for n, (l2, a2, b2) in _INK_LABS:
+        d = (L - l2) ** 2 + (a - a2) ** 2 + (b - b2) ** 2
+        if d < bd:
+            best, bd = n, d
+    return best
+
+
+def _label_plates(plates: list) -> None:
+    """Process inks and the underbase keep their names; other inks are named by colour; repeats get 2, 3..."""
+    seen: dict = {}
+    for p in plates:
+        if not p.label:
+            p.label = p.name if (p.underbase or p.name in {n for n, _, _ in PROCESS_INKS}) else ink_name(p.rgb)
+        base = p.label
+        seen[base] = seen.get(base, 0) + 1
+        if seen[base] > 1:
+            p.label = f"{base} {seen[base]}"
 
 
 def contrast_ink(garment) -> tuple:
@@ -812,8 +877,10 @@ def plate_specs(prep: Prepared, o: ToneOptions, fit: Fit | None = None) -> tuple
         e = o.ink_edits.get(p.name)
         if e:
             p.on = e["on"]
+            p.label = e.get("name", "")
             if not p.underbase:
                 p.choke_mm = e["choke_mm"]
+    _label_plates(plates)
     return plates, blend
 
 
@@ -1416,7 +1483,7 @@ def report(prep: Prepared, o: ToneOptions, plates: list[Plate], bitmaps: list[np
     any_ink = np.zeros_like(bitmaps[0]) if bitmaps else None
     inks = []
     for p, b in zip(plates, bitmaps):
-        inks.append({"name": p.name, "hex": to_hex(p.rgb), "angle": round(p.angle % 180, 1),
+        inks.append({"name": p.name, "label": p.label, "hex": to_hex(p.rgb), "angle": round(p.angle % 180, 1),
                      "coverage": round(float(b.mean()) * 100, 1), "underbase": p.underbase,
                      "on": p.on, "choke_mm": p.choke_mm})
         if not p.underbase:

@@ -103,12 +103,15 @@
     }
     const out = {};
     for (const [name, e] of Object.entries(edits)) {
-      if (name.length > 40 || !e || typeof e !== "object") throw new OptionError("Each ink edit is {ink name: {on, choke_mm}}.");
-      const unknown = Object.keys(e).filter((k) => k !== "on" && k !== "choke_mm");
+      if (name.length > 40 || !e || typeof e !== "object") throw new OptionError("Each ink edit is {ink name: {on, choke_mm, name}}.");
+      const unknown = Object.keys(e).filter((k) => k !== "on" && k !== "choke_mm" && k !== "name");
       if (unknown.length) throw new OptionError(`Unknown ink settings: ${unknown.sort().join(", ")}`);
       const choke = Number(e.choke_mm ?? 0);
       if (!Number.isFinite(choke) || choke < -0.5 || choke > 0.5) throw new OptionError("Ink choke must be between -0.5 and 0.5 mm.");
       out[name] = { on: e.on === undefined ? true : !!e.on, choke_mm: Math.round(choke * 1e4) / 1e4 };
+      const label = String(e.name ?? "").split(/\s+/).filter(Boolean).join(" ");
+      if (label.length > 40) throw new OptionError("Ink names are limited to 40 characters.");
+      if (label) out[name].name = label;
     }
     return out;
   }
@@ -982,10 +985,31 @@
     return fit;
   }
 
+  // Plain screen-print ink names (table from the Python engine); nearest by CIE76 in Lab.
+  const INK_LABS = CATALOG.ink_names.map(([n, c]) => [n, rgbToLab(c[0] / 255, c[1] / 255, c[2] / 255)]);
+  function inkName(rgb) {
+    const [L, a, b] = rgbToLab(rgb[0] / 255, rgb[1] / 255, rgb[2] / 255);
+    let best = "Ink", bd = Infinity;
+    for (const [n, [l2, a2, b2]] of INK_LABS) {
+      const d = (L - l2) ** 2 + (a - a2) ** 2 + (b - b2) ** 2;
+      if (d < bd) { best = n; bd = d; }
+    }
+    return best;
+  }
+  function labelPlates(plates) {   // process inks + underbase keep their names; repeats get 2, 3...
+    const seen = {}, process = new Set(PROCESS_INKS.map((x) => x[0]));
+    for (const p of plates) {
+      if (!p.label) p.label = p.underbase || process.has(p.name) ? p.name : inkName(p.rgb);
+      const base = p.label;
+      seen[base] = (seen[base] || 0) + 1;
+      if (seen[base] > 1) p.label = `${base} ${seen[base]}`;
+    }
+  }
+
   function plateSpecs(prep, o, fit) {
     fit = fit || resolveFit(prep, o);
     let plates, blend;
-    const P = (name, rgb, angle, src = 0, underbase = false) => ({ name, rgb, angle, shift: [0, 0], src, underbase, on: true, choke_mm: 0 });
+    const P = (name, rgb, angle, src = 0, underbase = false) => ({ name, rgb, angle, shift: [0, 0], src, underbase, on: true, choke_mm: 0, label: "" });
     if (o.mode === "mono") { plates = [P("Ink", fit.inks[0], o.angle)]; blend = "opaque"; }
     else if (o.mode === "duotone") {
       plates = [P("Shadow ink", fit.inks[0], o.angle, 0), P("Second ink", fit.inks[1], o.angle + 30, 1)]; blend = "multiply";
@@ -1013,8 +1037,10 @@
       const e = o.ink_edits[p.name];
       if (!e) continue;
       p.on = e.on;
+      p.label = e.name || "";
       if (!p.underbase) p.choke_mm = e.choke_mm;
     }
+    labelPlates(plates);
     return { plates, blend, fit };
   }
 
@@ -1704,7 +1730,7 @@
       const b = bitmaps[i];
       let on = 0;
       for (let k = 0; k < b.length; k++) if (b[k]) { on++; if (!p.underbase) any[k] = 1; }
-      inks.push({ name: p.name, hex: toHex(p.rgb), angle: r1(((p.angle % 180) + 180) % 180), coverage: r1(on / b.length * 100),
+      inks.push({ name: p.name, label: p.label, hex: toHex(p.rgb), angle: r1(((p.angle % 180) + 180) % 180), coverage: r1(on / b.length * 100),
         underbase: p.underbase, on: p.on, choke_mm: p.choke_mm });
     });
     let anyOn = 0;
@@ -1745,7 +1771,7 @@
     CATALOG, DEFAULTS, STYLES, AM_STYLES, GRAIN_STYLES, TEXTURES, TARGETS, CREAM, INK_BLACK, LOUPE_MAX, MAX_OUTPUT_PX,
     ImageError, OptionError, hex, toHex, parseOptions, prepareKey, artKey, prepareArt, prepare, outSize, resolveFit, plateSpecs,
     renderPreview, renderFull, renderPlates, composite, report, threshold, shapeDots, lum, contrastInk, spotPalette,
-    thresholdCuts, fixedPalette, DIFFUSION_STYLES, PALETTES,
+    thresholdCuts, fixedPalette, DIFFUSION_STYLES, PALETTES, inkName,
     _internal: { hash2, valueNoise, fbm, blueNoise, voronoiEdge, scratches, rgbToLab, labToRgb, resize },
   };
   if (typeof module !== "undefined" && module.exports) module.exports = api;

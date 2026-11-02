@@ -441,11 +441,12 @@
       `Screen: ${E.STYLES[o.style]}` + (grain ? `, grain ${o.grain_mm} mm` : `, ${o.lpi} LPI`), ""];
     for (let i = 0; i < kept.length; i++) {
       const [p, sep] = kept[i], f = film(sep, r.width, r.height, o), n = String(i + 1).padStart(2, "0");
-      files.push({ name: `${name}-${n}-${p.name.replace(/[^A-Za-z0-9]/g, "-")}.png`, blob: await encodePNG(f.w, f.h, f.data, o.dpi, true) });
+      const ink = p.label || p.name;
+      files.push({ name: `${name}-${n}-${ink.replace(/[^A-Za-z0-9]/g, "-")}-${E.toHex(p.rgb).slice(1)}.png`, blob: await encodePNG(f.w, f.h, f.data, o.dpi, true) });
       let on = 0;
       for (const v of sep) on += v;
-      lines.push(`${n} ${p.name.padEnd(16)} ${E.toHex(p.rgb)}  angle ${(((p.angle % 180) + 180) % 180).toFixed(1).padStart(5)}  ` +
-        `coverage ${(on / sep.length * 100).toFixed(1)}%`);
+      lines.push(`${n} ${ink.padEnd(18)} ${E.toHex(p.rgb)}  RGB ${p.rgb.map((c) => Math.round(c)).join(",").padEnd(11)}  ` +
+        `angle ${(((p.angle % 180) + 180) % 180).toFixed(1).padStart(5)}  coverage ${(on / sep.length * 100).toFixed(1)}%`);
     }
     lines.push("", o.registration_marks ? "Films are black = ink, 1-bit, with registration marks in a 0.5 in margin."
       : "Films are black = ink, 1-bit.", "Print order: as numbered (light inks first).");

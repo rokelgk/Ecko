@@ -49,13 +49,15 @@ def separations_zip(rgba: np.ndarray, seps: list[np.ndarray], plates, o: ToneOpt
                                                   else f", grain {o.grain_mm:g} mm"), ""]
         kept = [(b, p) for b, p in zip(seps, plates) if p.on]  # inks switched off get no film
         for i, (b, p) in enumerate(kept, 1):
-            safe = "".join(ch if ch.isalnum() else "-" for ch in p.name)
-            label = f"{name} | {i}/{len(kept)} {p.name} {to_hex(p.rgb)} | {o.lpi:g} LPI @ {p.angle % 180:.1f} deg"
+            ink = p.label or p.name
+            safe = "".join(ch if ch.isalnum() else "-" for ch in ink) + "-" + to_hex(p.rgb)[1:]
+            label = f"{name} | {i}/{len(kept)} {ink} {to_hex(p.rgb)} | {o.lpi:g} LPI @ {p.angle % 180:.1f} deg"
             fbuf = io.BytesIO()
             _film(b, o, label).save(fbuf, "PNG", dpi=(o.dpi, o.dpi))
             z.writestr(f"{name}-{i:02d}-{safe}.png", fbuf.getvalue())
-            lines.append(f"{i:02d} {p.name:12s} {to_hex(p.rgb)}  angle {p.angle % 180:5.1f}  "
-                         f"coverage {float(b.mean()) * 100:.1f}%")
+            rgb = ",".join(str(int(round(c))) for c in p.rgb)
+            lines.append(f"{i:02d} {ink:18s} {to_hex(p.rgb)}  RGB {rgb:11s}  "
+                         f"angle {p.angle % 180:5.1f}  coverage {float(b.mean()) * 100:.1f}%")
         lines += ["", "Films are black = ink, 1-bit, with registration marks in a 0.5 in margin."
                   if o.registration_marks else "Films are black = ink, 1-bit.",
                   "Print order: as numbered (light inks first)."]

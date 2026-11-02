@@ -578,7 +578,7 @@
     ol.innerHTML = "";
     if (solo && !r.inks.some((i) => i.name === solo)) solo = null;
     $("soloNote").hidden = !solo;
-    $("soloNote").textContent = solo ? `Showing ${solo} only. Click its name again to show all inks. Downloads always include every ink that's on.` : "";
+    $("soloNote").textContent = solo ? `Showing ${(r.inks.find((i) => i.name === solo) || {}).label || solo} only. Click its name again to show all inks. Downloads always include every ink that's on.` : "";
     let colourIndex = 0;
     r.inks.forEach((ink) => {
       const li = document.createElement("li");
@@ -593,8 +593,9 @@
           <button type="button" class="eye" aria-pressed="${on}" title="${on ? "Printing: click to switch this ink off" : "Off: click to print this ink"}">${on ? "👁" : "–"}</button>
           ${editable ? `<input type="color" value="${ink.hex}" aria-label="${ink.name} colour">`
             : `<span class="inkSwatch" style="background:${ink.hex}"></span>`}
-          <button type="button" class="tname" title="Show this ink alone"><b>${ink.name}</b><small>${ink.underbase ? "white base under the colours" : `${ink.hex} · ${ink.angle}°`}${solo && solo !== ink.name ? "" : ` · ${ink.coverage}%`}</small></button>
+          <button type="button" class="tname" title="Show this ink alone"><b>${esc(ink.label || ink.name)}</b><small>${ink.underbase ? "white base under the colours" : `${ink.hex} · ${ink.angle}°`}${solo && solo !== ink.name ? "" : ` · ${ink.coverage}%`}</small></button>
         </div>
+        <label class="inkName">Ink name <input type="text" maxlength="40" value="${esc((e && e.name) || "")}" placeholder="${esc(ink.label || ink.name)}" aria-label="Name for ${esc(ink.name)}"></label>
         <div class="chokeRow">
           <span>${ink.underbase ? "Size" : "Spread"}</span>
           <input type="range" aria-label="${ink.name} choke" min="${ink.underbase ? 0 : -0.3}" max="${ink.underbase ? 0.5 : 0.3}" step="0.01" value="${chokeVal}">
@@ -608,6 +609,12 @@
       });
       li.querySelector(".eye").addEventListener("click", () => {
         edit().on = !on;
+        changed();
+      });
+      const nameBox = li.querySelector(".inkName input");
+      nameBox.addEventListener("change", () => {   // your own ink name: used on films and in the README
+        const v = nameBox.value.trim();
+        if (v) edit().name = v; else if (opts.ink_edits[ink.name]) delete opts.ink_edits[ink.name].name;
         changed();
       });
       const slider = li.querySelector(".chokeRow input"), out = li.querySelector(".chokeRow output");
@@ -634,6 +641,8 @@
       ol.appendChild(li);
     });
   }
+
+  function esc(t) { return String(t).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" })[c]); }
 
   function chokeLabel(v) {
     v = Number(v) || 0;

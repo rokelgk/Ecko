@@ -9,15 +9,15 @@
     .top { padding-bottom: 8px; border-bottom: 1px solid rgba(128, 128, 128, 0.45); margin-bottom: 6px; }
     .brand { font-weight: bold; font-size: 13px; margin-bottom: 6px; }
     #run { width: 100%; padding: 7px; font-weight: bold; }
-    .sizes { margin-top: 6px; font-size: 11px; opacity: 0.85; }
-    .size { min-width: 30px; margin-left: 4px; padding: 2px 6px; }
-    #steps { height: 240px; overflow-y: scroll; padding-right: 6px; }
     button.wide { width: 100%; margin-top: 6px; padding: 5px; }
     #liveBtn.on { border: 1px solid #22c55e; }
     #liveBtn.off { border: 1px solid #f59e0b; }
     .row2 { margin-top: 6px; display: flex; flex-direction: row; align-items: center; }
     .row2 .lbl { font-size: 11px; margin-right: 4px; }
     .row2 button { flex: 1 1 0; margin-left: 4px; padding: 4px 2px; }
+    .sizes { margin-top: 6px; font-size: 11px; opacity: 0.85; }
+    .size { min-width: 30px; margin-left: 4px; padding: 2px 6px; }
+    #steps { height: 240px; overflow-y: scroll; padding-right: 6px; }
     #status { margin-top: 6px; font-size: 11px; line-height: 1.35; }
     .err { color: #f87171; }
     .sec { border-bottom: 1px solid rgba(128, 128, 128, 0.3); }
@@ -27,10 +27,24 @@
     .title { margin-bottom: 3px; }
     .value { opacity: 0.8; margin-left: 6px; }
     select, input[type=range] { width: 100%; }
+    input[type=text] { width: 100%; }
     .check { margin: 4px 0 8px; }
     .hint { opacity: 0.7; margin: 2px 0 8px; font-size: 11px; }
     .foot { margin-top: 10px; font-size: 11px; opacity: 0.8; }
     .link { text-decoration: underline; cursor: pointer; }
+    .colourRow { display: flex; flex-direction: row; align-items: center; margin: 3px 0; }
+    .sw { width: 18px; height: 18px; border: 1px solid rgba(128, 128, 128, 0.8); margin-right: 6px; flex: 0 0 auto; }
+    .colourRow input { flex: 1 1 auto; }
+    .colourRow .tag { width: 64px; flex: 0 0 auto; font-size: 11px; opacity: 0.85; }
+    .ink { border: 1px solid rgba(128, 128, 128, 0.35); padding: 6px; margin: 0 0 6px; }
+    .ink.off { opacity: 0.5; }
+    .ink.solo { border-color: #f59e0b; }
+    .inkTop { display: flex; flex-direction: row; align-items: center; }
+    .inkTop .nm { flex: 1 1 auto; font-weight: bold; }
+    .inkTop button { margin-left: 4px; padding: 2px 6px; font-size: 11px; }
+    .small { font-size: 11px; opacity: 0.8; }
+    .warn { color: #fbbf24; }
+    .ok { color: #4ade80; }
     #notPhotoshop { display: none; padding: 12px; font-size: 14px; line-height: 1.5; }
   </style>
 </head>
@@ -50,86 +64,162 @@
       <div class="sizes">Settings height:
         <button id="sizeS" class="size">S</button><button id="sizeM" class="size">M</button><button id="sizeL" class="size">L</button>
       </div>
-      <div id="status">Select a layer, then Apply once. With Live on, every slider and setting updates the result straight away.</div>
+      <div id="status">Select a layer, then Apply once. With Live on, every setting updates the result straight away.</div>
     </div>
 
     <div id="steps">
-    <div class="sec" data-sec="look">
-      <div class="head">1 · Look</div>
+    <div class="sec">
+      <div class="head">Look</div>
       <div class="body">
         <div class="field"><div class="title">Preset</div><select id="preset"></select></div>
-        <div class="hint">A starting point: every step below stays editable.</div>
+        <button id="simpleProcess" class="wide">Simple process (white base + 3 colours)</button>
+        <div class="hint">A starting point: everything below stays editable.</div>
       </div>
     </div>
 
-    <div class="sec" data-sec="prep">
-      <div class="head">2 · Prep</div>
+    <div class="sec">
+      <div class="head">Art</div>
       <div class="body">
-        <div class="field"><div class="title">Brightness<span class="value" id="brightnessOut"></span></div>
-          <input type="range" id="brightness" min="-1" max="1" step="0.05" value="0"></div>
-        <div class="field"><div class="title">Contrast<span class="value" id="contrastOut"></span></div>
-          <input type="range" id="contrast" min="-1" max="1" step="0.05" value="0"></div>
-        <div class="field"><div class="title">Sharpen<span class="value" id="sharpenOut"></span></div>
-          <input type="range" id="sharpen" min="0" max="3" step="0.1" value="0.5"></div>
-        <div class="field"><div class="title">Denoise<span class="value" id="denoiseOut"></span></div>
-          <input type="range" id="denoise" min="0" max="3" step="1" value="0"></div>
-        <div class="field"><div class="title">Smooth shapes<span class="value" id="smoothOut"></span></div>
-          <input type="range" id="smooth" min="0" max="3" step="0.1" value="0"></div>
+        <div class="check"><input type="checkbox" data-k="remove_background"> Remove flat background</div>
+        <div class="field" id="bgTolRow"><div class="title">Background tolerance</div>
+          <input type="range" data-k="bg_tolerance" min="4" max="60" step="1"></div>
+        <div class="field"><div class="title">Clean up specks</div>
+          <input type="range" data-k="denoise" min="0" max="3" step="1" data-fmt="off"></div>
+        <div class="field"><div class="title">Smooth shapes</div>
+          <input type="range" data-k="smooth_mm" min="0" max="3" step="0.05" data-fmt="offmm"></div>
+        <div class="field"><div class="title">Sharpen</div>
+          <input type="range" data-k="sharpen" min="0" max="3" step="0.05"></div>
+        <div class="hint">A layer with transparency is already cut out, so background removal is skipped for it.</div>
       </div>
     </div>
 
-    <div class="sec" data-sec="colour">
-      <div class="head">3 · Colour &amp; pattern</div>
+    <div class="sec">
+      <div class="head">Screen</div>
       <div class="body">
-        <div class="field"><div class="title">Colour</div><select id="mode"></select></div>
-        <div class="field" id="levelsRow"><div class="title">Tones<span class="value" id="levelsOut"></span></div>
-          <input type="range" id="levels" min="2" max="8" step="1" value="3"></div>
-        <div class="field" id="countRow"><div class="title">Colours<span class="value" id="countOut"></span></div>
-          <input type="range" id="count" min="2" max="8" step="1" value="4"></div>
-        <div class="field" id="paletteRow"><div class="title">Palette</div><select id="palette"></select></div>
-        <div class="field"><div class="title">Pattern</div><select id="style"></select></div>
-        <div class="field" id="lpiRow"><div class="title">Lines per inch<span class="value" id="lpiOut"></span></div>
-          <input type="range" id="lpi" min="5" max="150" step="1" value="35"></div>
-        <div class="field" id="grainRow"><div class="title">Grain size<span class="value" id="grainOut"></span></div>
-          <input type="range" id="grain" min="0.05" max="1.5" step="0.01" value="0.25"></div>
-        <div class="field"><div class="title">Angle<span class="value" id="angleOut"></span></div>
-          <input type="range" id="angle" min="0" max="180" step="0.5" value="22.5"></div>
+        <div class="field"><div class="title">Colour</div><select data-k="mode" id="mode"></select></div>
+        <div class="field"><div class="title">Pattern</div><select data-k="style" id="style"></select></div>
+        <div class="field" id="amRow"><div class="title">Lines per inch</div>
+          <input type="range" data-k="lpi" min="5" max="150" step="1" data-unit=" LPI"></div>
+        <div class="field" id="grainRow"><div class="title">Grain size</div>
+          <input type="range" data-k="grain_mm" min="0.05" max="1.5" step="0.01" data-unit=" mm"></div>
+        <div class="field"><div class="title">Angle</div>
+          <input type="range" data-k="angle" min="0" max="180" step="0.5" data-unit="°"></div>
+
+        <div id="thresholdBox">
+          <div class="field"><div class="title">Tones</div>
+            <input type="range" data-k="threshold_levels" min="2" max="8" step="1"></div>
+          <div id="cuts"></div>
+          <button id="autoCuts" class="wide">Auto levels</button>
+          <div class="field"><div class="title">Blend between tones</div>
+            <input type="range" data-k="threshold_soft" min="0" max="0.3" step="0.01" data-fmt="solid"></div>
+          <div class="field"><div class="title">Tone colours</div><select data-k="threshold_colors" id="threshold_colors">
+            <option value="ink" data-v="ink">From the ink colour</option>
+            <option value="image" data-v="image">From the picture</option>
+            <option value="palette" data-v="palette">From a palette</option></select></div>
+          <div class="check"><input type="checkbox" data-k="threshold_stack"> Overlap: lighter tones run under darker ones</div>
+        </div>
+
+        <div class="field" id="paletteRow"><div class="title">Palette</div><select data-k="palette" id="palette"></select></div>
+        <div id="spotBox">
+          <div class="field"><div class="title">Number of colours</div>
+            <input type="range" data-k="spot_colors" min="2" max="8" step="1"></div>
+          <div class="field" id="softRow"><div class="title">Colour blending</div>
+            <input type="range" data-k="spot_softness" min="2" max="40" step="1"></div>
+        </div>
+        <div id="inksBox">
+          <div class="title">Ink colours</div>
+          <div id="inkColours"></div>
+        </div>
+        <div class="hint" id="spotHint">Spot and index colours come from your picture; change each one in Inks below after Apply.</div>
+
+        <div class="field"><div class="title">White underbase (dark shirts)</div><select data-k="underbase" id="underbase">
+          <option value="auto" data-v="auto">Auto: screen print on dark shirts</option>
+          <option value="on" data-v="on">On</option><option value="off" data-v="off">Off</option></select></div>
+        <div class="field"><div class="title">Underbase choke</div>
+          <input type="range" data-k="choke_mm" min="0" max="0.5" step="0.01" data-unit=" mm"></div>
       </div>
     </div>
 
-    <div class="sec" data-sec="shirt">
-      <div class="head">4 · Shirt</div>
+    <div class="sec">
+      <div class="head">Inks</div>
       <div class="body">
-        <div class="field"><div class="title">Shirt colour</div><select id="garment"></select></div>
-        <div class="field"><div class="title">Fit to shirt</div><select id="fit"></select></div>
-        <div class="field"><div class="title">White underbase</div><select id="underbase">
-          <option value="auto">Auto (screen print on dark shirts)</option><option value="on">On</option><option value="off">Off</option></select></div>
+        <div id="inkList" class="hint">Apply once to see each ink here.</div>
+        <div class="hint">Eye: print it or not. Solo: show that ink alone (files always include every ink that's on).
+          Slider: spread (left) grows the dots, choke (right) shrinks them. Name: used on films and in the README.</div>
+      </div>
+    </div>
+
+    <div class="sec">
+      <div class="head">Tone</div>
+      <div class="body">
+        <div class="field"><div class="title">Brightness</div><input type="range" data-k="brightness" min="-1" max="1" step="0.02"></div>
+        <div class="field"><div class="title">Contrast</div><input type="range" data-k="contrast" min="-1" max="1" step="0.02"></div>
+        <div class="field"><div class="title">Midtones (gamma)</div><input type="range" data-k="gamma" min="0.3" max="3" step="0.02"></div>
+        <div class="field"><div class="title">Black point</div><input type="range" data-k="black_point" min="0" max="0.6" step="0.01"></div>
+        <div class="field"><div class="title">White point</div><input type="range" data-k="white_point" min="0.4" max="1" step="0.01"></div>
+        <div class="check"><input type="checkbox" data-k="invert"> Invert</div>
+        <span class="link" id="resetTone">Reset tone</span>
+      </div>
+    </div>
+
+    <div class="sec">
+      <div class="head">Texture</div>
+      <div class="body">
+        <div id="textures"></div>
+        <div class="field"><div class="title">Your own texture (a layer in this document)</div><select id="texLayer"></select></div>
+        <div class="hint">Pick any grunge, paper or distress layer: dark parts wear the print away. Hide that layer if you like; it is still read.</div>
+        <button id="refreshLayers" class="wide">Refresh layer list</button>
+        <button id="reseed" class="wide">Shuffle textures</button>
+      </div>
+    </div>
+
+    <div class="sec">
+      <div class="head">Shirt</div>
+      <div class="body">
+        <div class="field"><div class="title">Shirt colour</div><select id="garmentSel"></select></div>
+        <div class="colourRow"><span class="sw" id="garmentSw"></span><input type="text" id="garmentHex" maxlength="7"></div>
+        <div class="field"><div class="title">Fit to shirt</div><select data-k="shirt_fit" id="shirt_fit"></select></div>
+        <div class="check"><input type="checkbox" data-k="knockout"> Knock out the shirt colour</div>
         <div class="check"><input type="checkbox" id="shirtLayer" checked> Add a shirt-colour layer underneath</div>
-        <div class="hint">See the result on the shirt colour. Hide that layer before exporting your print file.</div>
+        <div class="hint">Hide the shirt layer before exporting your print file.</div>
       </div>
     </div>
 
-    <div class="sec" data-sec="border">
-      <div class="head">5 · Border</div>
+    <div class="sec">
+      <div class="head">Border</div>
       <div class="body">
-        <div class="field"><div class="title">Border</div><select id="border"></select></div>
-        <div class="field"><div class="title">Shape</div><select id="borderShape"></select></div>
-        <div class="field"><div class="title">Width<span class="value" id="borderOut"></span></div>
-          <input type="range" id="borderMm" min="2" max="80" step="1" value="15"></div>
+        <div class="field"><div class="title">Border</div><select data-k="border" id="border"></select></div>
+        <div id="borderOpts">
+          <div class="field"><div class="title">Shape</div><select data-k="border_shape" id="border_shape"></select></div>
+          <div class="field"><div class="title">Width</div><input type="range" data-k="border_mm" min="2" max="80" step="1" data-unit=" mm"></div>
+        </div>
       </div>
     </div>
 
-    <div class="sec" data-sec="output">
-      <div class="head">6 · Output</div>
+    <div class="sec">
+      <div class="head">Press control</div>
       <div class="body">
-        <div class="field"><div class="title">Printing on</div><select id="target"></select></div>
-        <div class="hint">Uses your document's resolution as the DPI, so the pattern matches the web app at that size.</div>
-        <div class="field"><div class="title">Separations</div>
-          <button id="sepLayers2" class="wide">Make separation layers</button>
-          <button id="saveFilms2" class="wide">Save separation films to a folder…</button></div>
-        <div class="hint"><b>Layers</b>: one layer per ink in a group, in print order (first ink at the bottom), each in its ink colour.<br>
-          <b>Films</b>: one 1-bit PNG per ink (black = ink) at your document's DPI with registration marks, plus a README with angles and coverage. Ready for film output or a RIP.<br>
+        <div class="field"><div class="title">Printing on</div><select data-k="target" id="target"></select></div>
+        <div class="field"><div class="title">Smallest dot</div><input type="range" data-k="min_dot" min="0" max="0.3" step="0.01"></div>
+        <div class="field"><div class="title">Largest dot</div><input type="range" data-k="max_dot" min="0.6" max="1" step="0.01"></div>
+        <div class="field"><div class="title">Dot gain compensation</div><input type="range" data-k="dot_gain" min="0" max="0.35" step="0.01"></div>
+        <div class="field"><div class="title">Rough edges</div><input type="range" data-k="roughness" min="0" max="1" step="0.02"></div>
+        <div class="field"><div class="title">Misregistration (vintage)</div><input type="range" data-k="misregister_mm" min="0" max="2" step="0.05" data-unit=" mm"></div>
+        <div class="check"><input type="checkbox" data-k="registration_marks"> Registration marks on films</div>
+        <div class="hint">Print size and DPI come from your layer and document resolution.</div>
+      </div>
+    </div>
+
+    <div class="sec">
+      <div class="head">Output</div>
+      <div class="body">
+        <button id="sepLayers2" class="wide">Make separation layers</button>
+        <button id="saveFilms2" class="wide">Save separation films to a folder…</button>
+        <div class="hint"><b>Layers</b>: one layer per ink in a group, in print order (first ink at the bottom), named with the ink name and colour.<br>
+          <b>Films</b>: one 1-bit PNG per ink (black = ink) at your document's DPI, named with the ink name and colour, plus a README with each ink's name, hex, RGB, angle and coverage.<br>
           Inks switched off are skipped. For the full-colour print file, use File › Export on the result layer.</div>
+        <div class="title">Print check</div>
+        <div id="check" class="small">Apply once to check the print.</div>
       </div>
     </div>
 

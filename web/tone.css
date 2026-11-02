@@ -164,3 +164,6 @@ body.panelsHidden .psSide { display: none; }
   .psCenter { order: -1; }
   .toneApp .garment { margin-left: 0; }
 }
+
+.inkName { display: flex; align-items: center; gap: 6px; font-size: 11px; opacity: 0.85; margin: 4px 0 2px; }
+.inkName input { flex: 1; min-width: 0; padding: 3px 6px; font-size: 12px; }

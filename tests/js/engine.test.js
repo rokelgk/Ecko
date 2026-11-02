@@ -200,3 +200,16 @@ for (const border of ["fade", "grunge", "torn", "storm", "barbwire"]) for (const
     for (let y = 0; y < 90; y++) for (let x = 0; x < 600; x++) assert.strictEqual(crop.rgba[y * 600 + x], r.rgba[((y + 7) * W + 5) * 4 + x]);
   });
 }
+
+test("inks are named by colour, like the Python engine", () => {
+  assert.strictEqual(E.inkName([200, 16, 46]), "Red");
+  assert.strictEqual(E.inkName([25, 35, 75]), "Navy");
+  const { rgba, w, h } = ramp();
+  const o = E.parseOptions({ mode: "spot", spot_colors: 3, width_in: 3 });
+  const { plates } = E.plateSpecs(E.prepare(rgba, w, h, o), o);
+  assert.ok(plates.every((p) => p.label && !p.label.startsWith("Spot")));
+  const o2 = E.parseOptions({ mode: "spot", spot_colors: 3, width_in: 3, ink_edits: { [plates[0].name]: { name: "Vegas Gold" } } });
+  const p2 = E.plateSpecs(E.prepare(rgba, w, h, o2), o2).plates;
+  assert.strictEqual(p2[0].label, "Vegas Gold");
+  assert.throws(() => E.parseOptions({ ink_edits: { Ink: { name: "x".repeat(41) } } }), /40 characters/);
+});

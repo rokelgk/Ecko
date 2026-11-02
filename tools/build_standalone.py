@@ -46,6 +46,7 @@ def catalog_data() -> dict:
         "shirt_fits_map": E.SHIRT_FITS,
         "fonts": [{"id": f.id, "name": f.name, "file": f.file} for f in E.FONTS.values()],
         "defaults": cat["defaults"],
+        "ink_names": [[n, list(c)] for n, c in E.INK_NAMES],
         "diffusion": {k: [d, [list(t) for t in taps]] for k, (d, taps) in hybrid.DIFFUSION.items()},
     }
 

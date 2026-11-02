@@ -545,3 +545,46 @@ def test_export_with_shirt_colour_behind(logo):
     assert 'on-shirt.png' in r.headers["content-disposition"]
     a = np.array(Image.open(io.BytesIO(r.content)).convert("RGBA"))
     assert (a[..., 3] == 255).all() and tuple(a[0, 0, :3]) == (0x1f, 0x2a, 0x44)
+
+
+# ------------------------------------------------------------- ink names (films, layers, README)
+
+
+def test_inks_are_named_by_colour():
+    assert E.ink_name((200, 16, 46)) == "Red"
+    assert E.ink_name((25, 35, 75)) == "Navy"
+    assert E.ink_name((255, 255, 255)) == "White"
+    assert E.ink_name((10, 10, 10)) == "Black"
+
+
+def test_spot_plates_get_colour_names_and_your_own_names(logo):
+    o = E.parse_options({"mode": "spot", "spot_colors": 3, "width_in": 4})
+    prep = E.prepare(logo, o)
+    plates, _ = E.plate_specs(prep, o)
+    labels = [p.label for p in plates]
+    assert all(lab and not lab.startswith("Spot") for lab in labels) and len(set(labels)) == len(labels)
+    o2 = E.parse_options({"mode": "spot", "spot_colors": 3, "width_in": 4,
+                          "ink_edits": {plates[0].name: {"name": "  Vegas   Gold "}}})
+    plates2, _ = E.plate_specs(prep, o2)
+    assert plates2[0].label == "Vegas Gold" and plates2[0].name == plates[0].name  # key stays, label changes
+    with pytest.raises(ValueError):
+        E.parse_options({"ink_edits": {"Ink": {"name": "x" * 41}}})
+
+
+def test_process_inks_keep_their_names(logo):
+    o = E.parse_options({"mode": "cmyk", "width_in": 4})
+    plates, _ = E.plate_specs(E.prepare(logo, o), o)
+    assert [p.label for p in plates] == ["Cyan", "Magenta", "Yellow", "Black"]
+
+
+def test_separation_films_are_named_after_the_inks(logo):
+    iid = _upload(logo)
+    r = client.post("/api/tone/export", json={"image_id": iid, "format": "zip", "name": "tee", "options": {
+        "width_in": 3, "mode": "spot", "spot_colors": 2, "ink_edits": {"Spot 1": {"name": "Cardinal Red"}}}})
+    assert r.status_code == 200, r.text
+    z = zipfile.ZipFile(io.BytesIO(r.content))
+    films = [n for n in z.namelist() if n.endswith(".png") and "composite" not in n]
+    assert any("Cardinal-Red-" in n for n in films), films
+    assert all(n.split("-")[-1][:-4].isalnum() and len(n.split("-")[-1]) == 10 for n in films)  # ends in the hex
+    readme = z.read("README.txt").decode()
+    assert "Cardinal Red" in readme and "RGB" in readme
