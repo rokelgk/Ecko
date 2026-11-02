@@ -118,6 +118,33 @@
       });
     },
 
+    // Opens the whole app in its own large, resizable window (a UXP dialog)
+    // and moves it back into the panel when that window closes.
+    popOutWindow() {
+      return this._dlg && this._dlg.open ? this._dlg : null;
+    },
+    popOut(appEl, onResize) {
+      let dlg = document.getElementById('eckoDialog');
+      if (!dlg) {
+        dlg = document.createElement('dialog');
+        dlg.id = 'eckoDialog';
+        document.body.appendChild(dlg);
+      }
+      this._dlg = dlg;
+      const home = appEl.parentNode, next = appEl.nextSibling;
+      dlg.appendChild(appEl);
+      const shown = dlg.uxpShowModal({ title: 'Ecko Seps', resize: 'both', size: { width: 1400, height: 880 } });
+      setTimeout(onResize, 50);
+      return Promise.resolve(shown).then(() => {
+        home.insertBefore(appEl, next);
+        this._dlg = null;
+      }, (e) => {
+        home.insertBefore(appEl, next);
+        this._dlg = null;
+        throw e;
+      });
+    },
+
     async saveFiles(files) {
       const folder = await lfs.getFolder();
       if (!folder) return null;

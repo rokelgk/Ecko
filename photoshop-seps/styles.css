@@ -285,3 +285,11 @@ body.theme-aztec .pane-options, body.theme-aztec .pane-preview { scrollbar-color
 body.theme-aztec .pane-options::-webkit-scrollbar-track, body.theme-aztec .pane-preview::-webkit-scrollbar-track { background: #1d1713; }
 body.theme-aztec .pane-options::-webkit-scrollbar-thumb, body.theme-aztec .pane-preview::-webkit-scrollbar-thumb { background: #8a6a3a; border-color: #1d1713; }
 .band { display: none; }
+
+/* Photoshop panel: sizes come from ui.js in pixels; keep the panes from
+   stretching or shrinking on their own, and keep the Top button in flow. */
+body.ps-host, body.ps-host html { overflow: hidden; }
+.layout > .pane-preview, .layout > .pane-options, .layout > .splitter { flex-grow: 0; flex-shrink: 0; max-width: none; }
+.layout.narrow > .pane-options { min-width: 0; }
+body.ps-host .btn.to-top { position: static; box-shadow: none; }
+#eckoDialog { padding: 0; margin: 0; border: 0; background: var(--bg); }

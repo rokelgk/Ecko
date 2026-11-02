@@ -1166,23 +1166,59 @@
   // ---------- layout for any screen size ----------
   const ui = load('ui') || {};
   function saveUi() { host.storage.set('ecko-seps-ui', JSON.stringify(ui)); }
+  // Size of the area the app lives in: the panel/window, or the pop-out
+  // window when open. Photoshop's panel engine ignores viewport units, so
+  // every pane gets exact pixel sizes from here; that is what lets each side
+  // scroll with a visible scrollbar in Photoshop as well as browsers.
+  function hostSize() {
+    const dlg = host.popOutWindow && host.popOutWindow();
+    if (dlg && dlg.clientWidth > 0) return { w: dlg.clientWidth, h: dlg.clientHeight };
+    const de = document.documentElement;
+    return { w: window.innerWidth || de.clientWidth || document.body.clientWidth, h: window.innerHeight || de.clientHeight || document.body.clientHeight };
+  }
+
+  let lastSize = '';
   function layout() {
     const app = $('app');
-    const w = window.innerWidth, h = window.innerHeight;
-    app.classList.toggle('narrow', w < 760);
+    const { w, h } = hostSize();
+    lastSize = `${w}x${h}`;
+    const narrow = w < 760;
+    app.classList.toggle('narrow', narrow);
     app.classList.toggle('short', h < 620);
     app.classList.toggle('tiny', w < 360 || (w >= 760 && w < 900));
     app.classList.toggle('pv-hidden', !!ui.previewHidden);
-    // Keep saved sizes inside the current window.
-    if (ui.optW) app.style.setProperty('--opt-w', `${Math.max(260, Math.min(ui.optW, w * 0.75, w - 240))}px`);
-    else app.style.removeProperty('--opt-w');
-    if (ui.pvH) app.style.setProperty('--pv-h', `${Math.max(120, Math.min(ui.pvH, h - 180))}px`);
-    else app.style.setProperty('--pv-h', `${Math.round(h < 620 ? h * 0.38 : h * 0.45)}px`);
+    const pv = $('previewPane'), op = $('optionsPane'), sp = $('splitter');
+    app.style.width = `${w}px`;
+    app.style.height = `${h}px`;
+    if (narrow) {
+      const spH = 9;
+      let pvH = ui.previewHidden ? Math.min(90, h * 0.3) : (ui.pvH ? Math.max(120, Math.min(ui.pvH, h - 180)) : Math.round(h < 620 ? h * 0.38 : h * 0.45));
+      if (state.clean && state.clean.active && !ui.previewHidden) pvH = Math.max(pvH, Math.round(h * 0.64));
+      pvH = Math.round(Math.min(pvH, h - 120));
+      pv.style.width = `${w}px`; pv.style.height = `${pvH}px`;
+      sp.style.width = `${w}px`; sp.style.height = `${spH}px`;
+      op.style.width = `${w}px`; op.style.height = `${Math.max(100, h - pvH - spH)}px`;
+    } else {
+      const spW = 7;
+      let optW = ui.optW ? Math.max(260, Math.min(ui.optW, w * 0.75, w - 240)) : Math.min(420, Math.max(330, Math.round(w * 0.36)));
+      if (ui.previewHidden) optW = w - 210 - spW;
+      optW = Math.round(optW);
+      pv.style.width = `${w - optW - spW}px`; pv.style.height = `${h}px`;
+      sp.style.width = `${spW}px`; sp.style.height = `${h}px`;
+      op.style.width = `${optW}px`; op.style.height = `${h}px`;
+    }
     document.body.classList.toggle('ui-compact', ui.size === 'compact' || (!ui.size && h < 700));
     document.body.classList.toggle('ui-large', ui.size === 'large');
     document.body.classList.toggle('theme-aztec', ui.theme !== 'plain');
+    document.body.classList.toggle('ps-host', host.name === 'photoshop');
     $('togglePreview').textContent = ui.previewHidden ? 'Show preview' : 'Hide preview';
   }
+
+  // Photoshop panels don't always send resize events: check the size often.
+  setInterval(() => {
+    const { w, h } = hostSize();
+    if (`${w}x${h}` !== lastSize) { layout(); if (state.view === 'compare') renderView(); }
+  }, 400);
 
   function setupSplitter() {
     const sp = $('splitter');
@@ -1207,6 +1243,16 @@
   $('uiSmaller').addEventListener('click', () => { ui.size = ui.size === 'large' ? 'normal' : 'compact'; saveUi(); layout(); });
   $('uiBigger').addEventListener('click', () => { ui.size = ui.size === 'compact' || !ui.size ? 'normal' : 'large'; saveUi(); layout(); });
   $('themeBtn').addEventListener('click', () => { ui.theme = ui.theme === 'plain' ? 'aztec' : 'plain'; saveUi(); layout(); });
+  if ($('popOut')) $('popOut').addEventListener('click', async () => {
+    if (!host.popOut) return;
+    try {
+      $('popOut').textContent = '⤡ Back to panel';
+      const closed = host.popOut($('app'), () => { layout(); renderView(); });
+      if (closed && closed.then) { await closed; }
+    } catch (e) { status('Could not open the full window: ' + e.message, true); }
+    $('popOut').textContent = '⤢ Full window';
+    layout(); renderView();
+  });
   $('togglePreview').addEventListener('click', () => { ui.previewHidden = !ui.previewHidden; saveUi(); layout(); });
   if ($('toTop')) $('toTop').addEventListener('click', () => { $('optionsPane').scrollTop = 0; });
   setupSplitter();
@@ -1280,6 +1326,7 @@
     if (c.target !== ALL && !targets.some((x) => x.name === c.target)) c.target = (targets[0] || {}).name || ALL;
     $('app').classList.add('cleaning');
     $('cleanBar').classList.remove('hidden');
+    layout();
     showCleanView();
     renderCleanBar();
   }
@@ -1290,6 +1337,7 @@
     $('cleanBar').classList.add('hidden');
     $('brushRing').classList.add('hidden');
     $('strokeLayer').innerHTML = '';
+    layout();
     renderTabs(); renderView();
   }
 
