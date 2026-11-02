@@ -9,6 +9,10 @@
     .top { padding-bottom: 8px; border-bottom: 1px solid rgba(128, 128, 128, 0.45); margin-bottom: 6px; }
     .brand { font-weight: bold; font-size: 13px; margin-bottom: 6px; }
     #run { width: 100%; padding: 7px; font-weight: bold; }
+    .second { width: 100%; margin-top: 6px; padding: 5px; }
+    #steps { overflow-y: auto; }
+    #bigWindow { padding: 0; }
+    #bigBody { padding: 10px 14px; }
     #status { margin-top: 6px; font-size: 11px; line-height: 1.35; }
     .err { color: #f87171; }
     .sec { border-bottom: 1px solid rgba(128, 128, 128, 0.3); }
@@ -35,9 +39,11 @@
     <div class="top">
       <div class="brand">Ecko Tone</div>
       <button id="run">Apply to selected layer</button>
+      <button id="popout" class="second">Open in full window</button>
       <div id="status">Select a layer, pick a look, then Apply. The result goes on a new layer.</div>
     </div>
 
+    <div id="steps">
     <div class="sec" data-sec="look">
       <div class="head">1 · Look</div>
       <div class="body">
@@ -112,7 +118,9 @@
     </div>
 
     <div class="foot">Settings are remembered. <span class="link" id="reset">Reset settings</span></div>
+    </div>
   </div>
+  <dialog id="bigWindow"><div id="bigBody"></div></dialog>
   <script src="index.js"></script>
 </body>
 </html>

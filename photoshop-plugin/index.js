@@ -54,7 +54,9 @@
   // ---------------------------------------------------------------- folding sections (one open at a time)
 
   const sections = Array.from(document.querySelectorAll(".sec"));
+  let openNow = "look";
   function openSection(name) {
+    openNow = name;
     for (const s of sections) {
       const body = s.querySelector(".body"), on = s.getAttribute("data-sec") === name;
       body.style.display = on ? "block" : "none";
@@ -205,6 +207,51 @@
     }
   }
 
+  // ---------------------------------------------------------------- fit the panel / full window
+
+  // Photoshop panels don't scroll by themselves: size the steps area to the space the panel has left,
+  // and re-check often, because panels can be resized at any time.
+  let inBigWindow = false;
+  function fitPanel() {
+    if (inBigWindow) return;
+    const h = window.innerHeight || document.documentElement.clientHeight || document.body.clientHeight || 0;
+    const steps = $("steps"), top = document.querySelector(".top");
+    if (h > 150 && top) {
+      const room = Math.max(120, h - top.offsetHeight - 24);
+      steps.style.height = `${room}px`;
+      steps.style.overflowY = "scroll";
+    } else {
+      steps.style.height = "";
+    }
+  }
+
+  // "Open in full window": all steps in one big, resizable window. Applying from it closes the window
+  // first, then works on the layer (Photoshop won't edit documents while a window is open on top).
+  async function openBigWindow() {
+    const dlg = $("bigWindow"), body = $("bigBody"), steps = $("steps"), home = steps.parentNode;
+    if (!dlg || typeof dlg.uxpShowModal !== "function") { status("This Photoshop version can't open a separate window.", true); return; }
+    const runBig = document.createElement("button");
+    runBig.textContent = "Apply to selected layer";
+    runBig.style.width = "100%"; runBig.style.padding = "8px"; runBig.style.fontWeight = "bold"; runBig.style.marginBottom = "10px";
+    let applyAfter = false;
+    runBig.addEventListener("click", () => { applyAfter = true; dlg.close("apply"); });
+    body.appendChild(runBig);
+    body.appendChild(steps);
+    inBigWindow = true;
+    steps.style.height = ""; steps.style.overflowY = "visible";
+    for (const s of sections) s.querySelector(".body").style.display = "block";   // every step open in the big window
+    try {
+      await dlg.uxpShowModal({ title: "Ecko Tone", resize: "both", size: { width: 460, height: 760 } });
+    } catch (e) { /* closed */ }
+    home.appendChild(steps);
+    runBig.remove();
+    inBigWindow = false;
+    openSection(openNow);
+    fitPanel();
+    save();
+    if (applyAfter) run();
+  }
+
   // ---------------------------------------------------------------- start
 
   try {
@@ -222,6 +269,10 @@
     $("shirtLayer").addEventListener("change", save);
     $("preset").addEventListener("change", applyPreset);
     $("run").addEventListener("click", run);
+    $("popout").addEventListener("click", openBigWindow);
+    window.addEventListener("resize", fitPanel);
+    setInterval(fitPanel, 700);
+    setTimeout(fitPanel, 50);
     $("reset").addEventListener("click", () => {
       try { localStorage.removeItem(STORE); } catch (e) { /* ignore */ }
       $("preset").selectedIndex = 0;
