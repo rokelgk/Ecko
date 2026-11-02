@@ -75,16 +75,52 @@
   const validHex = (v) => { const m = String(v).trim().match(/^#?([0-9a-fA-F]{6})$/); return m ? `#${m[1].toLowerCase()}` : null; };
 
   // A colour field Photoshop panels can show (no colour picker there): swatch + hex text.
+  // Photoshop's own colour picker (the full Color Picker window). Returns "#rrggbb", or null if cancelled.
+  async function pickColour(start) {
+    const [r, g, b] = E.hex(start || "#000000");
+    let res = null;
+    try {
+      await core.executeAsModal(async () => {
+        res = await action.batchPlay([{ _obj: "showColorPicker", context: "Ecko Tone",
+          color: { _obj: "RGBColor", red: r, grain: g, blue: b } }], {});
+      }, { commandName: "Pick a colour" });
+    } catch (e) { status(`Couldn't open the colour picker: ${e.message || e}`, true); return null; }
+    const out = res && res[0];
+    if (!out || out.value === false || !out.color) return null;
+    return colourToHex(out.color);
+  }
+  function colourToHex(c) {
+    const n = (v) => (v && typeof v === "object" && "_value" in v ? v._value : v);
+    if (c._obj === "RGBColor" || "red" in c) {
+      return E.toHex([n(c.red), n(c.grain !== undefined ? c.grain : c.green), n(c.blue)].map((v) => Math.max(0, Math.min(255, Math.round(v)))));
+    }
+    if ("hue" in c) {   // HSB
+      const h = n(c.hue) / 60, sat = n(c.saturation) / 100, v = n(c.brightness) / 100, i = Math.floor(h) % 6, f = h - Math.floor(h);
+      const p = v * (1 - sat), q = v * (1 - f * sat), t = v * (1 - (1 - f) * sat);
+      const rgb = [[v, t, p], [q, v, p], [p, v, t], [p, q, v], [t, p, v], [v, p, q]][i];
+      return E.toHex(rgb.map((x) => Math.round(x * 255)));
+    }
+    if ("luminance" in c) {   // Lab: let the engine convert
+      return null;
+    }
+    return null;
+  }
+
+  // A colour field: click the swatch (or Pick) for Photoshop's colour picker, or type a hex code.
   function colourRow(tag, hexv, onSet) {
     const row = document.createElement("div");
     row.className = "colourRow";
-    row.innerHTML = `${tag ? `<span class="tag">${esc(tag)}</span>` : ""}<span class="sw" style="background-color:${hexv}"></span><input type="text" maxlength="7" value="${hexv}">`;
+    row.innerHTML = `${tag ? `<span class="tag">${esc(tag)}</span>` : ""}<span class="sw pick" title="Click to pick a colour" style="background-color:${hexv}"></span><input type="text" maxlength="7" value="${hexv}"><button class="pickBtn">Pick…</button>`;
     const inp = row.querySelector("input"), sw = row.querySelector(".sw");
+    const set = (h) => { inp.value = h; sw.style.backgroundColor = h; onSet(h); };
     inp.addEventListener("change", () => {
       const h = validHex(inp.value);
       if (!h) { inp.value = hexv; return status("Colours are 6-digit hex, like #c8102e.", true); }
-      inp.value = h; sw.style.backgroundColor = h; onSet(h);
+      set(h);
     });
+    const open = async () => { const h = await pickColour(validHex(inp.value) || hexv); if (h) set(h); };
+    sw.addEventListener("click", open);
+    row.querySelector(".pickBtn").addEventListener("click", open);
     return row;
   }
 
@@ -395,6 +431,8 @@
     scheduleLive(50);
   }
   function save() {
+    clearTimeout(histTimer);
+    histTimer = setTimeout(recordHistory, 400);   // one undo step per change (a slider drag counts once)
     try {
       localStorage.setItem(STORE, JSON.stringify({ opts, presetId, tex, texLayerId, spotInks,
         shirtLayer: $("shirtLayer").checked, live }));
@@ -487,14 +525,21 @@
       };
       ch.addEventListener("input", () => setChoke(350));
       ch.addEventListener("change", () => setChoke(80));
-      if (opts.mode === "spot" && !ink.underbase && lastPalette) {   // spot inks: your own colour for each one
-        const n = parseInt(ink.name.replace(/\D+/g, ""), 10) - 1;
-        if (n >= 0 && n < lastPalette.length) {
-          el.querySelector(".colourSlot").appendChild(colourRow("Colour", ink.hex, (h) => {
-            spotInks = (spotInks && spotInks.length === lastPalette.length ? spotInks : lastPalette).slice();
-            spotInks[n] = h; save(); scheduleLive(50);
-          }));
+      if (!ink.underbase) {   // every ink: your own colour (same dots, new ink)
+        const slot = el.querySelector(".colourSlot");
+        slot.appendChild(colourRow("Colour", ink.hex, (h) => { edit(ink.name).color = h; save(); scheduleLive(50); }));
+        if (e && e.color) {
+          const reset = document.createElement("span");
+          reset.className = "link small";
+          reset.textContent = "Back to the original colour";
+          reset.addEventListener("click", () => { delete opts.ink_edits[ink.name].color; save(); later(buildInkList); scheduleLive(50); });
+          slot.appendChild(reset);
         }
+        el.querySelector(".inkTop .sw").addEventListener("click", async () => {
+          const h = await pickColour(ink.hex);
+          if (h) { edit(ink.name).color = h; save(); later(buildInkList); scheduleLive(50); }
+        });
+        el.querySelector(".inkTop .sw").className = "sw pick";
       }
       box.appendChild(el);
     }
@@ -692,8 +737,17 @@
   }
 
   // Live: re-render into the same result layer after each change (coalesced while one is running).
+  // While a slider is being dragged (delay 350) only the panel preview follows it (fast); the layer is
+  // repainted when you let go. That keeps Photoshop from re-rendering the whole layer on every step.
   function scheduleLive(delay = 80) {
     gen++;
+    if (delay === 350) {
+      quickPreview();
+      clearTimeout(dragEndTimer);   // paused or let go: update the layer
+      dragEndTimer = setTimeout(() => scheduleLive(80), 700);
+      return;
+    }
+    clearTimeout(dragEndTimer);
     if (!session || !live) return;
     clearTimeout(liveTimer);
     liveTimer = setTimeout(liveUpdate, delay);
@@ -739,6 +793,103 @@
       status(failed.message || String(failed), true);
     }
     if (pending || gen !== startGen) { pending = false; liveUpdate(); }   // settings changed while rendering
+  }
+
+  let quickTimer = null, quickBusy = false, dragEndTimer = null;
+  function quickPreview() {
+    if (!studio || !session || !session.prep || !live) return;
+    clearTimeout(quickTimer);
+    quickTimer = setTimeout(() => {
+      if (quickBusy) return quickPreview();
+      quickBusy = true;
+      try {
+        const doc = app.activeDocument, s = session;
+        let o = options(doc, s.w, true);
+        o.remove_background = o.remove_background && s.opaque;
+        if (E.prepareKey(o) !== s.prepKey) return;   // needs the slow step: wait for the release
+        o = E.parseOptions({ ...o, width_in: Math.max(0.5, s.prep.crop[2] / o.dpi) });
+        const texImgs = {};
+        if (texLayerId && texCache.has(texLayerId)) texImgs[`layer-${texLayerId}`] = texCache.get(texLayerId);
+        const r = E.renderPreview(s.prep, o, 700, null, texImgs);
+        lastPreview = { rgba: r.rgba, w: r.width, h: r.height };
+        showPreview();
+      } catch (e) { /* the release render reports errors */ } finally { quickBusy = false; }
+    }, 60);
+  }
+
+  // ---------------------------------------------------------------- merge into the original layer
+
+  async function mergeIntoOriginal() {
+    const doc = app.activeDocument, s = session;
+    if (!doc || !s || doc.id !== s.docId || !findLayer(doc.layers, s.resultId) || !findLayer(doc.layers, s.srcId)) {
+      return status("Apply to a layer first; Merge then puts the result into that layer.", true);
+    }
+    if (busy) return status("Still working on the last change… try again in a moment.");
+    busy = true;
+    status("Merging into the original layer…");
+    try {
+      await core.executeAsModal(async () => {
+        const { r } = await render(doc, s, false);   // the real print, never a solo view
+        const b = s.bounds, w = b.right - b.left, h = b.bottom - b.top;
+        if (w > 0 && h > 0) {   // empty the original layer, then put the result in it
+          const clear = await imaging.createImageDataFromBuffer(new Uint8Array(w * h * 4), {
+            width: w, height: h, components: 4, chunky: true, colorSpace: "RGB", colorProfile: "sRGB IEC61966-2.1" });
+          await imaging.putPixels({ documentID: doc.id, layerID: s.srcId, imageData: clear, targetBounds: { left: b.left, top: b.top } });
+          clear.dispose();
+        }
+        const img = await imaging.createImageDataFromBuffer(new Uint8Array(r.rgba.buffer, r.rgba.byteOffset, r.rgba.byteLength), {
+          width: r.width, height: r.height, components: 4, chunky: true, colorSpace: "RGB", colorProfile: "sRGB IEC61966-2.1" });
+        await imaging.putPixels({ documentID: doc.id, layerID: s.srcId,
+          imageData: img, targetBounds: { left: b.left + s.prep.crop[0], top: b.top + s.prep.crop[1] } });
+        img.dispose();
+        const res = findLayer(doc.layers, s.resultId);
+        if (res) await res.delete();
+      }, { commandName: "Ecko Tone merge" });
+      session = null;
+      status("Merged: your original layer now holds the result, and the separate result layer is gone. Apply again to keep editing.");
+    } catch (e) {
+      status(`Couldn't merge: ${e.message || e}. If the layer is a Smart Object or text, rasterize it first.`, true);
+    } finally {
+      busy = false;
+    }
+  }
+
+  // ---------------------------------------------------------------- undo / redo (settings)
+
+  const history = [];
+  let histPos = -1, histTimer = null, restoring = false;
+  const snapshot = () => JSON.stringify({ opts, tex, texLayerId, spotInks, presetId });
+  function recordHistory() {
+    if (restoring) return;
+    const snap = snapshot();
+    if (history[histPos] === snap) return;
+    history.splice(histPos + 1);
+    history.push(snap);
+    if (history.length > 100) history.shift();
+    histPos = history.length - 1;
+    syncHistButtons();
+  }
+  function syncHistButtons() {
+    $("undoBtn").disabled = histPos <= 0;
+    $("redoBtn").disabled = histPos >= history.length - 1;
+  }
+  function goHistory(step) {
+    clearTimeout(histTimer);
+    recordHistory();   // keep the change still waiting to be recorded
+    const to = histPos + step;
+    if (to < 0 || to >= history.length) return;
+    histPos = to;
+    const v = JSON.parse(history[histPos]);
+    restoring = true;
+    opts = v.opts; tex = v.tex || {}; texLayerId = v.texLayerId || null; spotInks = v.spotInks || null; presetId = v.presetId;
+    fillTexLayers();
+    syncUI();
+    buildInkList();
+    restoring = false;
+    save();
+    syncHistButtons();
+    scheduleLive(50);
+    status(step < 0 ? "Undone." : "Redone.");
   }
 
   // ---------------------------------------------------------------- separations
@@ -1061,6 +1212,9 @@
     for (const k of Object.keys(SIZES)) $(`size${k}`).addEventListener("click", () => setSize(k));
     buildSwatches();
     $("viewBtn").addEventListener("click", () => setStudio(!studio));
+    $("undoBtn").addEventListener("click", () => goHistory(-1));
+    $("redoBtn").addEventListener("click", () => goHistory(1));
+    for (const id of ["mergeBtn", "mergeBtn2"]) $(id).addEventListener("click", mergeIntoOriginal);
     $("tabPrint").addEventListener("click", () => { previewTab = "print"; showPreview(); });
     $("tabOriginal").addEventListener("click", () => { previewTab = "original"; showPreview(); });
     fitPanel();
@@ -1075,6 +1229,7 @@
     let view = "compact";
     try { view = localStorage.getItem(`${STORE}-view`) || "compact"; } catch (e) { /* ignore */ }
     setStudio(view === "full", true);
+    recordHistory();
   } catch (e) {
     status(`Couldn't start: ${e.message || e}`, true);
   }

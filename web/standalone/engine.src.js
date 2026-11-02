@@ -108,7 +108,7 @@
     const out = {};
     for (const [name, e] of Object.entries(edits)) {
       if (name.length > 40 || !e || typeof e !== "object") throw new OptionError("Each ink edit is {ink name: {on, choke_mm, name}}.");
-      const unknown = Object.keys(e).filter((k) => k !== "on" && k !== "choke_mm" && k !== "name");
+      const unknown = Object.keys(e).filter((k) => !["on", "choke_mm", "name", "color"].includes(k));
       if (unknown.length) throw new OptionError(`Unknown ink settings: ${unknown.sort().join(", ")}`);
       const choke = Number(e.choke_mm ?? 0);
       if (!Number.isFinite(choke) || choke < -0.5 || choke > 0.5) throw new OptionError("Ink choke must be between -0.5 and 0.5 mm.");
@@ -116,6 +116,7 @@
       const label = String(e.name ?? "").split(/\s+/).filter(Boolean).join(" ");
       if (label.length > 40) throw new OptionError("Ink names are limited to 40 characters.");
       if (label) out[name].name = label;
+      if (e.color) out[name].color = toHex(hex(e.color));
     }
     return out;
   }
@@ -827,6 +828,27 @@
   }
 
   /** k colours from a built-in palette: the ones closest to the art's own colours (light first). */
+  function isGreyscale(prep) {   // black-and-white art (no real colour), e.g. a pencil or ink drawing
+    const L = prep.spotLab;
+    if (!L || !L.length) return false;
+    const c = [];
+    for (let i = 0; i < L.length; i += 3) c.push(Math.hypot(L[i + 1], L[i + 2]));
+    c.sort((x, y) => x - y);
+    const at = (q) => {   // linear interpolation, like numpy's percentile
+      const p = q * (c.length - 1), lo = Math.floor(p), hi = Math.min(c.length - 1, lo + 1);
+      return c[lo] + (c[hi] - c[lo]) * (p - lo);
+    };
+    return at(0.5) < 6 && at(0.9) < 14;
+  }
+  function paletteByTone(name, k, exclude = null) {   // k palette colours spread light -> dark
+    let cols = PALETTES[name].colors.map(hex);
+    if (exclude) { const kept = cols.filter((c) => labDist(lab1(c), lab1(exclude)) >= 20); if (kept.length) cols = kept; }
+    cols = cols.map((c, i) => [c, lab1(c)[0], i]).sort((a, b) => b[1] - a[1] || a[2] - b[2]).map((x) => x[0]);
+    if (cols.length <= k) return cols;
+    if (k === 1) return [cols[Math.floor(cols.length / 2)]];
+    return Array.from({ length: k }, (_, i) => cols[Math.round(i * (cols.length - 1) / (k - 1))]);
+  }
+
   function fixedPalette(name, k, prep, exclude = null) {
     let cols = PALETTES[name].colors.map(hex);
     if (exclude) { const kept = cols.filter((c) => labDist(lab1(c), lab1(exclude)) >= 20); if (kept.length) cols = kept; }
@@ -1034,7 +1056,18 @@
       // With a white base, it counts as one of the screens: 4 colours = white + 3 spot colours.
       const k = fit.underbase ? Math.max(1, o.spot_colors - 1) : o.spot_colors;
       const exclude = fit.shirtIsBlack || o.mode === "index" ? g : null;
-      const [labs, pal] = o.palette !== "image" ? fixedPalette(o.palette, k, prep, exclude) : spotPalette(prep, k, exclude);
+      let labs, pal;
+      if (o.palette !== "image" && isGreyscale(prep)) {
+        // Black-and-white art: match the picture's own tones, print them in the palette's colours (gradient map).
+        pal = paletteByTone(o.palette, k, exclude);
+        let grey;
+        [labs, grey] = spotPalette(prep, pal.length, exclude);
+        fit.match = grey.slice();
+        fit.notes.push("Black-and-white art: the palette colours its tones, light to dark.");
+      } else {
+        [labs, pal] = o.palette !== "image" ? fixedPalette(o.palette, k, prep, exclude) : spotPalette(prep, k, exclude);
+        fit.match = pal.slice();
+      }
       fit.paletteLab = labs; fit.palette = pal.slice();
       const base = o.inks.length === pal.length ? o.inks.map(hex) : pal.slice();
       const glab = lab1(g);
@@ -1119,6 +1152,7 @@
       if (!e) continue;
       p.on = e.on;
       p.label = e.name || "";
+      if (e.color && !p.underbase) p.rgb = hex(e.color);   // your own colour for this ink: same dots, new ink
       if (!p.underbase) p.choke_mm = e.choke_mm;
     }
     labelPlates(plates);
@@ -1793,7 +1827,8 @@
         for (let c = 0; c < 3; c++) t[k * 3 + c] = t[k * 3 + c] * f + shirt[c] * (1 - f);
         if (!bm.keep[k]) s.a[k] = 0;
       }
-      const cols = [...fit.spot.map((c) => (c ? c.map((v) => v / 255) : shirt)), shirt];
+      // dither against the picture's own colours, so a recoloured ink keeps the same pixels
+      const cols = [...fit.spot.map((c, i) => (c ? fit.match[i].map((v) => v / 255) : shirt)), shirt];
       const idx = errorDiffusePalette(t, s.a, GW, GH, cols, DIFFUSION_STYLES.includes(o.style) ? o.style : "fs");
       const grids = {}, base = new Uint8Array(GW * GH);
       fit.spot.forEach((c, i) => {

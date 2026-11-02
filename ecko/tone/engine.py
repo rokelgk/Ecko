@@ -362,7 +362,7 @@ def _parse_ink_edits(edits) -> dict:
     for name, e in edits.items():
         if not isinstance(name, str) or len(name) > 40 or not isinstance(e, dict):
             raise ValueError("Each ink edit is {ink name: {on, choke_mm, name}}.")
-        unknown = set(e) - {"on", "choke_mm", "name"}
+        unknown = set(e) - {"on", "choke_mm", "name", "color"}
         if unknown:
             raise ValueError(f"Unknown ink settings: {', '.join(sorted(unknown))}")
         try:
@@ -377,6 +377,8 @@ def _parse_ink_edits(edits) -> dict:
             raise ValueError("Ink names are limited to 40 characters.")
         if label:
             out[name]["name"] = label
+        if e.get("color"):
+            out[name]["color"] = to_hex(_hex(e["color"]))
     return out
 
 
@@ -657,6 +659,27 @@ def prepare(image: bytes | np.ndarray | None, o: ToneOptions) -> Prepared:
     return prep
 
 
+def is_greyscale(prep: Prepared) -> bool:
+    """Black-and-white art (no real colour), e.g. a pencil or ink drawing."""
+    if prep.spot_lab is None or not len(prep.spot_lab):
+        return False
+    chroma = np.hypot(prep.spot_lab[:, 1].astype(np.float64), prep.spot_lab[:, 2].astype(np.float64))
+    return float(np.median(chroma)) < 6.0 and float(np.percentile(chroma, 90)) < 14.0
+
+
+def palette_by_tone(name: str, k: int, exclude=None) -> list:
+    """k colours from a palette spread from light to dark, for colouring black-and-white art by tone."""
+    cols = [_hex(c) for c in PALETTES[name]["colors"]]
+    if exclude is not None:
+        cols = [c for c in cols if float(np.linalg.norm(_lab1(c) - _lab1(exclude))) >= 20] or cols
+    cols.sort(key=lambda c: -float(_lab1(c)[0]))
+    if len(cols) <= k:
+        return cols
+    if k == 1:
+        return [cols[len(cols) // 2]]
+    return [cols[round(i * (len(cols) - 1) / (k - 1))] for i in range(k)]
+
+
 def fixed_palette(name: str, k: int, prep: Prepared | None = None, exclude=None):
     """k colours from a built-in palette: the ones closest to the art's own colours."""
     cols = [_hex(c) for c in PALETTES[name]["colors"]]
@@ -891,6 +914,7 @@ class Fit:
     shirt_is_black: bool = False                # dark shirt under a white base: the shirt prints the blacks
     palette: list = field(default_factory=list)  # spot colours actually separated
     palette_lab: np.ndarray | None = None
+    match: list = field(default_factory=list)    # per palette colour: the picture colour it stands for
     cuts: list = field(default_factory=list)     # threshold layers: cut points used
     bands: list = field(default_factory=list)    # threshold layers: colour per tone (dark first), None = shirt
     notes: list = field(default_factory=list)
@@ -932,10 +956,19 @@ def resolve_fit(prep: Prepared, o: ToneOptions) -> Fit:
         # With a white base, it counts as one of the screens: 4 colours = white + 3 spot colours.
         k = max(1, o.spot_colors - 1) if fit.underbase else o.spot_colors
         exclude = g if (fit.shirt_is_black or o.mode == "index") else None
-        if o.palette != "image":
+        if o.palette != "image" and is_greyscale(prep):
+            # Black-and-white art: match the picture's own tones, print them in the palette's colours
+            # (light to dark), like a gradient map.
+            pal = palette_by_tone(o.palette, k, exclude)
+            fit.palette_lab, grey = spot_palette(prep, len(pal), exclude)
+            fit.match = [tuple(c) for c in grey]
+            fit.notes.append("Black-and-white art: the palette colours its tones, light to dark.")
+        elif o.palette != "image":
             fit.palette_lab, pal = fixed_palette(o.palette, k, prep, exclude)
+            fit.match = [tuple(c) for c in pal]
         else:
             fit.palette_lab, pal = spot_palette(prep, k, exclude)
+            fit.match = [tuple(c) for c in pal]
         fit.palette = list(pal)
         base = [_hex(c) for c in o.inks] if len(o.inks) == len(pal) else list(pal)
         glab = _lab1(g)
@@ -997,6 +1030,8 @@ def plate_specs(prep: Prepared, o: ToneOptions, fit: Fit | None = None) -> tuple
         if e:
             p.on = e["on"]
             p.label = e.get("name", "")
+            if e.get("color") and not p.underbase:   # your own colour for this ink: same dots, new ink
+                p.rgb = _hex(e["color"])
             if not p.underbase:
                 p.choke_mm = e["choke_mm"]
     _label_plates(plates)
@@ -1472,7 +1507,8 @@ def _index_grids(prep: Prepared, o: ToneOptions, fit, plates: list) -> dict:
         if soft is not None:   # fade toward the shirt colour, cut where the border knocks out
             t = t * soft[..., None] + shirt * (1 - soft[..., None])
             a = a * keep
-        cols = [np.array(c, np.float32) / 255 if c is not None else shirt for c in fit.spot] + [shirt]
+        # dither against the picture's own colours, so a recoloured ink keeps the same pixels
+        cols = [np.array(m, np.float32) / 255 if c is not None else shirt for c, m in zip(fit.spot, fit.match)] + [shirt]
         style = o.style if o.style in DIFFUSION_STYLES else "fs"
         idx = hybrid.error_diffuse_palette(t, a, np.array(cols), style)
         grids = {i: (idx == i) for i, c in enumerate(fit.spot) if c is not None}

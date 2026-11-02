@@ -92,7 +92,44 @@
     return o;
   }
 
+  // Undo / redo for settings: every change is one step (a slider drag counts once).
+  const history = [];
+  let histPos = -1, histTimer = null, restoring = false;
+  const snapshot = () => JSON.stringify({ opts, tex, width: $("width").value, dpi: $("dpi").value });
+  function recordHistory() {
+    if (restoring || !opts) return;
+    const snap = snapshot();
+    if (history[histPos] === snap) return;
+    history.splice(histPos + 1);
+    history.push(snap);
+    if (history.length > 150) history.shift();
+    histPos = history.length - 1;
+    syncHistButtons();
+  }
+  function syncHistButtons() {
+    $("undoBtn").disabled = histPos <= 0;
+    $("redoBtn").disabled = histPos >= history.length - 1;
+  }
+  function goHistory(step) {
+    clearTimeout(histTimer);
+    recordHistory();
+    const to = histPos + step;
+    if (to < 0 || to >= history.length) return;
+    histPos = to;
+    const v = JSON.parse(history[histPos]);
+    restoring = true;
+    opts = v.opts; tex = v.tex || {};
+    $("width").value = v.width; $("dpi").value = v.dpi;
+    syncUI();
+    buildTextures();
+    restoring = false;
+    syncHistButtons();
+    changed();
+  }
+
   function save() {
+    clearTimeout(histTimer);
+    histTimer = setTimeout(recordHistory, 400);
     try { localStorage.setItem(STORE_KEY, JSON.stringify({ opts, tex: stripTex(), width: $("width").value,
       units: $("units").value, dpi: $("dpi").value })); } catch { /* private mode */ }
   }
@@ -639,7 +676,7 @@
       const idx = ink.underbase ? -1 : colourIndex++;
       const e = opts.ink_edits[ink.name];
       const on = !(e && e.on === false);
-      const editable = opts.mode !== "cmyk" && opts.mode !== "threshold" && !ink.underbase;
+      const editable = !ink.underbase;   // every ink can take your own colour
       li.className = (on ? "" : "off") + (solo === ink.name ? " solo" : "");
       const chokeVal = ink.underbase ? opts.choke_mm : (ink.choke_mm || 0);
       li.innerHTML = `
@@ -681,17 +718,23 @@
       });
       const inp = li.querySelector("input[type=color]");
       if (inp) inp.addEventListener("input", () => {
-        if (opts.mode === "spot" || opts.mode === "index") {
-          // the ink list skips the underbase and inks the shirt supplies; map back by spot number
-          const n = parseInt(ink.name.replace(/\D+/g, ""), 10) - 1;
-          spotInks = (spotInks || palette).slice();
-          spotInks[n] = inp.value;
-        } else {
+        if (opts.mode === "mono" || opts.mode === "duotone") {   // also the colours in Screen
           opts.inks[idx] = inp.value;
           buildInks();
+        } else {
+          edit().color = inp.value;   // same dots, new ink
         }
-        changed();
+        opts._preset = null;
+        changed(450);
       });
+      if (e && e.color) {
+        const reset = document.createElement("button");
+        reset.type = "button";
+        reset.className = "link";
+        reset.textContent = "Back to the original colour";
+        reset.addEventListener("click", () => { delete opts.ink_edits[ink.name].color; changed(); });
+        li.appendChild(reset);
+      }
       ol.appendChild(li);
     });
   }
@@ -1018,7 +1061,14 @@
     bindViewTools();
     document.addEventListener("keydown", (e) => {
       if (e.key === "Escape") { loupeAt = null; $("loupe").hidden = true; }
+      const typing = e.target.closest && e.target.closest("input[type=text], input[type=number], textarea");
+      if ((e.metaKey || e.ctrlKey) && !typing && (e.key === "z" || e.key === "Z" || e.key === "y")) {
+        e.preventDefault();
+        goHistory(e.shiftKey || e.key === "y" ? 1 : -1);
+      }
     });
+    $("undoBtn").addEventListener("click", () => goHistory(-1));
+    $("redoBtn").addEventListener("click", () => goHistory(1));
     $("dlPng").addEventListener("click", (e) => download("png", e.currentTarget));
     $("dlZip").addEventListener("click", (e) => download("zip", e.currentTarget));
     $("clearPicture").addEventListener("click", clearPicture);
@@ -1100,6 +1150,8 @@
     }
     bind();
     syncUI();
+    clearTimeout(histTimer);
+    recordHistory();   // the starting point for Undo
   }
 
   init().catch((e) => showError(`Couldn't load: ${e.message}`));

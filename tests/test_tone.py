@@ -681,3 +681,38 @@ def test_textures_rotate():
     assert (mask(0) != mask(90)).mean() > 0.01
     with pytest.raises(ValueError):
         E.parse_options({"textures": [{"type": "worn", "rotate": 1000}]})
+
+
+# ------------------------------------------------------------- colour for black-and-white art, your own ink colours
+
+
+def _bw_art():
+    yy, xx = np.mgrid[0:300, 0:400]
+    v = np.clip(255 - np.hypot(xx - 200, yy - 150), 0, 255).astype(np.uint8)
+    return np.dstack([v, v, v, np.full_like(v, 255)])
+
+
+@pytest.mark.parametrize("mode", ["spot", "index"])
+def test_palette_colours_black_and_white_art(mode):
+    o = E.parse_options({"mode": mode, "palette": "vintage", "spot_colors": 4, "width_in": 3, "remove_background": False})
+    prep = E.prepare(_bw_art(), o)
+    assert E.is_greyscale(prep)
+    plates, _ = E.plate_specs(prep, o)
+    chroma = [max(p.rgb) - min(p.rgb) for p in plates]
+    assert max(chroma) > 60   # real colours, not greys
+    lum = [E._lum(p.rgb) for p in plates]
+    assert lum == sorted(lum, reverse=True)   # light tones get the light colours
+
+
+def test_any_ink_takes_your_own_colour():
+    o = E.parse_options({"mode": "index", "spot_colors": 3, "width_in": 3, "remove_background": False})
+    prep = E.prepare(_bw_art(), o)
+    before = E.render_full(prep, o)
+    o2 = E.parse_options({"mode": "index", "spot_colors": 3, "width_in": 3, "remove_background": False,
+                          "ink_edits": {"Colour 1": {"color": "#ff0000"}}})
+    after = E.render_full(prep, o2)
+    a, b = (x[0] if isinstance(x, tuple) else x for x in (before, after))
+    assert ((a[..., 3] > 0) == (b[..., 3] > 0)).all()             # the same dots...
+    assert ((b[..., 0] == 255) & (b[..., 1] == 0) & (b[..., 3] > 0)).sum() > 0   # ...in the new ink
+    with pytest.raises(ValueError):
+        E.parse_options({"ink_edits": {"Ink": {"color": "nope"}}})

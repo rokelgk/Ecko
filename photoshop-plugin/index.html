@@ -11,7 +11,9 @@
     .brandRow { display: flex; flex-direction: row; align-items: center; margin-bottom: 6px; }
     .brand { font-weight: bold; font-size: 14px; flex: 1 1 auto; color: #ececef; }
     .brand span { color: #f97316; }
-    #viewBtn { padding: 3px 8px; font-size: 11px; }
+    #viewBtn, .hist { padding: 3px 8px; font-size: 11px; margin-left: 4px; }
+    .sw.pick { cursor: pointer; width: 22px; height: 22px; }
+    .pickBtn { margin-left: 6px; padding: 2px 8px; font-size: 11px; }
     #run { width: 100%; padding: 7px; font-weight: bold; }
     button.wide { width: 100%; margin-top: 6px; padding: 5px; }
     #liveBtn.on { border: 1px solid #4ade80; }
@@ -84,12 +86,15 @@
   <div id="panel">
     <div class="top">
       <div class="brandRow"><div class="brand">Ecko <span>Tone</span></div>
+        <button id="undoBtn" class="hist" title="Undo the last settings change">↶ Undo</button>
+        <button id="redoBtn" class="hist" title="Redo">Redo ↷</button>
         <button id="viewBtn" title="Switch between the compact panel and the full web-app layout">Full view</button></div>
       <div id="actions">
       <button id="run" uxp-variant="cta">Apply to selected layer</button>
       <button id="liveBtn" class="wide">Live editing: ON · click to pause</button>
       <div class="row2"><span class="lbl">Separations:</span>
-        <button id="sepLayers">Make layers</button><button id="saveFilms">Save films…</button></div>
+        <button id="sepLayers">Make layers</button><button id="saveFilms">Save films…</button>
+        <button id="mergeBtn" title="Put the result into your original layer and remove the separate result layer">Merge into original</button></div>
       </div>
       <div class="sizes">Height:
         <button id="sizeS" class="size">S</button><button id="sizeM" class="size">M</button><button id="sizeL" class="size">L</button><button id="sizeXL" class="size">XL</button>
@@ -271,9 +276,11 @@
       <div class="body">
         <button id="sepLayers2" class="wide">Make separation layers</button>
         <button id="saveFilms2" class="wide">Save separation films to a folder…</button>
+        <button id="mergeBtn2" class="wide">Merge result into the original layer</button>
         <div class="hint"><b>Layers</b>: one layer per ink in a group, in print order (first ink at the bottom), named with the ink name and colour.<br>
           <b>Films</b>: one 1-bit PNG per ink (black = ink) at your document's DPI, named with the ink name and colour, plus a README with each ink's name, hex, RGB, angle and coverage.<br>
-          Inks switched off are skipped. For the full-colour print file, use File › Export on the result layer.</div>
+          Inks switched off are skipped. For the full-colour print file, use File › Export on the result layer.<br>
+          <b>Merge</b>: the result replaces your original layer's pixels and the separate result layer is removed (Photoshop's Undo brings it back).</div>
       </div>
     </div>
 
