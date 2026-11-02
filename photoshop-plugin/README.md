@@ -16,6 +16,7 @@ from any layer; shirt colour (presets or any hex) and Fit to shirt; borders; and
 slur double print, and wear textures (washed out, fabric weave, squeegee streaks, screen pinholes, plus
 worn, cracked, grunge, scratches, toner). Presets: Bootleg rap tee, Flea-market bootleg, Sun-faded 80s,
 Thrashed band tee.
+See [the sample sheet](../docs/vintage-looks.png).
 
 After Apply, the **Inks** list works like the web page's: switch each ink on or off, solo it, choke or
 spread it, recolour spot inks, and give each ink your own name. Inks are named by colour
