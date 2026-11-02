@@ -5855,8 +5855,49 @@ body.panelsHidden .psSide { display: none; }
 
   // ---------------------------------------------------------------- events
 
-  function setFile(f) {
+  /** Safari can refuse to read a picture a second time ("The I/O read operation failed"), e.g. files in
+   *  iCloud Drive or pictures dragged from another app. Keep our own copy in memory straight away; if even
+   *  that read fails, take the pixels the same way the thumbnail shows them. */
+  async function stableImage(f) {
+    try {
+      const buf = await f.arrayBuffer();
+      return new File([buf], f.name || "picture", { type: f.type || "image/png" });
+    } catch (err) {
+      const url = URL.createObjectURL(f);
+      try {
+        const img = await new Promise((resolve, reject) => {
+          const im = new Image();
+          im.onload = () => resolve(im);
+          im.onerror = () => reject(err);
+          im.src = url;
+        });
+        const w = img.naturalWidth, h = img.naturalHeight;
+        const sc = Math.min(1, 5000 / Math.max(w, h), Math.sqrt(16e6 / (w * h)));
+        const c = document.createElement("canvas");
+        c.width = Math.max(1, Math.round(w * sc));
+        c.height = Math.max(1, Math.round(h * sc));
+        c.getContext("2d").drawImage(img, 0, 0, c.width, c.height);
+        const blob = await new Promise((resolve) => c.toBlob(resolve, "image/png"));
+        return new File([blob], (f.name || "picture").replace(/\.[^.]+$/, "") + ".png", { type: "image/png" });
+      } finally {
+        URL.revokeObjectURL(url);
+      }
+    }
+  }
+
+  const unreadableMsg = "Couldn't read that picture. If it's in iCloud Drive or another app, save it to your Desktop first, then drop it in again.";
+  let fileToken = 0;
+
+  async function setFile(f) {
     if (!f) return;
+    const token = ++fileToken;
+    try {
+      f = await stableImage(f);
+    } catch (e) {
+      showError(unreadableMsg);
+      return;
+    }
+    if (token !== fileToken) return;   // another picture was chosen meanwhile
     file = f;
     imageId = null;
     palette = null;
@@ -5938,10 +5979,10 @@ body.panelsHidden .psSide { display: none; }
       opts.seed = Math.floor(Math.random() * 1e6);
       changed();
     });
-    $("texFile").addEventListener("change", (e) => {
-      const f = e.target.files[0];
-      if (!f) return;
-      texFile = f;
+    $("texFile").addEventListener("change", async (e) => {
+      const f0 = e.target.files[0];
+      if (!f0) return;
+      try { texFile = await stableImage(f0); } catch (err) { showError(unreadableMsg); return; }
       tex.image = { type: "image", on: true, strength: 0.5, scale: 1, image_id: null };
       e.target.value = "";
       buildTextures();
@@ -5967,12 +6008,15 @@ body.panelsHidden .psSide { display: none; }
       buildText();
       changed();
     });
-    $("batchFiles").addEventListener("change", (e) => {
-      for (const f of e.target.files) {
-        batch.push({ file: f, id: null, url: URL.createObjectURL(f),
-          name: f.name.replace(/\.[^.]+$/, "").replace(/[^A-Za-z0-9_-]+/g, "-").slice(0, 40) || "design" });
-      }
+    $("batchFiles").addEventListener("change", async (e) => {
+      const files = Array.from(e.target.files);
       e.target.value = "";
+      for (const f0 of files) {
+        let f;
+        try { f = await stableImage(f0); } catch (err) { showError(`${f0.name}: ${unreadableMsg}`); continue; }
+        batch.push({ file: f, id: null, url: URL.createObjectURL(f),
+          name: f0.name.replace(/\.[^.]+$/, "").replace(/[^A-Za-z0-9_-]+/g, "-").slice(0, 40) || "design" });
+      }
       buildBatchList();
     });
     $("dlBatch").addEventListener("click", (e) => downloadBatch(e.currentTarget));

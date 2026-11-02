@@ -11,7 +11,17 @@ Text, mockups, batch and separations are in the web page.
 **Status: experimental.** It hasn't been run inside Photoshop yet. The engine it uses is tested
 (`node --test tests/js/engine.test.js`) and matches the Python engine's results.
 
-## Install
+## Install with the .ccx (one file)
+
+`dist/ecko-tone.ccx` is Adobe's plug-in package. Double-click it, and the Creative Cloud app installs
+it (accept the warning that it isn't from the Adobe store).
+
+If your Mac shows it as a plain document, the Creative Cloud plug-in installer isn't linked to `.ccx`
+files. Install it from Terminal instead (one line; adjust the path if the file isn't in Downloads):
+
+    "/Library/Application Support/Adobe/Adobe Desktop Common/RemoteComponents/UPI/UnifiedPluginInstallerAgent/UnifiedPluginInstallerAgent.app/Contents/MacOS/UnifiedPluginInstallerAgent" --install ~/Downloads/ecko-tone.ccx
+
+## Install with UXP Developer Tool (folder)
 
 1. Install Adobe's **UXP Developer Tool** from the Creative Cloud app (free).
 2. In UXP Developer Tool: *Add Plugin* → choose this folder's `manifest.json` → *Load*.
