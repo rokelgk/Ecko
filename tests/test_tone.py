@@ -716,3 +716,44 @@ def test_any_ink_takes_your_own_colour():
     assert ((b[..., 0] == 255) & (b[..., 1] == 0) & (b[..., 3] > 0)).sum() > 0   # ...in the new ink
     with pytest.raises(ValueError):
         E.parse_options({"ink_edits": {"Ink": {"color": "nope"}}})
+
+
+# ------------------------------------------------------------- colour regions and the white highlight
+
+
+def test_colour_regions_colour_only_their_area():
+    art = _bw_art()
+    mask = np.zeros(art.shape[:2], np.float32)
+    mask[:, :200] = 1
+    o = E.parse_options({"mode": "spot", "spot_colors": 4, "width_in": 3, "remove_background": False,
+                         "regions": [{"mask_id": "m", "color": "#c8102e", "mode": "tint"}]})
+    prep = E.prepare(art, o, {"m": mask})
+    rgb = prep.rgba[..., :3] / np.maximum(prep.rgba[..., 3:], 1e-6)
+    h, w = rgb.shape[:2]
+    left, right = rgb[:, : w // 3], rgb[:, -w // 3:]
+    assert (left[..., 0] - left[..., 1]).mean() > 0.15            # tinted red
+    assert np.abs(right[..., 0] - right[..., 1]).max() < 0.02     # untouched greys
+    plates, _ = E.plate_specs(prep, o)
+    assert any(p.rgb[0] - p.rgb[1] > 60 for p in plates)          # the red became its own screen
+    solid = E.parse_options({"mode": "spot", "width_in": 3, "remove_background": False,
+                             "regions": [{"mask_id": "m", "color": "#1e46aa", "mode": "solid"}]})
+    p2 = E.prepare(art, solid, {"m": mask})
+    rgb2 = p2.rgba[..., :3] / np.maximum(p2.rgba[..., 3:], 1e-6)
+    assert np.allclose(rgb2[:, : w // 3], np.array([0x1e, 0x46, 0xaa]) / 255, atol=0.01)
+    with pytest.raises(ValueError):
+        E.parse_options({"regions": [{"mask_id": "m", "mode": "glow"}]})
+
+
+@pytest.mark.parametrize("mode", ["mono", "spot", "index", "cmyk", "threshold"])
+def test_white_highlight_prints_last_on_the_brightest_parts(mode):
+    o = E.parse_options({"mode": mode, "width_in": 3, "remove_background": False, "garment": "#141414", "highlight": 0.5})
+    prep = E.prepare(_bw_art(), o)
+    plates, _ = E.plate_specs(prep, o)
+    assert plates[-1].highlight and plates[-1].label == "Highlight white"
+    rgba = E.render_full(prep, o)[0]
+    white = (rgba[..., :3] == 255).all(axis=2) & (rgba[..., 3] > 0)
+    h, w = white.shape
+    centre = white[h // 2 - 20: h // 2 + 20, w // 2 - 20: w // 2 + 20].mean()   # the brightest part
+    assert centre > 0.3 and white[:, :10].mean() < 0.05
+    off = E.parse_options({"mode": mode, "width_in": 3, "remove_background": False, "garment": "#141414"})
+    assert not any(p.highlight for p in E.plate_specs(prep, off)[0])

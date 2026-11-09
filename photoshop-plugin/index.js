@@ -196,6 +196,10 @@
     setSel($("preset"), presetId);
     syncGarment();
     syncOutline();
+    const hc = $("highlightColour");
+    while (hc.firstChild) hc.removeChild(hc.firstChild);
+    hc.appendChild(colourRow("Ink", opts.highlight_color || "#ffffff", (h) => { opts.highlight_color = h; save(); scheduleLive(50); }));
+    buildRegions();
     buildInkColours();
     buildCuts();
     buildTextures();
@@ -215,6 +219,8 @@
     show("spotHint", m === "spot");
     show("borderOpts", opts.border !== "none");
     show("bgTolRow", !!opts.remove_background);
+    show("highlightBox", opts.highlight > 0);
+    show("addHighlight", !(opts.highlight > 0));
   }
 
   function changed(key, delay) {
@@ -368,6 +374,7 @@
   function fillTexLayers() {
     const doc = app.activeDocument;
     const items = [{ id: "", name: "None" }, ...(doc ? allLayers(doc.layers) : [])];
+    if ($("regionLayer")) { fill($("regionLayer"), [{ id: "", name: "Choose a layer…" }, ...items.slice(1)]); setSel($("regionLayer"), ""); }
     fill($("texLayer"), items);
     if (texLayerId && !items.some((x) => x.id === texLayerId)) texLayerId = null;
     setSel($("texLayer"), texLayerId || "");
@@ -418,7 +425,7 @@
     if (!p) return;
     const keep = { remove_background: opts.remove_background, bg_tolerance: opts.bg_tolerance, seed: opts.seed,
       border: opts.border, border_mm: opts.border_mm, border_shape: opts.border_shape,
-      shirt_fit: opts.shirt_fit, underbase: opts.underbase, choke_mm: opts.choke_mm, garment: opts.garment };
+      shirt_fit: opts.shirt_fit, underbase: opts.underbase, choke_mm: opts.choke_mm, garment: opts.garment, regions: opts.regions };
     opts = { ...clone(cat.defaults), ...keep, ...clone(p.options) };
     if (!p.options.garment) opts.garment = keep.garment;
     presetId = p.id;
@@ -443,6 +450,7 @@
     try { s = JSON.parse(localStorage.getItem(STORE) || "null"); } catch (e) { s = null; }
     if (!s) { applyPreset(presetId); return; }
     opts = { ...clone(cat.defaults), ...(s.opts || {}) };
+    opts.regions = [];   // region masks aren't kept between sessions
     try { E.parseOptions({ ...opts, text: [] }); } catch (e) { opts = clone(cat.defaults); }   // stored by an older version
     presetId = s.presetId || presetId;
     tex = s.tex || {};
@@ -632,7 +640,7 @@
     let o = options(doc, s.w, forView);
     o.remove_background = o.remove_background && s.opaque;   // a layer with transparency is already cut out
     const key = E.prepareKey(o);
-    if (!s.prep || s.prepKey !== key) { s.prep = null; s.prep = E.prepare(s.rgba, s.w, s.h, o, null); s.prepKey = key; }
+    if (!s.prep || s.prepKey !== key) { s.prep = null; s.prep = E.prepare(s.rgba, s.w, s.h, o, null, null, regionMaskMap()); s.prepKey = key; }
     o = E.parseOptions({ ...o, width_in: Math.max(0.5, s.prep.crop[2] / o.dpi) });   // 1:1 with the layer's pixels
     const texImgs = {};
     const ti = await texLayerImage(doc);
@@ -710,6 +718,11 @@
       let notes = [];
       await core.executeAsModal(async () => {
         const s = await readSource(doc, layer);
+        if (session && (session.srcId !== s.srcId || session.w !== s.w || session.h !== s.h) && (opts.regions || []).length) {
+          opts.regions = [];   // regions belong to the previous layer
+          buildRegions();
+          notes.push("(Colour regions were cleared: they belonged to the previous layer.)");
+        }
         const { r, o, prep } = await render(doc, s, true);
         const presetName = $("preset").options[$("preset").selectedIndex].textContent;
         const newLayer = await doc.createLayer({ name: `Ecko Tone (${presetName})` });
@@ -815,6 +828,89 @@
         showPreview();
       } catch (e) { /* the release render reports errors */ } finally { quickBusy = false; }
     }, 60);
+  }
+
+  // ---------------------------------------------------------------- colour regions
+  // A Photoshop selection or a layer's shape becomes a mask over the applied layer; that area gets a colour
+  // before the picture is separated (tint keeps shading and lines; solid fills it).
+
+  const regionMasks = new Map();   // mask_id -> {data: Uint8 0..255, w, h}, aligned to the applied layer
+  const REGION_COLOURS = ["#c8102e", "#1e46aa", "#f5a623", "#2e7d32", "#7b1fa2", "#f06292", "#00838f", "#6d4c41"];
+  let regionSeq = 0;
+  function regionMaskMap() {
+    const out = {};
+    for (const r of opts.regions || []) if (regionMasks.has(r.mask_id)) out[r.mask_id] = regionMasks.get(r.mask_id);
+    return out;
+  }
+
+  async function maskFromSource(kind, layerId) {   // -> {data, w, h} over the applied layer, or throws
+    const doc = app.activeDocument, s = session;
+    const b = s.bounds, w = b.right - b.left, h = b.bottom - b.top, data = new Uint8Array(w * h);
+    let got = null;
+    await core.executeAsModal(async () => {
+      got = kind === "selection"
+        ? await imaging.getSelection({ documentID: doc.id, sourceBounds: b })
+        : await imaging.getPixels({ documentID: doc.id, layerID: layerId, componentSize: 8, colorSpace: "RGB" });
+    }, { commandName: "Ecko Tone region" });
+    if (!got || !got.imageData) throw new Error(kind === "selection" ? "Make a selection first (Lasso, Select Subject, Magic Wand…)." : "That layer has no pixels.");
+    const id = got.imageData, px = await id.getData({ chunky: true }), sb = got.sourceBounds || b;
+    const comps = id.components, iw = id.width, ih = id.height;
+    for (let y = 0; y < ih; y++) {
+      const ty = y + (sb.top - b.top);
+      if (ty < 0 || ty >= h) continue;
+      for (let x = 0; x < iw; x++) {
+        const tx = x + (sb.left - b.left);
+        if (tx < 0 || tx >= w) continue;
+        const q = (y * iw + x) * comps;
+        data[ty * w + tx] = comps === 1 ? px[q] : (comps === 4 ? px[q + 3] : 255);   // selection strength, or the layer's shape
+      }
+    }
+    id.dispose();
+    let any = 0;
+    for (let k = 0; k < data.length; k += 7) if (data[k]) { any = 1; break; }
+    if (!any) throw new Error(kind === "selection" ? "The selection doesn't overlap the applied layer." : "That layer doesn't overlap the applied layer.");
+    return { data, w, h };
+  }
+
+  async function addRegion(kind, layerId, replaceIndex) {
+    const doc = app.activeDocument;
+    if (!session || !doc || doc.id !== session.docId) return status("Apply to a layer first, then colour its parts.", true);
+    if (busy) return status("Still working on the last change… try again in a moment.");
+    try {
+      const m = await maskFromSource(kind, layerId), id = `m${Date.now().toString(36)}${regionSeq++}`;
+      regionMasks.set(id, m);
+      opts.regions = opts.regions || [];
+      if (replaceIndex !== undefined && opts.regions[replaceIndex]) opts.regions[replaceIndex].mask_id = id;
+      else {
+        if (opts.regions.length >= 12) return status("Up to 12 colour regions.", true);
+        opts.regions.push({ mask_id: id, color: REGION_COLOURS[opts.regions.length % REGION_COLOURS.length], mode: "tint", on: true, name: "" });
+      }
+      buildRegions(); save(); scheduleLive(50);
+      status(replaceIndex !== undefined ? "Region area replaced." : "Region added: pick its colour below. Use Spot or Index colour so it gets its own screen.");
+    } catch (e) { status(e.message || String(e), true); }
+  }
+
+  function buildRegions() {
+    const box = $("regionList");
+    while (box.firstChild) box.removeChild(box.firstChild);
+    (opts.regions || []).forEach((r, i) => {
+      const el = document.createElement("div");
+      el.className = "ink";
+      el.innerHTML = `<div class="inkTop"><input type="checkbox" class="on" ${r.on ? "checked" : ""}><span class="nm">${esc(r.name || `Region ${i + 1}`)}</span><button class="rm">Remove</button></div>
+        <div class="colourSlot"></div>
+        <div class="field"><div class="title">How the colour goes on</div><select class="mode">
+          <option value="tint" data-v="tint">Tint (keeps the shading and lines)</option>
+          <option value="solid" data-v="solid">Solid colour</option></select></div>
+        <button class="wide again">Replace with the current selection</button>`;
+      el.querySelector(".colourSlot").appendChild(colourRow("Colour", r.color, (h) => { r.color = h; save(); scheduleLive(50); }));
+      const mode = el.querySelector(".mode");
+      setSel(mode, r.mode);
+      mode.addEventListener("change", () => { r.mode = selVal(mode) || "tint"; save(); scheduleLive(50); });
+      el.querySelector(".on").addEventListener("change", (e) => { r.on = !!e.target.checked; save(); scheduleLive(50); });
+      el.querySelector(".rm").addEventListener("click", () => { opts.regions.splice(i, 1); later(buildRegions); save(); scheduleLive(50); });
+      el.querySelector(".again").addEventListener("click", () => addRegion("selection", null, i));
+      box.appendChild(el);
+    });
   }
 
   // ---------------------------------------------------------------- merge into the original layer
@@ -1215,6 +1311,14 @@
     $("undoBtn").addEventListener("click", () => goHistory(-1));
     $("redoBtn").addEventListener("click", () => goHistory(1));
     for (const id of ["mergeBtn", "mergeBtn2"]) $(id).addEventListener("click", mergeIntoOriginal);
+    $("addHighlight").addEventListener("click", () => { opts.highlight = 0.5; syncUI(); save(); scheduleLive(50); });
+    $("removeHighlight").addEventListener("click", () => { opts.highlight = 0; syncUI(); save(); scheduleLive(50); });
+    $("regionFromSel").addEventListener("click", () => addRegion("selection"));
+    $("regionLayer").addEventListener("change", () => {
+      const id = selVal($("regionLayer"));
+      if (id) addRegion("layer", Number(id));
+      setSel($("regionLayer"), "");
+    });
     $("tabPrint").addEventListener("click", () => { previewTab = "print"; showPreview(); });
     $("tabOriginal").addEventListener("click", () => { previewTab = "original"; showPreview(); });
     fitPanel();

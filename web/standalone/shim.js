@@ -127,6 +127,11 @@
     try {
       if (route === "catalog") return json(window.EckoToneEngine.CATALOG.api);
       await ready;
+      if (route === "masks") {   // colour-region mask: base64 bytes -> the engine
+        const b = JSON.parse(init.body), bin = atob(b.data), data = new Uint8Array(bin.length);
+        for (let i = 0; i < bin.length; i++) data[i] = bin.charCodeAt(i);
+        return json(await call("uploadMask", { id: b.id, data: data.buffer, w: b.w, h: b.h }, [data.buffer]));
+      }
       if (route === "images") {
         const file = init.body.get("file");
         const img = await decodeInPage(file);   // the same way the page shows the thumbnail

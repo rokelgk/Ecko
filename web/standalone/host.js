@@ -289,6 +289,7 @@
   const images = new Map();      // id -> {rgba, w, h}
   const prepared = new Map();    // key -> Prepared (LRU)
   const textures = new Map();    // id -> {data, w, h}
+  const masks = new Map();       // colour-region masks: id -> {data: Uint8 0..255, w, h}
   const arts = new Map();        // image id + clean-up settings -> cleaned picture (before text)
 
   function options(raw) {
@@ -311,10 +312,10 @@
       let stage = arts.get(ak);
       if (!stage) {
         arts.clear();   // one cleaned-up picture at a time: they are big
-        stage = E.prepareArt(img && img.rgba, img && img.w, img && img.h, o);
+        stage = E.prepareArt(img && img.rgba, img && img.w, img && img.h, o, maskMap(o));
         arts.set(ak, stage);
       }
-      prep = E.prepare(img && img.rgba, img && img.w, img && img.h, o, renderText, stage);
+      prep = E.prepare(img && img.rgba, img && img.w, img && img.h, o, renderText, stage, maskMap(o));
     }
     catch (e) { throw new HttpError(e instanceof E.ImageError ? 422 : 500, e.message); }
     prepared.set(key, prep);
@@ -357,6 +358,17 @@
       total -= images.get(k).rgba.byteLength;
       images.delete(k); forgetImage(k);
     }
+  }
+
+  function maskMap(o) {
+    const out = {};
+    for (const r of o.regions) if (masks.has(r.mask_id)) out[r.mask_id] = masks.get(r.mask_id);
+    return out;
+  }
+  function uploadMask({ id, data, w, h }) {
+    masks.set(String(id), { data: new Uint8Array(data), w, h });
+    while (masks.size > 48) masks.delete(masks.keys().next().value);
+    return { id };
   }
 
   function textureImages(o) {
@@ -513,6 +525,7 @@
       case "init": E.registerScans(args.scans); return { fonts: await loadFonts(args.fonts), canDraw: canDraw() };
       case "upload": return upload(args);
       case "uploadRGBA": return uploadRGBA(args);
+      case "uploadMask": return uploadMask(args);
       case "preview": return preview(args);
       case "mockup": return mockup(args);
       case "export": return exportFile(args);

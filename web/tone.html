@@ -113,6 +113,29 @@
     </details>
 
     <details class="step board">
+      <summary><h2>Colour regions</h2></summary>
+      <p class="hint">Colour parts of the picture separately, like the girl's skin or the lettering: paint or wand-select an area, then give it a colour. Then use <b>Spot colours</b> or <b>Index colour</b> in Screen, so each colour gets its own screen.</p>
+      <button type="button" class="ghost block" id="addRegion">+ New colour region</button>
+      <div id="regionList"></div>
+      <div id="regionTools" class="regionTools" hidden>
+        <p class="hint" id="regionToolsTitle"></p>
+        <div class="row toolRow">
+          <button type="button" class="mini wide on" data-tool="brush">Brush</button>
+          <button type="button" class="mini wide" data-tool="eraser">Eraser</button>
+          <button type="button" class="mini wide" data-tool="wand">Magic wand</button>
+        </div>
+        <label id="brushRow">Brush size <output id="brushOut"></output> <input type="range" id="brushSize" min="3" max="150" step="1" value="30"></label>
+        <label id="wandRow" hidden>Wand tolerance <output id="wandOut"></output> <input type="range" id="wandTol" min="4" max="120" step="1" value="40"></label>
+        <div class="row">
+          <button type="button" class="ghost" id="regionFill">Fill all</button>
+          <button type="button" class="ghost" id="regionClear">Clear</button>
+          <button type="button" class="primary" id="regionDone">Done</button>
+        </div>
+        <p class="hint">Paint on the picture (shown in red). Magic wand: click an area to add everything connected that's a similar colour, such as a word or a flat shape. Scroll to zoom.</p>
+      </div>
+    </details>
+
+    <details class="step board">
       <summary><h2>Tone</h2></summary>
       <label>Brightness <input type="range" id="brightness" min="-1" max="1" step="0.02"></label>
       <label>Contrast <input type="range" id="contrast" min="-1" max="1" step="0.02"></label>
@@ -143,6 +166,15 @@
       <div class="row outlineColour">
         <label class="check"><input type="checkbox" id="outlineAuto" checked> Auto colour (stands out on the shirt)</label>
         <input type="color" id="outlinePick" value="#111111" aria-label="Keyline and shadow colour">
+      </div>
+      <button type="button" class="ghost block" id="addHighlight">+ Add white highlight</button>
+      <div id="highlightBox" hidden>
+        <label>White highlight <output id="highlightOut"></output> <input type="range" id="highlight" min="0.05" max="1" step="0.01"></label>
+        <div class="row outlineColour">
+          <span class="hint">Highlight ink</span>
+          <input type="color" id="highlightPick" value="#ffffff" aria-label="Highlight ink colour">
+          <button type="button" class="link" id="removeHighlight">Remove highlight</button>
+        </div>
       </div>
       <label>Ghost / slur print <output id="ghostOut"></output> <input type="range" id="ghost_mm" min="0" max="3" step="0.05"></label>
       <label>Ghost strength <output id="ghostSOut"></output> <input type="range" id="ghost_strength" min="0.1" max="1" step="0.05"></label>

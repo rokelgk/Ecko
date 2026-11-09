@@ -179,6 +179,16 @@
     </div>
 
     <div class="sec" data-group="left">
+      <div class="head">Colour regions</div>
+      <div class="body">
+        <div class="hint">Colour parts of the picture separately, like the girl's skin or the lettering. Make a selection in Photoshop (Lasso, Select Subject, Magic Wand…) or use a layer's shape, then give it a colour. Use Spot colours or Index colour in Screen so each colour gets its own screen. Apply once first.</div>
+        <button id="regionFromSel" class="wide">+ Colour the current selection</button>
+        <div class="field"><div class="title">…or use a layer's shape (e.g. a text layer)</div><select id="regionLayer"></select></div>
+        <div id="regionList"></div>
+      </div>
+    </div>
+
+    <div class="sec" data-group="left">
       <div class="head">Tone</div>
       <div class="body">
         <div class="field"><div class="title">Brightness</div><input type="range" data-k="brightness" min="-1" max="1" step="0.02"></div>
@@ -215,6 +225,13 @@
           <option value="auto" data-v="auto">Auto (stands out on the shirt)</option>
           <option value="custom" data-v="custom">Custom colour</option></select></div>
         <div class="colourRow" id="outlineRow"><span class="sw" id="outlineSw"></span><input type="text" id="outlineHex" maxlength="7" value="#111111"></div>
+        <button id="addHighlight" class="wide">+ Add white highlight</button>
+        <div id="highlightBox">
+          <div class="field"><div class="title">White highlight</div>
+            <input type="range" data-k="highlight" min="0" max="1" step="0.01" data-fmt="pct100"></div>
+          <div id="highlightColour"></div>
+          <span class="link" id="removeHighlight">Remove highlight</span>
+        </div>
         <div class="field"><div class="title">Ghost / slur print</div>
           <input type="range" data-k="ghost_mm" min="0" max="3" step="0.05" data-fmt="offmm"></div>
         <div class="field"><div class="title">Ghost strength</div>

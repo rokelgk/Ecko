@@ -179,3 +179,13 @@ body.panelsHidden .psSide { display: none; }
 .texTop { display: flex; justify-content: space-between; align-items: center; gap: 8px; }
 .texTop b { font-size: 13px; }
 details.board > summary { cursor: pointer; }
+.regionCard { border: 1px solid var(--line); border-radius: 8px; padding: 8px 10px; margin: 8px 0; background: var(--panel); }
+.regionCard.editing { border-color: var(--accent); }
+.regionTop { display: flex; align-items: center; gap: 8px; }
+.regionTop input[type=text] { flex: 1; min-width: 0; padding: 3px 6px; font-size: 12.5px; margin: 0; }
+.regionTop input[type=color] { width: 34px; height: 28px; flex: 0 0 auto; padding: 0; border: 1px solid var(--line); border-radius: 6px; }
+.regionRow { display: flex; align-items: center; gap: 8px; margin-top: 6px; font-size: 12.5px; }
+.regionRow select { width: auto; margin: 0; padding: 3px 6px; }
+.regionTools { border: 1px dashed var(--accent); border-radius: 8px; padding: 8px 10px; margin-top: 8px; }
+.toolRow button.on { border-color: var(--accent); color: var(--accent); }
+.psCenter .toneStage.painting { cursor: crosshair; }

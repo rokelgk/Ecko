@@ -53,7 +53,7 @@
     min_dot: [0, 0.5], max_dot: [0.5, 1], dot_gain: [0, 0.4], roughness: [0, 1],
     misregister_mm: [0, 5], bg_tolerance: [1, 80], seed: [0, 2 ** 31 - 1], choke_mm: [0, 1],
     threshold_levels: [2, 8], threshold_soft: [0, 0.3], smooth_mm: [0, 3], denoise: [0, 3], border_mm: [1, 120],
-    outline: [0, 0.06], shadow: [0, 0.1], ghost_mm: [0, 4], ghost_strength: [0, 1],
+    outline: [0, 0.06], shadow: [0, 0.1], ghost_mm: [0, 4], ghost_strength: [0, 1], highlight: [0, 1],
   };
   const TEXT_RANGES = { size: [0.02, 1.0], arc: [-340, 340], x: [-2, 2], y: [-2, 2], spacing: [-0.2, 1.0] };
   const TEXT_DEFAULTS = { font: "varsity", size: 0.12, arc: 0.0, x: 0.0, y: -0.7, spacing: 0.05, color: "#000000" };
@@ -85,6 +85,8 @@
     if (o.mode === "duotone" && o.inks.length < 2) throw new OptionError("Duotone needs two ink colours.");
     hex(o.garment);
     if (o.outline_color !== "auto") o.outline_color = toHex(hex(o.outline_color));
+    o.highlight_color = toHex(hex(o.highlight_color));
+    o.regions = parseRegions(o.regions);
     if (!Array.isArray(o.textures) || o.textures.length > 8) throw new OptionError("Up to 8 textures are supported.");
     o.textures = o.textures.map((t) => {
       if (!t || typeof t !== "object" || !(t.type in TEXTURES)) throw new OptionError(`Unknown texture: ${JSON.stringify(t)}`);
@@ -99,6 +101,19 @@
     o.text = parseText(o.text);
     o.ink_edits = parseInkEdits(o.ink_edits);
     return o;
+  }
+
+  function parseRegions(regions) {   // colour regions: [{mask_id, color, mode: tint|solid, on, name}]
+    if (!Array.isArray(regions) || regions.length > 12) throw new OptionError("Up to 12 colour regions are supported.");
+    return regions.map((r) => {
+      if (!r || typeof r !== "object" || !r.mask_id) throw new OptionError("Each colour region needs a mask_id.");
+      const unknown = Object.keys(r).filter((k) => !["mask_id", "color", "mode", "on", "name"].includes(k));
+      if (unknown.length) throw new OptionError(`Unknown region settings: ${unknown.sort().join(", ")}`);
+      const mode = r.mode || "tint";
+      if (mode !== "tint" && mode !== "solid") throw new OptionError("Region mode is tint or solid.");
+      return { mask_id: String(r.mask_id).slice(0, 80), color: toHex(hex(r.color || "#c8102e")), mode,
+        on: r.on === undefined ? true : !!r.on, name: String(r.name || "").slice(0, 40) };
+    });
   }
 
   function parseInkEdits(edits) {   // per ink: switch it off, or choke (> 0) / spread (< 0) its dots in mm
@@ -151,13 +166,14 @@
   // The picture clean-up part of prepare (no text): cached separately so text edits don't redo it.
   function artKey(o) {
     return JSON.stringify([o.remove_background, o.bg_tolerance, o.sharpen, o.denoise, o.smooth_mm,
-      o.smooth_mm ? Math.round(o.width_in * o.dpi) : 0]);
+      o.smooth_mm ? Math.round(o.width_in * o.dpi) : 0, o.regions.filter((r) => r.on).map((r) => [r.mask_id, r.color, r.mode])]);
   }
 
   function prepareKey(o) {
     return JSON.stringify([o.remove_background, o.bg_tolerance, o.sharpen, o.mode === "spot" && o.spot_colors,
       o.text, o.text.length ? textWorkWidth(o) : 0, o.denoise, o.smooth_mm, o.smooth_mm ? Math.round(o.width_in * o.dpi) : 0,
-      o.outline, o.shadow, (o.outline || o.shadow) ? outlineRgb(o) : 0]);
+      o.outline, o.shadow, (o.outline || o.shadow) ? outlineRgb(o) : 0,
+      o.regions.filter((r) => r.on).map((r) => [r.mask_id, r.color, r.mode])]);
   }
 
   // ================================================================ noise (global coordinates)
@@ -721,7 +737,32 @@
     return { rgb, alpha, w: cw, h: ch, ox: x0 - pad, oy: y0 - pad };
   }
 
-  function prepareArt(rgba8, width, height, o) {   // -> {art, crop}; art is null when nothing is left
+  // Colour regions painted onto the picture before it is separated: tint multiplies (shading and black
+  // lines stay), solid fills the area. masks: {id: {data: Uint8 0..255, w, h}}, stretched to fit.
+  function applyRegions(rgb, w, h, o, masks) {
+    for (const r of o.regions) {
+      const m = (masks || {})[r.mask_id];
+      if (!r.on || !m) continue;
+      const col = hex(r.color).map((v) => v / 255), sx = m.w / w, sy = m.h / h;
+      for (let y = 0; y < h; y++) {
+        const fy = Math.min(m.h - 1, Math.max(0, (y + 0.5) * sy - 0.5)), y0 = Math.floor(fy), y1 = Math.min(m.h - 1, y0 + 1), ty = fy - y0;
+        for (let x = 0; x < w; x++) {
+          const fx = Math.min(m.w - 1, Math.max(0, (x + 0.5) * sx - 0.5)), x0 = Math.floor(fx), x1 = Math.min(m.w - 1, x0 + 1), tx = fx - x0;
+          const a = m.data[y0 * m.w + x0] + (m.data[y0 * m.w + x1] - m.data[y0 * m.w + x0]) * tx;
+          const b = m.data[y1 * m.w + x0] + (m.data[y1 * m.w + x1] - m.data[y1 * m.w + x0]) * tx;
+          const k = (a + (b - a) * ty) / 255;
+          if (k <= 0) continue;
+          const q = (y * w + x) * 3;
+          for (let c = 0; c < 3; c++) {
+            const painted = r.mode === "tint" ? rgb[q + c] * col[c] : col[c];
+            rgb[q + c] = rgb[q + c] * (1 - k) + painted * k;
+          }
+        }
+      }
+    }
+  }
+
+  function prepareArt(rgba8, width, height, o, masks) {   // -> {art, crop}; art is null when nothing is left
     let art = null, crop = [0, 0, 0, 0];
     if (rgba8) {
       let w = width, h = height, back = 1;
@@ -739,6 +780,7 @@
         for (let p = 0; p < fw * fh; p++) { for (let c = 0; c < 3; c++) src8[p * 4 + c] = rgb[p * 3 + c] * 255; src8[p * 4 + 3] = 255; }
         w = fw; h = fh;
       }
+      if (o.regions.length) applyRegions(rgb, w, h, o, masks);
       let transparent = 0;
       for (let p = 0; p < w * h; p++) if (alpha[p] < 0.5) transparent++;
       if (o.remove_background && transparent / (w * h) <= 0.01) {
@@ -762,8 +804,8 @@
     return { art, crop, picture: !!rgba8 };
   }
 
-  function prepare(rgba8, width, height, o, renderText, stage) {
-    const stg = stage || prepareArt(rgba8, width, height, o), { art, picture } = stg;
+  function prepare(rgba8, width, height, o, renderText, stage, masks) {
+    const stg = stage || prepareArt(rgba8, width, height, o, masks), { art, picture } = stg;
     let crop = stg.crop;
     if (picture && !art && !o.text.length) {
       throw new ImageError("Nothing is left to print once the background is removed. " +
@@ -1113,7 +1155,7 @@
   function labelPlates(plates) {   // process inks + underbase keep their names; repeats get 2, 3...
     const seen = {}, process = new Set(PROCESS_INKS.map((x) => x[0]));
     for (const p of plates) {
-      if (!p.label) p.label = p.underbase || process.has(p.name) ? p.name : inkName(p.rgb);
+      if (!p.label) p.label = p.underbase || p.highlight || process.has(p.name) ? p.name : inkName(p.rgb);
       const base = p.label;
       seen[base] = (seen[base] || 0) + 1;
       if (seen[base] > 1) p.label = `${base} ${seen[base]}`;
@@ -1123,7 +1165,7 @@
   function plateSpecs(prep, o, fit) {
     fit = fit || resolveFit(prep, o);
     let plates, blend;
-    const P = (name, rgb, angle, src = 0, underbase = false) => ({ name, rgb, angle, shift: [0, 0], src, underbase, on: true, choke_mm: 0, label: "" });
+    const P = (name, rgb, angle, src = 0, underbase = false) => ({ name, rgb, angle, shift: [0, 0], src, underbase, on: true, choke_mm: 0, label: "", highlight: false });
     if (o.mode === "mono") { plates = [P("Ink", fit.inks[0], o.angle)]; blend = "opaque"; }
     else if (o.mode === "duotone") {
       plates = [P("Shadow ink", fit.inks[0], o.angle, 0), P("Second ink", fit.inks[1], o.angle + 30, 1)]; blend = "multiply";
@@ -1147,6 +1189,7 @@
     if (fit.underbase) {
       plates.unshift(Object.assign(P("White underbase", [255, 255, 255], o.angle + 7.5, o.mode === "cmyk" ? 4 : -1, true), { choke_mm: o.choke_mm }));
     }
+    if (o.highlight > 0) plates.push(Object.assign(P("Highlight white", hex(o.highlight_color), o.angle + 15, -2), { highlight: true }));
     for (const p of plates) {
       const e = o.ink_edits[p.name];
       if (!e) continue;
@@ -1252,12 +1295,22 @@
     return [C, M, Y, k];
   }
 
+  function highlightCov(s, o) {   // the brightest tones, strongest at pure white
+    const tone = toneFn(o), n = s.a.length, out = new Float32Array(n), reach = 0.12 + 0.6 * o.highlight;
+    for (let p = 0; p < n; p++) {
+      let L = tone(luma(s.rgb[p * 3], s.rgb[p * 3 + 1], s.rgb[p * 3 + 2]));
+      if (o.invert) L = 1 - L;
+      out[p] = Math.max(0, Math.min(1, (L - (1 - reach)) / reach)) ** 1.5 * s.a[p];
+    }
+    return out;
+  }
+
   function underbaseCov(covs, plates, o) {
     const base = plates.find((p) => p.underbase);
     if (base && base.src >= 0 && base.src < covs.length) return choke(covs[base.src], o.choke_mm, o);   // CMYK: solved with the colours
     let m = null;
     for (const p of plates) {
-      if (p.underbase || !p.on) continue;
+      if (p.underbase || !p.on || p.highlight) continue;
       const c = covs[p.src];
       if (!m) m = c.slice();
       else {
@@ -1623,6 +1676,17 @@
     const gridded = o.mode === "index" || DIFFUSION_STYLES.includes(o.style);
     const igrids = o.mode === "index" ? indexGrids(prep, o, fit, plates) : null;
     for (const p of plates) {
+      if (p.highlight) {   // screened on its own (stochastic for dithered looks), from the brightest tones
+        if (!p.on) { result.push(new Uint8Array(gw * gh)); continue; }
+        const s = sample(prep, x0, y0, gw, gh, step, outW, p.shift[0], p.shift[1]), cov = highlightCov(s, o);
+        if (border) for (let k = 0; k < cov.length; k++) cov[k] *= border.soft[k];
+        const sx = p.shift[0] ? xs.map((v) => v - p.shift[0]) : xs, sy = p.shift[1] ? ys.map((v) => v - p.shift[1]) : ys;
+        const T = threshold(sx, sy, gridded ? { ...o, style: "fm" } : o, p.angle, o.seed * 31 + 211);
+        const bm = new Uint8Array(gw * gh);
+        for (let k = 0; k < bm.length; k++) bm[k] = cov[k] > T[k] && (!border || border.keep[k]) ? 1 : 0;
+        result.push(bm);
+        continue;
+      }
       if (gridded) {
         if (!p.on) { result.push(new Uint8Array(gw * gh)); continue; }
         const G = igrids ? igrids[p.underbase ? "base" : p.src] : diffusionGrid(prep, o, fit, plates, p);
@@ -1655,7 +1719,7 @@
       for (let k = 0; k < add.length; k++) if (add[k]) { anyAdd = true; break; }
       for (const bm of result) for (let k = 0; k < bm.length; k++) if (remove[k]) bm[k] = 0;
       if (anyAdd) {
-        const s = sample(prep, x0, y0, gw, gh, step, outW), inks = plates.map((p, i) => (p.underbase || !p.on ? -1 : i)).filter((i) => i >= 0);
+        const s = sample(prep, x0, y0, gw, gh, step, outW), inks = plates.map((p, i) => (p.underbase || !p.on || p.highlight ? -1 : i)).filter((i) => i >= 0);
         if (inks.length) {
           const top = result[inks[inks.length - 1]];
           for (let k = 0; k < top.length; k++) if (add[k] && s.a[k] > 0.5 && !remove[k] && (!border || border.keep[k])) top[k] = 1;
@@ -1874,11 +1938,12 @@
       const p = plates[i];
       if (!p.on) return;
       const c = p.rgb.map((v) => v / 255), white = p.underbase && blend === "multiply";   // base shows white where no colour covers it
+      const top = p.highlight;   // highlight white: printed last, opaque, on top of everything
       for (let k = 0; k < n; k++) {
         if (!b[k]) continue;
         alpha[k] = 1;
         if (white) continue;
-        if (blend === "multiply") { rgb[k * 3] *= c[0]; rgb[k * 3 + 1] *= c[1]; rgb[k * 3 + 2] *= c[2]; }
+        if (blend === "multiply" && !top) { rgb[k * 3] *= c[0]; rgb[k * 3 + 1] *= c[1]; rgb[k * 3 + 2] *= c[2]; }
         else { rgb[k * 3] = c[0]; rgb[k * 3 + 1] = c[1]; rgb[k * 3 + 2] = c[2]; }
       }
     });

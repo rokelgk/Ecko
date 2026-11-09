@@ -5,7 +5,7 @@
   const SLIDERS = ["bg_tolerance", "lpi", "grain_mm", "angle", "spot_colors", "spot_softness", "brightness",
     "contrast", "gamma", "black_point", "white_point", "sharpen", "min_dot", "max_dot", "dot_gain",
     "roughness", "misregister_mm", "choke_mm", "threshold_levels", "threshold_soft", "smooth_mm", "denoise", "border_mm",
-    "outline", "shadow", "ghost_mm", "ghost_strength"];
+    "outline", "shadow", "ghost_mm", "ghost_strength", "highlight"];
   const CHECKS = ["remove_background", "invert", "knockout", "registration_marks", "threshold_stack"];
   const SELECTS = ["mode", "style", "target", "shirt_fit", "underbase", "threshold_colors", "palette", "border_shape"];
   const TONE_KEYS = ["brightness", "contrast", "gamma", "black_point", "white_point", "sharpen", "invert"];
@@ -49,8 +49,17 @@
   const hasText = () => (opts.text || []).some((t) => t.text && t.text.trim());
   const hasDesign = () => !!file || hasText();
 
+  const uploadedMasks = new Set();
   async function ensureUploads() {
     if (file && !imageId) imageId = await uploadFile(file);
+    for (const r of opts.regions || []) {   // colour-region masks the engine hasn't got yet
+      const m = regionMasks.get(r.mask_id);
+      if (!m || uploadedMasks.has(r.mask_id)) continue;
+      const res = await fetch("/api/tone/masks", { method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ id: r.mask_id, w: m.w, h: m.h, data: bytesToBase64(m.data) }) });
+      if (!res.ok) throw new Error(await detail(res));
+      uploadedMasks.add(r.mask_id);
+    }
     for (const b of batch) if (!b.id) b.id = await uploadFile(b.file);
     if (texFile && tex.image && !tex.image.image_id) tex.image.image_id = await uploadFile(texFile);
   }
@@ -61,6 +70,7 @@
     let r = await post(url, build());
     if (r.status === 410) {
       imageId = null;
+      uploadedMasks.clear();
       for (const b of batch) b.id = null;
       if (tex.image) tex.image.image_id = null;
       await ensureUploads();
@@ -215,6 +225,188 @@
     opts._preset = null;
     buildTextures();
     changed();
+  }
+
+  // ---------------------------------------------------------------- colour regions
+  // Paint or wand-select part of the picture and give it a colour; the engine colours it before separating.
+
+  const regionMasks = new Map();   // mask_id -> {data: Uint8 0..255, w, h} at up to 1024 px
+  let editing = null, tool = "brush", painting = false, lastPt = null;
+  const REGION_COLOURS = ["#c8102e", "#1e46aa", "#f5a623", "#2e7d32", "#7b1fa2", "#f06292", "#00838f", "#6d4c41"];
+  const newMaskId = () => "m" + Array.from(crypto.getRandomValues(new Uint8Array(8)), (b) => b.toString(16).padStart(2, "0")).join("");
+  function bytesToBase64(bytes) {
+    let bin = "";
+    for (let i = 0; i < bytes.length; i += 0x8000) bin += String.fromCharCode.apply(null, bytes.subarray(i, i + 0x8000));
+    return btoa(bin);
+  }
+  function maskSize() {
+    const im = $("original"), w = im.naturalWidth || 1, h = im.naturalHeight || 1, k = Math.min(1, 1024 / Math.max(w, h));
+    return [Math.max(1, Math.round(w * k)), Math.max(1, Math.round(h * k))];
+  }
+
+  function buildRegions() {
+    const box = $("regionList");
+    if (!box) return;
+    box.innerHTML = "";
+    (opts.regions || []).forEach((r, i) => {
+      const el = document.createElement("div");
+      el.className = "regionCard" + (editing && editing.i === i ? " editing" : "");
+      el.innerHTML = `<div class="regionTop">
+          <input type="checkbox" ${r.on ? "checked" : ""} title="Use this region">
+          <input type="text" maxlength="40" placeholder="Region ${i + 1}" value="${esc(r.name || "")}" aria-label="Region name">
+          <input type="color" value="${r.color}" aria-label="Region colour"></div>
+        <div class="regionRow">
+          <select aria-label="How the colour is applied"><option value="tint">Tint (keeps shading and lines)</option><option value="solid">Solid colour</option></select>
+          <button type="button" class="link" data-edit>${editing && editing.i === i ? "Editing…" : "Edit area"}</button>
+          <button type="button" class="link" data-del>Remove</button></div>`;
+      const [chk, name, col] = el.querySelectorAll(".regionTop input");
+      const mode = el.querySelector("select");
+      mode.value = r.mode;
+      chk.addEventListener("change", () => { r.on = chk.checked; changed(); });
+      name.addEventListener("change", () => { r.name = name.value.trim(); save(); });
+      col.addEventListener("input", () => { r.color = col.value; opts._preset = null; changed(450); });
+      mode.addEventListener("change", () => { r.mode = mode.value; changed(); });
+      el.querySelector("[data-edit]").addEventListener("click", () => (editing && editing.i === i ? endEdit() : startEdit(i)));
+      el.querySelector("[data-del]").addEventListener("click", () => {
+        if (editing) endEdit(true);
+        opts.regions.splice(i, 1);
+        buildRegions();
+        changed();
+      });
+      box.appendChild(el);
+    });
+  }
+
+  function addRegion() {
+    if (!file) { showError("Add a picture first, then colour its parts."); return; }
+    opts.regions = opts.regions || [];
+    if (opts.regions.length >= 12) { showError("Up to 12 colour regions."); return; }
+    const [w, h] = maskSize(), id = newMaskId();
+    regionMasks.set(id, { data: new Uint8Array(w * h), w, h });
+    opts.regions.push({ mask_id: id, color: REGION_COLOURS[opts.regions.length % REGION_COLOURS.length], mode: "tint", on: true, name: "" });
+    startEdit(opts.regions.length - 1);
+  }
+
+  function startEdit(i) {
+    if (editing) endEdit();
+    const r = opts.regions[i], m = regionMasks.get(r.mask_id);
+    if (!m) return;
+    const c = document.createElement("canvas");   // the picture at mask size, for the magic wand
+    c.width = m.w; c.height = m.h;
+    const cx = c.getContext("2d");
+    cx.drawImage($("original"), 0, 0, m.w, m.h);
+    const src = cx.getImageData(0, 0, m.w, m.h).data;
+    c.width = 1; c.height = 1;
+    const overlay = document.createElement("canvas");
+    overlay.width = m.w; overlay.height = m.h;
+    editing = { i, data: m.data.slice(), w: m.w, h: m.h, src, overlay, dirty: false };
+    updateOverlay();
+    $("regionTools").hidden = false;
+    $("regionToolsTitle").textContent = `Painting the area for ${r.name || `region ${i + 1}`}.`;
+    $("stage").classList.add("painting");
+    showView("original");
+    buildRegions();
+  }
+
+  async function endEdit(discard) {
+    if (!editing) return;
+    const e = editing;
+    editing = null;
+    $("regionTools").hidden = true;
+    $("stage").classList.remove("painting");
+    if (!discard && e.dirty && opts.regions[e.i]) {   // a new mask id, so the engine knows the area changed
+      const id = newMaskId();
+      regionMasks.set(id, { data: e.data, w: e.w, h: e.h });
+      opts.regions[e.i].mask_id = id;
+      opts._preset = null;
+    }
+    buildRegions();
+    showView("print");
+    changed();
+  }
+
+  function updateOverlay() {
+    const e = editing, ctx = e.overlay.getContext("2d"), img = ctx.createImageData(e.w, e.h);
+    for (let p = 0; p < e.data.length; p++) if (e.data[p]) { img.data[p * 4] = 235; img.data[p * 4 + 1] = 40; img.data[p * 4 + 2] = 40; img.data[p * 4 + 3] = 120; }
+    ctx.putImageData(img, 0, 0);
+    drawView();
+  }
+
+  function maskPoint(ev) {   // pointer -> mask pixel
+    const st = $("stage"), sr = st.getBoundingClientRect(), r = viewRect($("original"));
+    const x = ev.clientX - sr.left - st.clientLeft, y = ev.clientY - sr.top - st.clientTop;
+    return { x: (x - r.left) / r.width * editing.w, y: (y - r.top) / r.height * editing.h, scale: editing.w / r.width };
+  }
+
+  function paintTo(pt) {
+    const e = editing, v = tool === "eraser" ? 0 : 255, rad = Math.max(1, (+$("brushSize").value / 2) * pt.scale);
+    const from = lastPt || pt, dist = Math.hypot(pt.x - from.x, pt.y - from.y), steps = Math.max(1, Math.ceil(dist / (rad / 2)));
+    for (let s = 0; s <= steps; s++) {
+      const cx = from.x + (pt.x - from.x) * s / steps, cy = from.y + (pt.y - from.y) * s / steps;
+      const x0 = Math.max(0, Math.floor(cx - rad)), x1 = Math.min(e.w - 1, Math.ceil(cx + rad));
+      const y0 = Math.max(0, Math.floor(cy - rad)), y1 = Math.min(e.h - 1, Math.ceil(cy + rad));
+      for (let y = y0; y <= y1; y++) for (let x = x0; x <= x1; x++) if ((x - cx) ** 2 + (y - cy) ** 2 <= rad * rad) e.data[y * e.w + x] = v;
+    }
+    lastPt = pt;
+    e.dirty = true;
+  }
+
+  function wandAt(pt) {   // add everything connected that is a similar colour
+    const e = editing, x0 = Math.floor(pt.x), y0 = Math.floor(pt.y);
+    if (x0 < 0 || y0 < 0 || x0 >= e.w || y0 >= e.h) return;
+    const tol = +$("wandTol").value, s = e.src, q0 = (y0 * e.w + x0) * 4, seen = new Uint8Array(e.w * e.h), stack = [y0 * e.w + x0];
+    const r0 = s[q0], g0 = s[q0 + 1], b0 = s[q0 + 2];
+    seen[stack[0]] = 1;
+    while (stack.length) {
+      const p = stack.pop(), q = p * 4;
+      if (Math.hypot(s[q] - r0, s[q + 1] - g0, s[q + 2] - b0) > tol || s[q + 3] < 20) continue;
+      e.data[p] = 255;
+      const x = p % e.w, y = (p - x) / e.w;
+      for (const n of [x > 0 ? p - 1 : -1, x < e.w - 1 ? p + 1 : -1, y > 0 ? p - e.w : -1, y < e.h - 1 ? p + e.w : -1]) {
+        if (n >= 0 && !seen[n]) { seen[n] = 1; stack.push(n); }
+      }
+    }
+    e.dirty = true;
+  }
+
+  function bindRegions() {
+    $("addRegion").addEventListener("click", addRegion);
+    $("regionDone").addEventListener("click", () => endEdit());
+    $("regionFill").addEventListener("click", () => { if (editing) { editing.data.fill(255); editing.dirty = true; updateOverlay(); } });
+    $("regionClear").addEventListener("click", () => { if (editing) { editing.data.fill(0); editing.dirty = true; updateOverlay(); } });
+    document.querySelectorAll("#regionTools [data-tool]").forEach((b) => b.addEventListener("click", () => {
+      tool = b.dataset.tool;
+      document.querySelectorAll("#regionTools [data-tool]").forEach((x) => x.classList.toggle("on", x === b));
+      $("brushRow").hidden = tool === "wand";
+      $("wandRow").hidden = tool !== "wand";
+    }));
+    const out = () => { $("brushOut").textContent = `${$("brushSize").value} px`; $("wandOut").textContent = $("wandTol").value; };
+    $("brushSize").addEventListener("input", out);
+    $("wandTol").addEventListener("input", out);
+    out();
+    const st = $("stage");   // capture phase: while editing, the stage paints instead of panning
+    st.addEventListener("pointerdown", (ev) => {
+      if (!editing || ev.button !== 0) return;
+      ev.stopImmediatePropagation(); ev.preventDefault();
+      const pt = maskPoint(ev);
+      if (tool === "wand") { wandAt(pt); updateOverlay(); return; }
+      painting = true; lastPt = null;
+      st.setPointerCapture(ev.pointerId);
+      paintTo(pt); updateOverlay();
+    }, true);
+    st.addEventListener("pointermove", (ev) => {
+      if (!editing) return;
+      ev.stopImmediatePropagation();
+      if (painting) { paintTo(maskPoint(ev)); updateOverlay(); }
+    }, true);
+    st.addEventListener("pointerup", (ev) => {
+      if (!editing) return;
+      ev.stopImmediatePropagation();
+      painting = false; lastPt = null;
+    }, true);
+    $("addHighlight").addEventListener("click", () => { opts.highlight = 0.5; opts._preset = null; syncUI(); changed(); });
+    $("removeHighlight").addEventListener("click", () => { opts.highlight = 0; opts._preset = null; syncUI(); changed(); });
+    $("highlightPick").addEventListener("input", () => { opts.highlight_color = $("highlightPick").value; opts._preset = null; changed(450); });
   }
 
   // Fold-out boards: opening one closes the others in the left column, so it never gets long.
@@ -441,6 +633,10 @@
     for (const k of SLIDERS) $(k).value = opts[k];
     for (const k of CHECKS) $(k).checked = !!opts[k];
     for (const k of SELECTS) $(k).value = opts[k];
+    $("highlightBox").hidden = !(opts.highlight > 0);
+    $("addHighlight").hidden = opts.highlight > 0;
+    $("highlightPick").value = opts.highlight_color || "#ffffff";
+    buildRegions();
     $("outlineAuto").checked = opts.outline_color === "auto";
     if (opts.outline_color !== "auto") $("outlinePick").value = opts.outline_color;
     const grain = catalog.styles.find((s) => s.id === opts.style)?.grain;
@@ -484,6 +680,7 @@
     $("shadowOut").textContent = pct(opts.shadow);
     $("ghostOut").textContent = opts.ghost_mm > 0 ? `${fmt(opts.ghost_mm)} mm` : "off";
     $("ghostSOut").textContent = `${Math.round(opts.ghost_strength * 100)}%`;
+    $("highlightOut").textContent = `${Math.round(opts.highlight * 100)}%`;
     $("dpiNote").textContent = $("dpi").value;
     $("presetSel").value = opts._preset || "";
     const pr = catalog.presets.find((x) => x.id === opts._preset);
@@ -493,7 +690,7 @@
   function applyPreset(p) {
     const keep = { remove_background: opts.remove_background, bg_tolerance: opts.bg_tolerance, seed: opts.seed,
       border: opts.border, border_mm: opts.border_mm, border_shape: opts.border_shape,
-      text: opts.text, shirt_fit: opts.shirt_fit, underbase: opts.underbase, choke_mm: opts.choke_mm };
+      text: opts.text, shirt_fit: opts.shirt_fit, underbase: opts.underbase, choke_mm: opts.choke_mm, regions: opts.regions };
     opts = { ...structuredClone(catalog.defaults), ...keep, ...structuredClone(p.options), _preset: p.id };
     for (const t of Object.values(tex)) t.on = false;
     for (const t of p.options.textures || []) delete tex[t.type];   // keep the preset's order
@@ -848,6 +1045,11 @@
     ctx.imageSmoothingEnabled = r.width * dpr / nw < 2;   // zoomed in: crisp pixels, like the print
     ctx.imageSmoothingQuality = "high";
     ctx.drawImage(img, sx, sy, sw, sh, x0 * dpr, y0 * dpr, (x1 - x0) * dpr, (y1 - y0) * dpr);
+    if (editing && img === $("original")) {   // the region being painted, in red
+      const ow = editing.overlay.width / nw, oh = editing.overlay.height / nh;
+      ctx.imageSmoothingEnabled = true;
+      ctx.drawImage(editing.overlay, sx * ow, sy * oh, sw * ow, sh * oh, x0 * dpr, y0 * dpr, (x1 - x0) * dpr, (y1 - y0) * dpr);
+    }
   }
 
   function togglePanels() {
@@ -866,12 +1068,12 @@
     }, { passive: false });
     let drag = null;
     st.addEventListener("pointerdown", (e) => {
-      if (e.button !== 0 || e.target.closest(".loupe")) return;
+      if (editing || e.button !== 0 || e.target.closest(".loupe")) return;
       drag = { x: e.clientX, y: e.clientY, vx: view_.x, vy: view_.y, moved: false };
       st.setPointerCapture(e.pointerId);
     });
     st.addEventListener("pointermove", (e) => {
-      if (!drag) return;
+      if (!drag || editing) return;
       const dx = e.clientX - drag.x, dy = e.clientY - drag.y;
       if (!drag.moved && Math.hypot(dx, dy) < 4) return;
       drag.moved = true;
@@ -957,6 +1159,8 @@
     if (token !== fileToken) return;   // another picture was chosen meanwhile
     file = f;
     imageId = null;
+    if (editing) endEdit(true);
+    opts.regions = [];   // regions belong to the old picture
     palette = null;
     spotInks = null;
     loupeAt = null;
@@ -973,6 +1177,8 @@
   }
 
   function clearPicture() {
+    if (editing) endEdit(true);
+    opts.regions = [];
     file = null;
     imageId = null;
     loupeAt = null;
@@ -1124,6 +1330,7 @@
     $("borderSel").addEventListener("change", () => { opts.border = $("borderSel").value; opts._preset = null; syncUI(); changed(); });
     $("texAdd").addEventListener("change", () => addTexture($("texAdd").value));
     bindBoards();
+    bindRegions();
     buildSelect("target", catalog.targets);
     buildSelect("shirt_fit", catalog.shirt_fits);
     buildPresets();
@@ -1148,6 +1355,7 @@
       opts = { ...opts, ...structuredClone(first.options), _preset: first.id };
       for (const t of first.options.textures || []) tex[t.type] = { type: t.type, on: true, strength: t.strength, scale: t.scale, rotate: t.rotate || 0 };
     }
+    opts.regions = (opts.regions || []).filter((r) => regionMasks.has(r.mask_id));   // masks aren't kept between visits
     bind();
     syncUI();
     clearTimeout(histTimer);

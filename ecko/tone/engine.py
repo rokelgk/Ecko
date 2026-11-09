@@ -265,6 +265,9 @@ class ToneOptions:
     outline_color: str = "auto"      # auto (stands out on the shirt) or #rrggbb
     ghost_mm: float = 0.0            # ghost / slur: a faint second print offset by this much (0 = off)
     ghost_strength: float = 0.5      # how much of the ghost prints
+    highlight: float = 0.0           # vintage highlight white printed last over the brightest parts (0 = off)
+    highlight_color: str = "#ffffff"
+    regions: list = field(default_factory=list)   # colour regions: [{mask_id, color, mode: tint|solid}]
 
     # Settings that change the prepared source (the slow step).
     def prepare_key(self) -> tuple:
@@ -274,7 +277,8 @@ class ToneOptions:
                 text and _text_work_width(self), int(self.denoise), round(float(self.smooth_mm), 3),
                 self.smooth_mm and round(self.width_in * self.dpi),
                 round(float(self.outline), 4), round(float(self.shadow), 4),
-                (self.outline or self.shadow) and outline_rgb(self))
+                (self.outline or self.shadow) and outline_rgb(self),
+                tuple((r["mask_id"], r["color"], r["mode"]) for r in self.regions if r["on"]))
 
 
 _RANGES = {
@@ -285,7 +289,7 @@ _RANGES = {
     "min_dot": (0, 0.5), "max_dot": (0.5, 1), "dot_gain": (0, 0.4), "roughness": (0, 1),
     "misregister_mm": (0, 5), "bg_tolerance": (1, 80), "seed": (0, 2**31 - 1), "choke_mm": (0, 1),
     "threshold_levels": (2, 8), "threshold_soft": (0, 0.3), "smooth_mm": (0, 3), "denoise": (0, 3),
-    "border_mm": (1, 120), "outline": (0, 0.06), "shadow": (0, 0.1), "ghost_mm": (0, 4), "ghost_strength": (0, 1),
+    "border_mm": (1, 120), "outline": (0, 0.06), "shadow": (0, 0.1), "ghost_mm": (0, 4), "ghost_strength": (0, 1), "highlight": (0, 1),
 }
 
 
@@ -333,6 +337,8 @@ def parse_options(data: dict | None) -> ToneOptions:
     _hex(o.garment)
     if o.outline_color != "auto":
         o.outline_color = to_hex(_hex(o.outline_color))
+    o.highlight_color = to_hex(_hex(o.highlight_color))
+    o.regions = _parse_regions(o.regions)
     if not isinstance(o.textures, list) or len(o.textures) > 8:
         raise ValueError("Up to 8 textures are supported.")
     clean = []
@@ -352,6 +358,25 @@ def parse_options(data: dict | None) -> ToneOptions:
     o.text = _parse_text(o.text)
     o.ink_edits = _parse_ink_edits(o.ink_edits)
     return o
+
+
+def _parse_regions(regions) -> list:
+    """Colour regions: a mask (white = inside) and the colour that area takes before separating."""
+    if not isinstance(regions, list) or len(regions) > 12:
+        raise ValueError("Up to 12 colour regions are supported.")
+    out = []
+    for r in regions:
+        if not isinstance(r, dict) or not r.get("mask_id"):
+            raise ValueError("Each colour region needs a mask_id.")
+        unknown = set(r) - {"mask_id", "color", "mode", "on", "name"}
+        if unknown:
+            raise ValueError(f"Unknown region settings: {', '.join(sorted(unknown))}")
+        mode = r.get("mode", "tint")
+        if mode not in ("tint", "solid"):
+            raise ValueError("Region mode is tint or solid.")
+        out.append({"mask_id": str(r["mask_id"])[:80], "color": to_hex(_hex(r.get("color", "#c8102e"))),
+                    "mode": mode, "on": bool(r.get("on", True)), "name": str(r.get("name", ""))[:40]})
+    return out
 
 
 def _parse_ink_edits(edits) -> dict:
@@ -582,7 +607,24 @@ def _add_outline(rgb, alpha, o: ToneOptions):
             (int(x0) - pad, int(y0) - pad))
 
 
-def prepare(image: bytes | np.ndarray | None, o: ToneOptions) -> Prepared:
+def apply_regions(rgb: np.ndarray, o: ToneOptions, masks: dict | None) -> np.ndarray:
+    """Colour regions, painted onto the picture before it is separated. Tint multiplies (the shading and
+    black lines stay), solid fills the area with the colour. Masks are 0..1, any size (stretched to fit)."""
+    for r in o.regions:
+        m = (masks or {}).get(r["mask_id"])
+        if not r["on"] or m is None:
+            continue
+        m = np.asarray(m, np.float32)
+        if m.shape != rgb.shape[:2]:
+            m = cv2.resize(m, (rgb.shape[1], rgb.shape[0]), interpolation=cv2.INTER_AREA if m.shape[0] > rgb.shape[0] else cv2.INTER_LINEAR)
+        m = np.clip(m, 0, 1)[..., None]
+        col = np.array(_hex(r["color"]), np.float32) / 255
+        painted = rgb * col if r["mode"] == "tint" else np.broadcast_to(col, rgb.shape)
+        rgb = rgb * (1 - m) + painted * m
+    return rgb.astype(np.float32)
+
+
+def prepare(image: bytes | np.ndarray | None, o: ToneOptions, region_masks: dict | None = None) -> Prepared:
     back, crop_xy = 1.0, (0, 0)
     rgb = alpha = None
     if image is not None:
@@ -592,6 +634,8 @@ def prepare(image: bytes | np.ndarray | None, o: ToneOptions) -> Prepared:
         back = orig_w / rgba.shape[1]
         rgb = rgba[..., :3].astype(np.float32) / 255.0
         alpha = rgba[..., 3].astype(np.float32) / 255.0
+        if o.regions:
+            rgb = apply_regions(rgb, o, region_masks)
         has_alpha = (alpha < 0.5).mean() > 0.01
         if o.remove_background and not has_alpha:
             alpha = alpha * _remove_flat_background(rgba[..., :3], o.bg_tolerance)
@@ -829,6 +873,7 @@ class Plate:
     on: bool = True           # switched off: not printed, not in files
     choke_mm: float = 0.0     # > 0 shrinks this ink's dots, < 0 spreads them
     label: str = ""           # the ink's name on films and in the README ("Red", or the user's own name)
+    highlight: bool = False   # vintage highlight white: printed last, on top, over the brightest parts
 
 
 def _lum(rgb) -> float:
@@ -891,7 +936,7 @@ def _label_plates(plates: list) -> None:
     seen: dict = {}
     for p in plates:
         if not p.label:
-            p.label = p.name if (p.underbase or p.name in {n for n, _, _ in PROCESS_INKS}) else ink_name(p.rgb)
+            p.label = p.name if (p.underbase or p.highlight or p.name in {n for n, _, _ in PROCESS_INKS}) else ink_name(p.rgb)
         base = p.label
         seen[base] = seen.get(base, 0) + 1
         if seen[base] > 1:
@@ -1025,6 +1070,8 @@ def plate_specs(prep: Prepared, o: ToneOptions, fit: Fit | None = None) -> tuple
     if fit.underbase:
         plates.insert(0, Plate("White underbase", (255, 255, 255), o.angle + 7.5,
                                src=4 if o.mode == "cmyk" else -1, underbase=True, choke_mm=o.choke_mm))
+    if o.highlight > 0:
+        plates.append(Plate("Highlight white", _hex(o.highlight_color), o.angle + 15, src=-2, highlight=True))
     for p in plates:
         e = o.ink_edits.get(p.name)
         if e:
@@ -1124,6 +1171,15 @@ def _gcr(cmy: np.ndarray):
     return (out * scale[..., None]).astype(np.float32), k.astype(np.float32)
 
 
+def _highlight_cov(rgb, a, o: ToneOptions) -> np.ndarray:
+    """Highlight white: the brightest tones, strongest at pure white. More = reaches into darker tones."""
+    L = _tone(_luma(rgb), o)
+    if o.invert:
+        L = 1 - L
+    reach = 0.12 + 0.6 * o.highlight
+    return (np.clip((L - (1 - reach)) / reach, 0, 1) ** 1.5) * a
+
+
 def _underbase(covs: list[np.ndarray], plates: list[Plate], o: ToneOptions) -> np.ndarray:
     """White base under every ink, shrunk ("choked") so it never peeks out past the colour."""
     base = next((p for p in plates if p.underbase), None)
@@ -1131,7 +1187,7 @@ def _underbase(covs: list[np.ndarray], plates: list[Plate], o: ToneOptions) -> n
         return _choke(covs[base.src], o.choke_mm, o)
     m = None
     for p in plates:
-        if not p.underbase and p.on:
+        if not p.underbase and p.on and not p.highlight:
             if m is None:
                 m = covs[p.src].copy()
             elif o.mode in ("spot", "threshold") and not o.threshold_stack:
@@ -1324,6 +1380,18 @@ def render_plates(prep: Prepared, o: ToneOptions, x0: float, y0: float, gw: int,
     gridded = o.mode == "index" or o.style in DIFFUSION_STYLES
     index_grids = _index_grids(prep, o, fit, plates) if o.mode == "index" else None
     for i, p in enumerate(plates):
+        if p.highlight:   # screened on its own (stochastic for dithered looks), from the brightest tones
+            if not p.on:
+                result.append(np.zeros((gh, gw), bool))
+                continue
+            rgb, a = _sample(prep, x0, y0, gw, gh, step, out_w, *p.shift)
+            cov = _highlight_cov(rgb, a, o)
+            if b_soft is not None:
+                cov = cov * b_soft
+            ho = o if not gridded else __import__("dataclasses").replace(o, style="fm")
+            T = threshold(xs - p.shift[0], ys - p.shift[1], ho, p.angle, o.seed * 31 + 211)
+            result.append((cov > T) & b_keep if b_keep is not None else cov > T)
+            continue
         if gridded:
             if not p.on:
                 result.append(np.zeros((gh, gw), bool))
@@ -1356,7 +1424,7 @@ def render_plates(prep: Prepared, o: ToneOptions, x0: float, y0: float, gw: int,
         for i in range(len(result)):
             result[i] &= ~remove
         if alpha_any is not None:
-            inks = [i for i, p in enumerate(plates) if not p.underbase and p.on]
+            inks = [i for i, p in enumerate(plates) if not p.underbase and p.on and not p.highlight]
             if inks:  # toner specks go on the darkest / black plate (printed last)
                 result[inks[-1]] |= add & alpha_any & ~remove & (b_keep if b_keep is not None else True)
     return result
@@ -1542,7 +1610,9 @@ def composite(bitmaps: list[np.ndarray], plates: list[Plate], blend: str, o: Ton
         for b, p in zip(bitmaps, plates):
             if not p.on:
                 continue
-            if not p.underbase:  # the underbase is white: it shows where no colour covers it
+            if p.highlight:      # printed last, opaque, on top of everything
+                rgb[b] = np.array(p.rgb, np.float32) / 255.0
+            elif not p.underbase:  # the underbase is white: it shows where no colour covers it
                 rgb[b] *= np.array(p.rgb, np.float32) / 255.0
             alpha |= b
     else:

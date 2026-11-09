@@ -25,6 +25,11 @@ a live preview on the shirt colour in the middle (Print / Original tabs), and In
 the right, with shirt swatches on top. Float the panel (drag its tab out) and make it as big as you like; XL
 makes the columns tall. **Compact** switches back.
 
+**Colour regions**: colour parts of the picture separately (the girl, the lettering...). Make a Photoshop
+selection (Lasso, Select Subject, Magic Wand) and click "Colour the current selection", or pick a layer to use
+its shape; then choose the colour and Tint (keeps shading and lines) or Solid. Use Spot or Index colour so each
+colour gets its own screen. **Add white highlight** prints a vintage highlight white last, over the brightest parts.
+
 After Apply, the **Inks** list works like the web page's: switch each ink on or off, solo it, choke or
 spread it, recolour spot inks, and give each ink your own name. Inks are named by colour
 ("Red", "Navy", "Athletic gold"…) until you rename them.

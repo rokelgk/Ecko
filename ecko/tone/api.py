@@ -38,6 +38,7 @@ _lock = threading.Lock()
 _images: OrderedDict[str, bytes] = OrderedDict()
 _prepared: OrderedDict[tuple, E.Prepared] = OrderedDict()
 _textures: OrderedDict[str, np.ndarray] = OrderedDict()
+_masks: OrderedDict[str, np.ndarray] = OrderedDict()   # colour-region masks, 0..1
 
 
 def _lru_put(cache: OrderedDict, key, value, limit: int) -> None:
@@ -78,7 +79,9 @@ def _prepare(iid: str | None, o: E.ToneOptions) -> E.Prepared:
             _prepared.move_to_end(key)
             return prep
     try:
-        prep = E.prepare(_image(iid) if iid is not None else None, o)
+        with _lock:
+            masks = {r["mask_id"]: _masks[r["mask_id"]] for r in o.regions if r["mask_id"] in _masks}
+        prep = E.prepare(_image(iid) if iid is not None else None, o, masks)
     except ImageError as exc:
         raise HTTPException(422, str(exc)) from exc
     with _lock:
@@ -134,6 +137,21 @@ def catalog():
                    "batch_items": MAX_BATCH_ITEMS, "batch_garments": MAX_BATCH_GARMENTS,
                    "batch_renders": MAX_BATCH_RENDERS},
     }
+
+
+@router.post("/masks")
+def upload_mask(body: dict = Body(...)):
+    """A colour-region mask: {id, w, h, data: base64 of w*h bytes, 0 = outside, 255 = inside}."""
+    try:
+        mid, w, h = str(body["id"])[:80], int(body["w"]), int(body["h"])
+        raw = base64.b64decode(body["data"])
+    except (KeyError, TypeError, ValueError) as exc:
+        raise HTTPException(400, "A mask needs id, w, h and data.") from exc
+    if not (0 < w <= 4096 and 0 < h <= 4096) or len(raw) != w * h:
+        raise HTTPException(400, "The mask size doesn't match its data.")
+    with _lock:
+        _lru_put(_masks, mid, np.frombuffer(raw, np.uint8).reshape(h, w).astype(np.float32) / 255, 48)
+    return {"id": mid}
 
 
 @router.post("/images")
